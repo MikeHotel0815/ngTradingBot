@@ -1419,6 +1419,22 @@
             updateProfitValue('profit-year', data.year);
         });
 
+        // Real-time position updates via WebSocket
+        socket.on('positions_update', (data) => {
+            console.log('Positions update (real-time):', data);
+            if (data && data.positions) {
+                const positions = data.positions;
+                document.getElementById('open-trades-count').textContent = positions.length;
+
+                if (positions.length === 0) {
+                    document.getElementById('open-trades-list').innerHTML = '<div style="text-align: center; color: #888; padding: 20px;">No open positions</div>';
+                } else {
+                    const gridHTML = '<div class="trades-grid">' + positions.map(pos => renderOpenTradeCard(pos)).join('') + '</div>';
+                    document.getElementById('open-trades-list').innerHTML = gridHTML;
+                }
+            }
+        });
+
         // Store current signals for comparison
         let currentSignals = {};
 

@@ -206,6 +206,14 @@ class TradeMonitor:
                         30
                     )
 
+                    # Emit WebSocket event for real-time UI updates
+                    try:
+                        from app import socketio
+                        socketio.emit('positions_update', monitoring_data)
+                    except Exception as ws_error:
+                        # Don't fail if WebSocket is not available
+                        logger.debug(f"WebSocket emission failed (non-critical): {ws_error}")
+
                 logger.info(f"📊 Monitoring {len(positions_data)} positions - Total P&L: ${round(total_pnl, 2)}")
 
         except Exception as e:
