@@ -789,6 +789,14 @@
             const element = document.getElementById(elementId);
             if (!element) return;
 
+            // Check if value actually changed
+            const oldValue = parseFloat(element.dataset.currentValue || '0');
+            const newValue = parseFloat(value);
+            const valueChanged = oldValue !== newValue;
+
+            // Store new value
+            element.dataset.currentValue = newValue;
+
             element.textContent = '€' + value.toFixed(2);
 
             // Remove all color classes
@@ -803,9 +811,11 @@
                 element.classList.add('profit-neutral');
             }
 
-            // Add pulse animation
-            element.classList.add('price-pulse');
-            setTimeout(() => element.classList.remove('price-pulse'), 400);
+            // Only pulse if value actually changed
+            if (valueChanged) {
+                element.classList.add('price-pulse');
+                setTimeout(() => element.classList.remove('price-pulse'), 400);
+            }
         }
 
         // Update account status
