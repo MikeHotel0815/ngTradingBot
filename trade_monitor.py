@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Trade Monitor for ngTradingBot
-Monitors open positions in real-time and provides P&L tracking
+Monitors open positions in real-time and provides P&L tracking with smart trailing stops
 """
 
 import logging
@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from database import ScopedSession
 from models import Trade, Account, Tick
 from redis_client import get_redis
+from trailing_stop_manager import get_trailing_stop_manager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,12 +23,14 @@ logger = logging.getLogger(__name__)
 
 
 class TradeMonitor:
-    """Monitors open trades and calculates real-time P&L"""
+    """Monitors open trades and calculates real-time P&L with smart trailing stops"""
 
     def __init__(self):
         self.redis = get_redis()
         self.monitor_interval = 5  # Check every 5 seconds
         self.running = False
+        self.trailing_stop_manager = get_trailing_stop_manager()
+        self.trailing_stops_processed = 0
 
     def get_current_price(self, db: Session, account_id: int, symbol: str) -> Optional[Dict]:
         """Get current bid/ask prices for symbol"""
@@ -147,6 +150,23 @@ class TradeMonitor:
                 }
 
                 positions_data.append(position_info)
+
+                # Process trailing stop for profitable trades
+                if pnl_data['pnl'] > 0 and trade.tp and trade.sl:
+                    try:
+                        trailing_result = self.trailing_stop_manager.process_trade(
+                            db=db,
+                            trade=trade,
+                            current_price=pnl_data['current_price']
+                        )
+                        if trailing_result:
+                            self.trailing_stops_processed += 1
+                            logger.info(
+                                f"🎯 Trailing Stop Applied: {trade.symbol} #{trade.ticket} - "
+                                f"Stage: {trailing_result['stage']}, SL: {trailing_result['old_sl']:.5f} → {trailing_result['new_sl']:.5f}"
+                            )
+                    except Exception as e:
+                        logger.error(f"Error processing trailing stop for trade {trade.ticket}: {e}")
 
                 # Alert if TP/SL about to be hit
                 if pnl_data['tp_reached']:

@@ -570,7 +570,31 @@ class GlobalSettings(Base):
     min_bars_required = Column(Integer, default=50, nullable=False)
     min_bars_d1 = Column(Integer, default=30, nullable=False)
     realistic_profit_factor = Column(Numeric(5, 4), default=0.60, nullable=False)  # 40% costs
-    
+
+    # Trailing Stop Settings (Smart Multi-Stage)
+    trailing_stop_enabled = Column(Boolean, default=True, nullable=False)
+
+    # Stage 1: Break-even
+    breakeven_enabled = Column(Boolean, default=True, nullable=False)
+    breakeven_trigger_percent = Column(Numeric(5, 2), default=30.0, nullable=False)  # 30% of TP distance
+    breakeven_offset_points = Column(Numeric(6, 2), default=5.0, nullable=False)  # 5 points above/below entry
+
+    # Stage 2: Partial trailing
+    partial_trailing_trigger_percent = Column(Numeric(5, 2), default=50.0, nullable=False)  # 50% of TP distance
+    partial_trailing_distance_percent = Column(Numeric(5, 2), default=40.0, nullable=False)  # Trail 40% behind
+
+    # Stage 3: Aggressive trailing
+    aggressive_trailing_trigger_percent = Column(Numeric(5, 2), default=75.0, nullable=False)  # 75% of TP distance
+    aggressive_trailing_distance_percent = Column(Numeric(5, 2), default=25.0, nullable=False)  # Trail 25% behind
+
+    # Stage 4: Near TP protection
+    near_tp_trigger_percent = Column(Numeric(5, 2), default=90.0, nullable=False)  # 90% of TP distance
+    near_tp_trailing_distance_percent = Column(Numeric(5, 2), default=15.0, nullable=False)  # Trail 15% behind
+
+    # Trailing Stop Safety
+    min_sl_distance_points = Column(Numeric(6, 2), default=10.0, nullable=False)  # Min 10 points from price
+    max_sl_move_per_update = Column(Numeric(6, 2), default=100.0, nullable=False)  # Max 100 points per update
+
     # Metadata
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     updated_by = Column(String(100), default='system')
