@@ -2292,15 +2292,15 @@
                 </div>
                 <div class="stat-row">
                     <span class="label">Net Profit:</span>
-                    <span class="value ${profitClass}">$${netProfit.toFixed(2)}</span>
+                    <span class="value ${profitClass}">€${netProfit.toFixed(2)}</span>
                 </div>
                 <div class="stat-row">
                     <span class="label">Avg Win/Loss:</span>
-                    <span class="value">$${stats.avg_win} / $${stats.avg_loss}</span>
+                    <span class="value">€${stats.avg_win} / €${stats.avg_loss}</span>
                 </div>
                 <div class="stat-row">
                     <span class="label">Best/Worst:</span>
-                    <span class="value">$${stats.best_trade} / $${stats.worst_trade}</span>
+                    <span class="value">€${stats.best_trade} / €${stats.worst_trade}</span>
                 </div>
                 ${stats.avg_trade_duration_hours ? `
                 <div class="stat-row">
@@ -2352,7 +2352,7 @@
                         <span class="trade-symbol">${pos.symbol}</span>
                         <span class="trade-direction ${directionClass}">${pos.direction}</span>
                     </div>
-                    <div class="trade-pnl ${profitClass}">${isProfitable ? '+' : ''}$${pos.pnl.toFixed(2)}</div>
+                    <div class="trade-pnl ${profitClass}">${isProfitable ? '+' : ''}€${pos.pnl.toFixed(2)}</div>
                     <div class="trade-info-row">
                         <span>Entry:</span>
                         <span class="value">${pos.open_price.toFixed(5)}</span>
@@ -2471,7 +2471,7 @@
                         <td style="font-size: 0.8em;">${openTime}</td>
                         <td style="font-size: 0.8em;">${closeTime}</td>
                         <td>${duration}</td>
-                        <td style="color: ${profitColor}; font-weight: 700;">${trade.profit > 0 ? '+' : ''}$${trade.profit ? trade.profit.toFixed(2) : '0.00'}</td>
+                        <td style="color: ${profitColor}; font-weight: 700;">${trade.profit > 0 ? '+' : ''}€${trade.profit ? trade.profit.toFixed(2) : '0.00'}</td>
                         <td style="font-size: 0.8em;">${trade.close_reason || '-'}</td>
                     </tr>
                 `;
