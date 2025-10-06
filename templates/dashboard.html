@@ -799,6 +799,149 @@
             background: #4CAF50;
             border-color: #4CAF50;
         }
+
+        /* Trade Action Buttons */
+        .trade-action-btn {
+            flex: 1;
+            padding: 8px 12px;
+            border: none;
+            border-radius: 5px;
+            font-size: 0.85em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .trade-close-btn {
+            background: #f44336;
+            color: white;
+        }
+
+        .trade-close-btn:hover {
+            background: #d32f2f;
+            transform: translateY(-1px);
+        }
+
+        .trade-ts-btn {
+            background: #2196F3;
+            color: white;
+        }
+
+        .trade-ts-btn:hover {
+            background: #1976D2;
+            transform: translateY(-1px);
+        }
+
+        .global-action-btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            font-size: 0.9em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            margin-left: 10px;
+        }
+
+        .close-profitable-btn {
+            background: #4CAF50;
+            color: white;
+        }
+
+        .close-profitable-btn:hover {
+            background: #45a049;
+        }
+
+        .close-all-btn {
+            background: #ff9800;
+            color: white;
+        }
+
+        .close-all-btn:hover {
+            background: #f57c00;
+        }
+
+        /* Modal Styles */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.8);
+            z-index: 10000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-content {
+            background: #2d2d2d;
+            border-radius: 12px;
+            padding: 30px;
+            max-width: 400px;
+            width: 90%;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+        }
+
+        .modal-title {
+            font-size: 1.3em;
+            margin-bottom: 20px;
+            color: #e0e0e0;
+        }
+
+        .modal-input {
+            width: 100%;
+            padding: 12px;
+            background: #1a1a1a;
+            border: 1px solid #444;
+            border-radius: 5px;
+            color: #e0e0e0;
+            font-size: 1em;
+            margin-bottom: 20px;
+        }
+
+        .modal-buttons {
+            display: flex;
+            gap: 10px;
+        }
+
+        .modal-btn {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            border-radius: 5px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .modal-btn-primary {
+            background: #4CAF50;
+            color: white;
+        }
+
+        .modal-btn-primary:hover {
+            background: #45a049;
+        }
+
+        .modal-btn-cancel {
+            background: #666;
+            color: white;
+        }
+
+        .modal-btn-cancel:hover {
+            background: #555;
+        }
+
+        .modal-btn-danger {
+            background: #f44336;
+            color: white;
+        }
+
+        .modal-btn-danger:hover {
+            background: #d32f2f;
+        }
     </style>
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
 </head>
@@ -966,8 +1109,18 @@
         <!-- OPEN POSITIONS -->
         <div class="grid">
             <div class="card">
-                <h2>📊 Open Positions (<span id="open-trades-count">0</span>)</h2>
-                <div id="open-trades-list" style="margin-top: 15px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                    <h2 style="margin: 0;">📊 Open Positions (<span id="open-trades-count">0</span>)</h2>
+                    <div>
+                        <button onclick="closeAllProfitable()" class="global-action-btn close-profitable-btn" title="Close all trades currently in profit">
+                            ✓ Close Profitable
+                        </button>
+                        <button onclick="confirmCloseAll()" class="global-action-btn close-all-btn" title="Close ALL open trades">
+                            ✕ Close All
+                        </button>
+                    </div>
+                </div>
+                <div id="open-trades-list">
                     <div style="text-align: center; color: #888; padding: 20px;">Loading...</div>
                 </div>
             </div>
@@ -2397,6 +2550,14 @@
                         <span>Ticket:</span>
                         <span class="value">#${pos.ticket}</span>
                     </div>
+                    <div style="display: flex; gap: 8px; margin-top: 12px;">
+                        <button onclick="closeTrade(${pos.ticket})" class="trade-action-btn trade-close-btn" title="Close this trade">
+                            ✕ Close
+                        </button>
+                        <button onclick="showSetTrailingStopModal(${pos.ticket}, '${pos.symbol}')" class="trade-action-btn trade-ts-btn" title="Set trailing stop">
+                            📈 Set TS
+                        </button>
+                    </div>
                 </div>
             `;
         }
@@ -3297,9 +3458,164 @@
             }
         }
 
+        // ==================== TRADE MANAGEMENT FUNCTIONS ====================
+
+        // Close individual trade
+        async function closeTrade(ticket) {
+            if (!confirm(`Are you sure you want to close trade #${ticket}?`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/close_trade/${ticket}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                });
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    alert(`✓ Close command sent for trade #${ticket}`);
+                    loadOpenTrades(); // Refresh
+                } else {
+                    alert(`✗ Error: ${data.message}`);
+                }
+            } catch (error) {
+                alert(`✗ Error closing trade: ${error.message}`);
+            }
+        }
+
+        // Close all profitable trades
+        async function closeAllProfitable() {
+            if (!confirm('Close all currently profitable trades?')) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/close_all_profitable', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                });
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    alert(`✓ ${data.message}\n\nTickets: ${data.tickets.join(', ')}`);
+                    loadOpenTrades(); // Refresh
+                } else if (data.status === 'info') {
+                    alert(`ℹ ${data.message}`);
+                } else {
+                    alert(`✗ Error: ${data.message}`);
+                }
+            } catch (error) {
+                alert(`✗ Error: ${error.message}`);
+            }
+        }
+
+        // Confirm close all trades
+        function confirmCloseAll() {
+            document.getElementById('close-all-modal').style.display = 'flex';
+        }
+
+        // Close all trades
+        async function closeAllTrades() {
+            document.getElementById('close-all-modal').style.display = 'none';
+
+            try {
+                const response = await fetch('/api/close_all_trades', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                });
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    alert(`✓ ${data.message}\n\nTickets: ${data.tickets.join(', ')}`);
+                    loadOpenTrades(); // Refresh
+                } else if (data.status === 'info') {
+                    alert(`ℹ ${data.message}`);
+                } else {
+                    alert(`✗ Error: ${data.message}`);
+                }
+            } catch (error) {
+                alert(`✗ Error: ${error.message}`);
+            }
+        }
+
+        // Show trailing stop modal
+        function showSetTrailingStopModal(ticket, symbol) {
+            document.getElementById('ts-ticket').textContent = ticket;
+            document.getElementById('ts-symbol').textContent = symbol;
+            document.getElementById('ts-input').value = '50';
+            document.getElementById('ts-modal').style.display = 'flex';
+        }
+
+        // Set trailing stop
+        async function setTrailingStop() {
+            const ticket = document.getElementById('ts-ticket').textContent;
+            const pips = document.getElementById('ts-input').value;
+
+            if (!pips || pips <= 0) {
+                alert('Please enter a valid trailing stop value in pips');
+                return;
+            }
+
+            document.getElementById('ts-modal').style.display = 'none';
+
+            try {
+                const response = await fetch(`/api/set_trailing_stop/${ticket}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({trailing_stop_pips: parseFloat(pips)})
+                });
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    alert(`✓ ${data.message}`);
+                } else {
+                    alert(`✗ Error: ${data.message}`);
+                }
+            } catch (error) {
+                alert(`✗ Error: ${error.message}`);
+            }
+        }
+
+        // Close modals
+        function closeModal(modalId) {
+            document.getElementById(modalId).style.display = 'none';
+        }
+
         // Version info for cache busting verification
-        console.log('🚀 Dashboard Version: 2025-10-05 13:40:00 - Detailed Backtest Status Active');
+        console.log('🚀 Dashboard Version: 2025-10-06 18:12:00 - Trade Management Added');
     </script>
+
+    <!-- Trailing Stop Modal -->
+    <div id="ts-modal" class="modal-overlay">
+        <div class="modal-content">
+            <h3 class="modal-title">Set Trailing Stop</h3>
+            <p style="color: #aaa; margin-bottom: 15px;">
+                Ticket: #<span id="ts-ticket"></span> (<span id="ts-symbol"></span>)
+            </p>
+            <label style="color: #aaa; font-size: 0.9em; display: block; margin-bottom: 8px;">Trailing Stop (pips):</label>
+            <input type="number" id="ts-input" class="modal-input" placeholder="e.g. 50" min="1" step="1">
+            <div class="modal-buttons">
+                <button onclick="closeModal('ts-modal')" class="modal-btn modal-btn-cancel">Cancel</button>
+                <button onclick="setTrailingStop()" class="modal-btn modal-btn-primary">Set TS</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Close All Confirmation Modal -->
+    <div id="close-all-modal" class="modal-overlay">
+        <div class="modal-content">
+            <h3 class="modal-title">⚠️ Close All Trades?</h3>
+            <p style="color: #aaa; margin-bottom: 20px;">
+                This will close ALL open positions immediately.<br>
+                This action cannot be undone!
+            </p>
+            <div class="modal-buttons">
+                <button onclick="closeModal('close-all-modal')" class="modal-btn modal-btn-cancel">Cancel</button>
+                <button onclick="closeAllTrades()" class="modal-btn modal-btn-danger">Close All</button>
+            </div>
+        </div>
+    </div>
 
 </body>
 </html>

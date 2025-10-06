@@ -2772,6 +2772,221 @@ def open_trade_from_dashboard():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+@app_webui.route('/api/close_trade/<int:ticket>', methods=['POST'])
+def close_trade(ticket):
+    """Close a specific trade by ticket number"""
+    try:
+        from command_helper import create_command
+
+        db = ScopedSession()
+        try:
+            # Get first account
+            account = db.query(Account).first()
+            if not account:
+                return jsonify({'status': 'error', 'message': 'No account found'}), 404
+
+            # Verify trade exists and is open
+            trade = db.query(Trade).filter_by(ticket=ticket, status='open').first()
+            if not trade:
+                return jsonify({'status': 'error', 'message': f'Open trade with ticket {ticket} not found'}), 404
+
+            # Create close command
+            payload = {
+                'ticket': ticket
+            }
+
+            command = create_command(
+                db=db,
+                account_id=account.id,
+                command_type='CLOSE_TRADE',
+                payload=payload
+            )
+
+            logger.info(f"Close trade command created: {command.id} - Ticket #{ticket}")
+
+            return jsonify({
+                'status': 'success',
+                'message': f'Close command sent for trade #{ticket}',
+                'command_id': command.id
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Close trade error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_webui.route('/api/close_all_profitable', methods=['POST'])
+def close_all_profitable():
+    """Close all trades that are currently in profit"""
+    try:
+        from command_helper import create_command
+
+        db = ScopedSession()
+        try:
+            account = db.query(Account).first()
+            if not account:
+                return jsonify({'status': 'error', 'message': 'No account found'}), 404
+
+            # Get all open trades
+            open_trades = db.query(Trade).filter_by(status='open').all()
+
+            if not open_trades:
+                return jsonify({'status': 'info', 'message': 'No open trades to close'}), 200
+
+            # Get current P&L from monitoring data
+            from redis_client import get_redis
+            import json
+            redis = get_redis()
+            monitoring_data = redis.get(f"monitoring:account:{account.id}")
+
+            if not monitoring_data:
+                return jsonify({'status': 'error', 'message': 'No monitoring data available'}), 400
+
+            monitoring_data = json.loads(monitoring_data)
+            positions = monitoring_data.get('positions', [])
+
+            # Find profitable trades
+            profitable_tickets = []
+            for pos in positions:
+                if pos.get('pnl', 0) > 0:
+                    profitable_tickets.append(pos['ticket'])
+
+            if not profitable_tickets:
+                return jsonify({'status': 'info', 'message': 'No profitable trades to close'}), 200
+
+            # Create close commands for all profitable trades
+            commands_created = []
+            for ticket in profitable_tickets:
+                payload = {'ticket': ticket}
+                command = create_command(
+                    db=db,
+                    account_id=account.id,
+                    command_type='CLOSE_TRADE',
+                    payload=payload
+                )
+                commands_created.append(command.id)
+
+            logger.info(f"Close all profitable: {len(commands_created)} commands created for tickets: {profitable_tickets}")
+
+            return jsonify({
+                'status': 'success',
+                'message': f'Close commands sent for {len(profitable_tickets)} profitable trades',
+                'tickets': profitable_tickets,
+                'commands': commands_created
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Close all profitable error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_webui.route('/api/close_all_trades', methods=['POST'])
+def close_all_trades():
+    """Close ALL open trades (requires confirmation from frontend)"""
+    try:
+        from command_helper import create_command
+
+        db = ScopedSession()
+        try:
+            account = db.query(Account).first()
+            if not account:
+                return jsonify({'status': 'error', 'message': 'No account found'}), 404
+
+            # Get all open trades
+            open_trades = db.query(Trade).filter_by(status='open').all()
+
+            if not open_trades:
+                return jsonify({'status': 'info', 'message': 'No open trades to close'}), 200
+
+            # Create close commands for all trades
+            commands_created = []
+            tickets = []
+            for trade in open_trades:
+                payload = {'ticket': trade.ticket}
+                command = create_command(
+                    db=db,
+                    account_id=account.id,
+                    command_type='CLOSE_TRADE',
+                    payload=payload
+                )
+                commands_created.append(command.id)
+                tickets.append(trade.ticket)
+
+            logger.warning(f"CLOSE ALL TRADES: {len(commands_created)} commands created for tickets: {tickets}")
+
+            return jsonify({
+                'status': 'success',
+                'message': f'Close commands sent for {len(tickets)} trades',
+                'tickets': tickets,
+                'commands': commands_created
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Close all trades error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_webui.route('/api/set_trailing_stop/<int:ticket>', methods=['POST'])
+def set_trailing_stop(ticket):
+    """Manually set/update trailing stop for a specific trade"""
+    try:
+        from command_helper import create_command
+
+        data = request.get_json()
+        trailing_stop_pips = data.get('trailing_stop_pips')
+
+        if not trailing_stop_pips:
+            return jsonify({'status': 'error', 'message': 'trailing_stop_pips required'}), 400
+
+        db = ScopedSession()
+        try:
+            account = db.query(Account).first()
+            if not account:
+                return jsonify({'status': 'error', 'message': 'No account found'}), 404
+
+            # Verify trade exists and is open
+            trade = db.query(Trade).filter_by(ticket=ticket, status='open').first()
+            if not trade:
+                return jsonify({'status': 'error', 'message': f'Open trade with ticket {ticket} not found'}), 404
+
+            # Create MODIFY_TRADE command with trailing stop
+            payload = {
+                'ticket': ticket,
+                'trailing_stop': float(trailing_stop_pips)
+            }
+
+            command = create_command(
+                db=db,
+                account_id=account.id,
+                command_type='MODIFY_TRADE',
+                payload=payload
+            )
+
+            logger.info(f"Set trailing stop command created: {command.id} - Ticket #{ticket}, TS: {trailing_stop_pips} pips")
+
+            return jsonify({
+                'status': 'success',
+                'message': f'Trailing stop set to {trailing_stop_pips} pips for trade #{ticket}',
+                'command_id': command.id
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Set trailing stop error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
 @app_webui.route('/api/signals/stats')
 def get_signal_stats():
     """Get signal statistics"""
