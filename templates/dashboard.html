@@ -2314,7 +2314,7 @@
         // ==================== NEW: OPEN POSITIONS ====================
         async function loadOpenTrades() {
             try {
-                const response = await fetch('/api/monitoring/1');  // Account ID 1
+                const response = await fetch('http://' + window.location.hostname + ':9900/api/monitoring/1');  // Account ID 1
                 const data = await response.json();
 
                 if (data && data.positions) {
