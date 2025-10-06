@@ -63,11 +63,27 @@ class TradeMonitor:
             else:  # SELL position
                 close_price = current_price['ask']  # Close at ask
 
-            # Calculate P&L
-            if is_buy:  # BUY
-                pnl = (close_price - trade.open_price) * trade.volume
-            else:  # SELL
-                pnl = (trade.open_price - close_price) * trade.volume
+            # Calculate P&L with proper contract size (100,000 for forex)
+            # Formula: (price_diff * volume * contract_size) for USD base currency
+            # For XXXUSD pairs: profit in USD = price_diff * volume * 100,000
+            # For USDXXX pairs: profit in USD = (price_diff * volume * 100,000) / close_price
+
+            contract_size = 100000  # Standard forex lot size
+
+            # Convert all values to float to avoid Decimal/float type errors
+            open_price = float(trade.open_price)
+            close_price_val = float(close_price)
+            volume = float(trade.volume)
+
+            price_diff = close_price_val - open_price if is_buy else open_price - close_price_val
+
+            # Check if this is a USD-base pair (like EURUSD, GBPUSD) or USD-quote pair (like USDJPY)
+            if trade.symbol.startswith('USD'):  # USDJPY, USDCHF, etc.
+                # For USD-base pairs, convert profit to USD
+                pnl = (price_diff * volume * contract_size) / close_price_val
+            else:  # EURUSD, GBPUSD, XAUUSD, etc.
+                # For pairs where USD is the quote currency, profit is already in USD
+                pnl = price_diff * volume * contract_size
 
             # Calculate points moved
             points = abs(close_price - trade.open_price)
