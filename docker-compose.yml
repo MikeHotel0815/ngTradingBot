@@ -1,0 +1,78 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: ngtradingbot_db
+    ports:
+      - "9904:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: ngtradingbot
+      POSTGRES_USER: trader
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-tradingbot_secret_2025}
+    networks:
+      - tradingbot_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trader -d ngtradingbot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: ngtradingbot_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    networks:
+      - tradingbot_network
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  server:
+    build: .
+    container_name: ngtradingbot_server
+    ports:
+      - "9900:9900"
+      - "9901:9901"
+      - "9902:9902"
+      - "9903:9903"
+      - "9905:9905"
+    volumes:
+      - ./data:/app/data
+      - ./backups:/app/backups
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql://trader:${DB_PASSWORD:-tradingbot_secret_2025}@postgres:5432/ngtradingbot
+      - REDIS_URL=redis://redis:6379/0
+      # Backup configuration
+      - BACKUP_ENABLED=${BACKUP_ENABLED:-false}
+      - BACKUP_INTERVAL_HOURS=${BACKUP_INTERVAL_HOURS:-24}
+      - BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-30}
+      - GITHUB_BACKUP_REPO=${GITHUB_BACKUP_REPO:-}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - BACKUP_SCRIPT=/app/backup_to_github.sh
+      - BACKUP_DIR=/app/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - tradingbot_network
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+
+networks:
+  tradingbot_network:
+    driver: bridge

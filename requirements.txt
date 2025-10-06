@@ -1,0 +1,22 @@
+# Core dependencies
+flask
+flask-socketio
+sqlalchemy
+psycopg2-binary
+python-dotenv
+redis
+
+# Data processing
+pandas
+numpy
+TA-Lib  # Technical Analysis Library
+
+# Database migrations
+alembic
+
+# Utilities
+python-dateutil
+pytz
+APScheduler
+
+# Note: MetaTrader5 is Windows-only and not needed for the server

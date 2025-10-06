@@ -1,0 +1,3425 @@
+"""
+ngTradingBot Main Server Application
+Multi-Port Flask Server with PostgreSQL backend
+"""
+
+from flask import Flask, request, jsonify, render_template
+from flask_socketio import SocketIO, emit
+from datetime import datetime, timedelta
+from sqlalchemy import text
+import logging
+import os
+from threading import Thread
+import pytz
+
+# Import database and models
+from database import init_db, ScopedSession, cleanup_old_ticks
+from models import Account, SubscribedSymbol, Log, Tick, OHLCData, BrokerSymbol, Command, AccountTransaction, TradingSignal
+from auth import require_api_key, get_or_create_account
+from backup_scheduler import start_backup_scheduler, get_scheduler
+from redis_client import init_redis, get_redis
+from tick_batch_writer import start_batch_writer, get_batch_writer
+from command_helper import create_command
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Create Flask apps for different ports
+app_command = Flask('command')  # Port 9900
+app_ticks = Flask('ticks')  # Port 9901
+app_trades = Flask('trades')  # Port 9902
+app_logs = Flask('logs')  # Port 9903
+app_webui = Flask('webui', template_folder='templates')  # Port 9905
+socketio = SocketIO(app_webui, cors_allowed_origins="*")
+
+# Enable CORS for all apps (allow cross-port requests)
+def add_cors_headers(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, x-api-key'
+    return response
+
+# Handle OPTIONS preflight requests
+@app_command.before_request
+def handle_preflight():
+    if request.method == 'OPTIONS':
+        response = Flask.response_class()
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, x-api-key'
+        return response
+
+app_command.after_request(add_cors_headers)
+app_ticks.after_request(add_cors_headers)
+app_trades.after_request(add_cors_headers)
+app_logs.after_request(add_cors_headers)
+app_webui.after_request(add_cors_headers)
+
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+def is_symbol_tradeable_now(symbol):
+    """
+    Check if a symbol is currently tradeable based on market hours.
+    This is server-side validation independent of tick data.
+    """
+    now_utc = datetime.now(pytz.UTC)
+
+    # Determine symbol type
+    symbol_upper = symbol.upper()
+
+    # Crypto markets are 24/7
+    if any(crypto in symbol_upper for crypto in ['BTC', 'ETH', 'XRP', 'LTC', 'DOGE', 'ADA']):
+        return True
+
+    # Forex markets (closed on weekends)
+    if any(curr in symbol_upper for curr in ['USD', 'EUR', 'GBP', 'JPY', 'CHF', 'AUD', 'CAD', 'NZD']):
+        weekday = now_utc.weekday()  # 0=Monday, 6=Sunday
+        hour = now_utc.hour
+
+        # Saturday (5) and Sunday (6) are closed
+        if weekday == 5 or weekday == 6:
+            return False
+
+        # Friday after 22:00 UTC is considered closed (weekend starts)
+        if weekday == 4 and hour >= 22:
+            return False
+
+        # Sunday before 22:00 UTC is considered closed (weekend not over)
+        # Note: weekday 6 is already handled above, but keeping this for clarity
+        if weekday == 6 and hour < 22:
+            return False
+
+    # For other instruments, check if we have recent tick data (within last 5 minutes)
+    # If ticks are old, consider it not tradeable
+    return True
+
+
+def validate_confidence(value, param_name='confidence'):
+    """
+    Validate confidence value is in valid range.
+
+    Args:
+        value: Confidence value to validate
+        param_name: Name of parameter for error messages
+
+    Returns:
+        Validated float value
+
+    Raises:
+        ValueError: If value is invalid
+    """
+    try:
+        conf = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f'{param_name} must be a number, got: {value}')
+
+    if conf < 0 or conf > 100:
+        raise ValueError(f'{param_name} must be between 0 and 100, got: {conf}')
+
+    if conf < 30:
+        logger.warning(f'{param_name} is very low ({conf}%) - this may generate too many signals')
+
+    if conf > 95:
+        logger.warning(f'{param_name} is very high ({conf}%) - this may miss good opportunities')
+
+    return conf
+
+
+def validate_numeric_range(value, param_name, min_val=None, max_val=None):
+    """
+    Validate numeric value is in valid range.
+
+    Args:
+        value: Value to validate
+        param_name: Name of parameter for error messages
+        min_val: Minimum allowed value (inclusive)
+        max_val: Maximum allowed value (inclusive)
+
+    Returns:
+        Validated float value
+
+    Raises:
+        ValueError: If value is invalid
+    """
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f'{param_name} must be a number, got: {value}')
+
+    if min_val is not None and num < min_val:
+        raise ValueError(f'{param_name} must be >= {min_val}, got: {num}')
+
+    if max_val is not None and num > max_val:
+        raise ValueError(f'{param_name} must be <= {max_val}, got: {num}')
+
+    return num
+
+
+# ============================================================================
+# PORT 9900 - COMMAND & CONTROL
+# ============================================================================
+
+@app_command.route('/api/connect', methods=['POST'])
+def connect():
+    """
+    Initial EA connection - creates account if new, returns API key
+    """
+    try:
+        data = request.get_json()
+        account_number = data.get('account')
+        broker = data.get('broker', 'Unknown')
+        platform = data.get('platform', 'MT5')
+
+        if not account_number:
+            return jsonify({'status': 'error', 'message': 'Missing account number'}), 400
+
+        db = ScopedSession()
+        try:
+            # Get or create account
+            account, api_key, is_new = get_or_create_account(db, account_number, broker)
+
+            # Update last heartbeat
+            account.last_heartbeat = datetime.utcnow()
+
+            # Store available symbols from EA
+            available_symbols = data.get('available_symbols', [])
+            if available_symbols:
+                # Delete old broker symbols for this account
+                db.query(BrokerSymbol).filter_by(account_id=account.id).delete()
+
+                # Add new broker symbols (just names for now, specs come later)
+                for symbol in available_symbols:
+                    broker_symbol = BrokerSymbol(
+                        account_id=account.id,
+                        symbol=symbol,
+                        last_updated=datetime.utcnow()
+                    )
+                    db.add(broker_symbol)
+
+                logger.info(f"Stored {len(available_symbols)} available symbols for account {account_number}")
+
+            db.commit()
+
+            # Get subscribed symbols
+            symbols = db.query(SubscribedSymbol).filter_by(
+                account_id=account.id,
+                active=True
+            ).all()
+
+            symbol_list = [
+                {'symbol': s.symbol, 'mode': s.tick_mode}
+                for s in symbols
+            ]
+
+            logger.info(f"{'New' if is_new else 'Existing'} account connected: {account_number} ({broker})")
+
+            return jsonify({
+                'status': 'success',
+                'message': 'Connected successfully',
+                'api_key': api_key,
+                'is_new': is_new,
+                'subscribed_symbols': symbol_list,
+                'server_time': datetime.utcnow().isoformat()
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Connection error: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_command.route('/api/heartbeat', methods=['POST'])
+@require_api_key
+def heartbeat(account, db):
+    """
+    Regular heartbeat from EA with account status
+    """
+    try:
+        data = request.get_json()
+        balance = data.get('balance')
+        equity = data.get('equity')
+        margin = data.get('margin')
+        free_margin = data.get('free_margin')
+        profit_today = data.get('profit_today')
+        profit_week = data.get('profit_week')
+        profit_month = data.get('profit_month')
+        profit_year = data.get('profit_year')
+
+        # Update last heartbeat and account data
+        account.last_heartbeat = datetime.utcnow()
+        if balance is not None:
+            account.balance = balance
+        if equity is not None:
+            account.equity = equity
+        if margin is not None:
+            account.margin = margin
+        if free_margin is not None:
+            account.free_margin = free_margin
+        if profit_today is not None:
+            account.profit_today = profit_today
+        if profit_week is not None:
+            account.profit_week = profit_week
+        if profit_month is not None:
+            account.profit_month = profit_month
+        if profit_year is not None:
+            account.profit_year = profit_year
+        db.commit()
+
+        logger.info(f"Heartbeat from {account.mt5_account_number} - Balance: {balance}, Equity: {equity}, Profit Today: {profit_today}")
+
+        # Broadcast account update via WebSocket
+        socketio.emit('account_update', {
+            'number': account.mt5_account_number,
+            'balance': float(balance) if balance else 0.0,
+            'equity': float(equity) if equity else 0.0,
+            'margin': float(margin) if margin else 0.0,
+            'free_margin': float(free_margin) if free_margin else 0.0
+        })
+
+        # Broadcast profit update via WebSocket
+        socketio.emit('profit_update', {
+            'today': float(profit_today) if profit_today is not None else 0.0,
+            'week': float(profit_week) if profit_week is not None else 0.0,
+            'month': float(profit_month) if profit_month is not None else 0.0,
+            'year': float(profit_year) if profit_year is not None else 0.0
+        })
+
+        # Get current subscribed symbols to return in response
+        subscribed = db.query(SubscribedSymbol).filter_by(
+            account_id=account.id,
+            active=True
+        ).all()
+
+        # Get available broker symbols for filtering
+        broker_symbols = db.query(BrokerSymbol).filter_by(account_id=account.id).all()
+        valid_symbols = {bs.symbol for bs in broker_symbols}
+
+        # Filter to only valid symbols
+        if valid_symbols:
+            symbols = [s.symbol for s in subscribed if s.symbol in valid_symbols]
+        else:
+            symbols = [s.symbol for s in subscribed]
+
+        # Get pending commands for this account
+        pending_commands = db.query(Command).filter_by(
+            account_id=account.id,
+            status='pending'
+        ).all()
+
+        commands_data = []
+        for cmd in pending_commands:
+            # Flatten the command structure for easier EA parsing
+            # Merge payload fields directly into command object
+            cmd_dict = {
+                'id': cmd.id,
+                'type': cmd.command_type
+            }
+            # Add payload fields directly (not nested)
+            if cmd.payload:
+                for key, value in cmd.payload.items():
+                    cmd_dict[key] = value
+            commands_data.append(cmd_dict)
+
+        return jsonify({
+            'status': 'success',
+            'message': 'Heartbeat received',
+            'symbols': symbols,
+            'commands': commands_data
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Heartbeat error: {str(e)}")
+        db.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_command.route('/api/profit_update', methods=['POST'])
+@require_api_key
+def profit_update(account, db):
+    """
+    Instant profit update from EA when trade closes (OnTrade event)
+    """
+    try:
+        data = request.get_json()
+        balance = data.get('balance')
+        equity = data.get('equity')
+        profit_today = data.get('profit_today')
+        profit_week = data.get('profit_week')
+        profit_month = data.get('profit_month')
+        profit_year = data.get('profit_year')
+
+        # Update account data
+        if balance is not None:
+            account.balance = balance
+        if equity is not None:
+            account.equity = equity
+        if profit_today is not None:
+            account.profit_today = profit_today
+        if profit_week is not None:
+            account.profit_week = profit_week
+        if profit_month is not None:
+            account.profit_month = profit_month
+        if profit_year is not None:
+            account.profit_year = profit_year
+        db.commit()
+
+        logger.info(f"Instant profit update from {account.mt5_account_number} - Profit Today: {profit_today}")
+
+        # Broadcast account update via WebSocket
+        socketio.emit('account_update', {
+            'number': account.mt5_account_number,
+            'balance': float(balance) if balance else 0.0,
+            'equity': float(equity) if equity else 0.0,
+            'margin': float(account.margin) if account.margin else 0.0,
+            'free_margin': float(account.free_margin) if account.free_margin else 0.0
+        })
+
+        # Broadcast profit update via WebSocket
+        socketio.emit('profit_update', {
+            'today': float(profit_today) if profit_today is not None else 0.0,
+            'week': float(profit_week) if profit_week is not None else 0.0,
+            'month': float(profit_month) if profit_month is not None else 0.0,
+            'year': float(profit_year) if profit_year is not None else 0.0
+        })
+
+        return jsonify({'status': 'success'}), 200
+
+    except Exception as e:
+        logger.error(f"Profit update error: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_command.route('/api/get_commands', methods=['POST'])
+@require_api_key
+def get_commands(account, db):
+    """
+    Get pending commands for EA (Redis-based instant delivery)
+    OPTIMIZED: Always check PostgreSQL first and push to Redis for instant delivery
+    """
+    try:
+        redis = get_redis()
+
+        # STEP 1: Check PostgreSQL for NEW pending commands and push to Redis
+        # Only process commands with status='pending' (not 'executing')
+        # Commands created via /api/create_command are already in Redis with status='executing'
+        pending_commands = db.query(Command).filter_by(
+            account_id=account.id,
+            status='pending'
+        ).limit(50).all()
+
+        for cmd in pending_commands:
+            # Flatten the command structure for easier EA parsing
+            cmd_dict = {
+                'id': cmd.id,
+                'type': cmd.command_type
+            }
+            # Add payload fields directly (not nested)
+            if cmd.payload:
+                for key, value in cmd.payload.items():
+                    cmd_dict[key] = value
+
+            # Push to Redis queue for instant delivery
+            redis.push_command(account.id, cmd_dict)
+
+            # Mark as executing (retrieved from DB)
+            cmd.status = 'executing'
+
+        if pending_commands:
+            db.commit()
+            logger.info(f"Pushed {len(pending_commands)} pending commands to Redis queue for account {account.id}")
+
+        # STEP 2: Pop up to 10 commands from Redis queue for delivery
+        commands_data = []
+        for _ in range(10):
+            cmd = redis.pop_command(account.id)
+            if not cmd:
+                break
+            commands_data.append(cmd)
+
+        return jsonify({
+            'status': 'success',
+            'commands': commands_data
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Get commands error: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_command.route('/api/create_command', methods=['POST'])
+@require_api_key
+def create_command_api(account, db):
+    """
+    Create a new command with instant Redis delivery
+    """
+    try:
+        data = request.get_json()
+        command_type = data.get('command_type')
+        payload = data.get('payload', {})
+
+        if not command_type:
+            return jsonify({'status': 'error', 'message': 'Missing command_type'}), 400
+
+        # Create command with Redis push for instant delivery
+        command = create_command(
+            db=db,
+            account_id=account.id,
+            command_type=command_type,
+            payload=payload,
+            push_to_redis=True
+        )
+
+        logger.info(f"Command {command.id} created and pushed to Redis for instant delivery")
+
+        return jsonify({
+            'status': 'success',
+            'command_id': command.id,
+            'command_type': command_type,
+            'message': 'Command created and queued for instant execution'
+        }), 201
+
+    except Exception as e:
+        logger.error(f"Create command error: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_command.route('/api/command_response', methods=['POST'])
+@require_api_key
+def command_response(account, db):
+    """
+    Receive command execution result from EA
+    """
+    try:
+        data = request.get_json()
+        command_id = data.get('command_id')
+        status = data.get('status')  # 'completed' or 'failed'
+        response_data = data.get('response', {})
+
+        # Update command in database
+        command = db.query(Command).filter_by(id=command_id).first()
+        if command:
+            command.status = status
+            command.response = response_data
+            command.executed_at = datetime.utcnow()
+            db.commit()
+
+            logger.info(f"Command {command_id} {status}: {response_data}")
+
+            # Publish to Redis Pub/Sub for instant WebSocket notification
+            try:
+                redis = get_redis()
+                redis.publish_command_response(command_id, {
+                    'command_id': command_id,
+                    'status': status,
+                    'response': response_data,
+                    'timestamp': datetime.utcnow().isoformat()
+                })
+
+                # Also broadcast to account updates channel
+                socketio.emit('command_update', {
+                    'command_id': command_id,
+                    'status': status,
+                    'response': response_data
+                }, namespace='/', broadcast=True)
+            except Exception as e:
+                logger.error(f"Failed to publish command response: {e}")
+
+            return jsonify({'status': 'success'}), 200
+        else:
+            return jsonify({'status': 'error', 'message': 'Command not found'}), 404
+
+    except Exception as e:
+        logger.error(f"Command response error: {str(e)}")
+        db.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_command.route('/api/symbols', methods=['POST'])
+@require_api_key
+def get_symbols(account, db):
+    """
+    Get subscribed symbols for this account (filtered by broker availability)
+    """
+    try:
+        # Get subscribed symbols
+        subscribed = db.query(SubscribedSymbol).filter_by(
+            account_id=account.id,
+            active=True
+        ).all()
+
+        # Get available broker symbols
+        broker_symbols = db.query(BrokerSymbol).filter_by(account_id=account.id).all()
+        valid_symbols = {bs.symbol for bs in broker_symbols}
+
+        # Filter subscribed symbols to only include valid ones
+        if valid_symbols:
+            symbols = [s.symbol for s in subscribed if s.symbol in valid_symbols]
+        else:
+            # If no broker symbols stored yet, return all subscribed
+            symbols = [s.symbol for s in subscribed]
+
+        return jsonify({
+            'status': 'success',
+            'symbols': symbols,
+            'count': len(symbols)
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Get symbols error: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_command.route('/api/symbol_specs', methods=['POST'])
+@require_api_key
+def update_symbol_specs(account, db):
+    """
+    Update symbol specifications (volume limits, stops level, etc.) from EA
+    Expected payload: {
+        "account": 123,
+        "api_key": "...",
+        "symbols": [
+            {
+                "symbol": "DE40.c",
+                "volume_min": 0.1,
+                "volume_max": 500.0,
+                "volume_step": 0.1,
+                "stops_level": 0,
+                "freeze_level": 0,
+                "trade_mode": 7,
+                "digits": 2,
+                "point_value": 0.01
+            },
+            ...
+        ]
+    }
+    """
+    try:
+        data = request.get_json()
+        symbol_specs = data.get('symbols', [])
+
+        if not symbol_specs:
+            return jsonify({'status': 'error', 'message': 'No symbol specs provided'}), 400
+
+        updated_count = 0
+
+        for spec in symbol_specs:
+            symbol_name = spec.get('symbol')
+            if not symbol_name:
+                continue
+
+            # Find existing broker symbol
+            broker_symbol = db.query(BrokerSymbol).filter_by(
+                account_id=account.id,
+                symbol=symbol_name
+            ).first()
+
+            if broker_symbol:
+                # Update specifications
+                broker_symbol.volume_min = spec.get('volume_min')
+                broker_symbol.volume_max = spec.get('volume_max')
+                broker_symbol.volume_step = spec.get('volume_step')
+                broker_symbol.stops_level = spec.get('stops_level')
+                broker_symbol.freeze_level = spec.get('freeze_level')
+                broker_symbol.trade_mode = spec.get('trade_mode')
+                broker_symbol.digits = spec.get('digits')
+                broker_symbol.point_value = spec.get('point_value')
+                broker_symbol.last_updated = datetime.utcnow()
+                updated_count += 1
+
+        db.commit()
+
+        logger.info(f"Updated specifications for {updated_count} symbols")
+
+        return jsonify({
+            'status': 'success',
+            'updated': updated_count
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Update symbol specs error: {str(e)}")
+        db.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_command.route('/api/subscribe', methods=['POST'])
+@require_api_key
+def subscribe(account, db):
+    """
+    Subscribe to symbols for monitoring
+    """
+    try:
+        data = request.get_json()
+        symbols = data.get('symbols', [])
+        mode = data.get('mode', 'default')
+
+        if not symbols:
+            return jsonify({'status': 'error', 'message': 'No symbols provided'}), 400
+
+        # Validate symbols against broker's available symbols
+        broker_symbols = db.query(BrokerSymbol).filter_by(account_id=account.id).all()
+        valid_symbols = {bs.symbol for bs in broker_symbols}
+
+        added = []
+        invalid = []
+
+        for symbol_name in symbols:
+            # Check if symbol is available at broker
+            if valid_symbols and symbol_name not in valid_symbols:
+                invalid.append(symbol_name)
+                logger.warning(f"Symbol {symbol_name} not available at broker for account {account.mt5_account_number}")
+                continue
+
+            # Check if already exists
+            existing = db.query(SubscribedSymbol).filter_by(
+                account_id=account.id,
+                symbol=symbol_name
+            ).first()
+
+            if existing:
+                existing.active = True
+                existing.tick_mode = mode
+            else:
+                new_symbol = SubscribedSymbol(
+                    account_id=account.id,
+                    symbol=symbol_name,
+                    tick_mode=mode
+                )
+                db.add(new_symbol)
+                added.append(symbol_name)
+
+        db.commit()
+
+        logger.info(f"Subscribed {account.mt5_account_number} to symbols: {added} (mode: {mode})")
+
+        response = {
+            'status': 'success' if added else 'partial' if invalid else 'error',
+            'message': f'Subscribed to {len(added)} symbols',
+            'added': added,
+            'mode': mode
+        }
+
+        if invalid:
+            response['invalid'] = invalid
+            response['message'] += f', {len(invalid)} symbols not available at broker'
+
+        return jsonify(response), 200 if added else 400
+
+    except Exception as e:
+        logger.error(f"Subscribe error: {str(e)}")
+        db.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_command.route('/api/cleanup', methods=['POST'])
+@require_api_key
+def manual_cleanup(account, db):
+    """
+    Manually trigger data cleanup
+    """
+    try:
+        from database import cleanup_old_data
+
+        data = request.get_json() or {}
+        tick_days = data.get('tick_days', 30)
+        ohlc_days = data.get('ohlc_days', 730)
+
+        result = cleanup_old_data(db, tick_days=tick_days, ohlc_days=ohlc_days)
+
+        logger.info(f"Manual cleanup by account {account.mt5_account_number}: {result}")
+
+        return jsonify({
+            'status': 'success',
+            'result': result
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Manual cleanup error: {str(e)}")
+        db.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_command.route('/api/unsubscribe', methods=['POST'])
+@require_api_key
+def unsubscribe(account, db):
+    """
+    Unsubscribe from symbols
+    """
+    try:
+        data = request.get_json()
+        symbols = data.get('symbols', [])
+
+        if not symbols:
+            return jsonify({'status': 'error', 'message': 'No symbols provided'}), 400
+
+        # Deactivate symbols
+        db.query(SubscribedSymbol).filter(
+            SubscribedSymbol.account_id == account.id,
+            SubscribedSymbol.symbol.in_(symbols)
+        ).update({'active': False}, synchronize_session=False)
+
+        db.commit()
+
+        logger.info(f"Unsubscribed {account.mt5_account_number} from symbols: {symbols}")
+
+        return jsonify({
+            'status': 'success',
+            'message': f'Unsubscribed from {len(symbols)} symbols'
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Unsubscribe error: {str(e)}")
+        db.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_command.route('/api/transaction', methods=['POST'])
+@require_api_key
+def receive_transaction(account, db):
+    """
+    Receive account transaction from EA (deposit, withdrawal, credit, etc.)
+    """
+    try:
+        data = request.get_json()
+        ticket = data.get('ticket')
+        transaction_type = data.get('transaction_type')
+        amount = data.get('amount')
+        timestamp = data.get('timestamp')
+        comment = data.get('comment', '')
+        balance_after = data.get('balance')
+
+        if not all([ticket, transaction_type, amount, timestamp]):
+            return jsonify({'status': 'error', 'message': 'Missing required fields'}), 400
+
+        # Convert timestamp
+        transaction_time = datetime.fromtimestamp(timestamp)
+
+        # Check if transaction already exists
+        existing = db.query(AccountTransaction).filter_by(ticket=ticket).first()
+        if existing:
+            logger.info(f"Transaction {ticket} already exists, skipping")
+            return jsonify({'status': 'success', 'message': 'Transaction already recorded'}), 200
+
+        # Create transaction record
+        transaction = AccountTransaction(
+            account_id=account.id,
+            ticket=ticket,
+            transaction_type=transaction_type,
+            amount=amount,
+            balance_after=balance_after,
+            comment=comment,
+            timestamp=transaction_time
+        )
+        db.add(transaction)
+        db.commit()
+
+        logger.info(f"Transaction recorded: {transaction_type} {amount} for account {account.mt5_account_number}")
+
+        # Broadcast via WebSocket
+        socketio.emit('transaction_update', {
+            'account': account.mt5_account_number,
+            'type': transaction_type,
+            'amount': float(amount),
+            'balance': float(balance_after) if balance_after else None,
+            'timestamp': transaction_time.isoformat(),
+            'comment': comment
+        })
+
+        return jsonify({'status': 'success', 'message': 'Transaction recorded'}), 200
+
+    except Exception as e:
+        logger.error(f"Transaction receive error: {str(e)}")
+        db.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_command.route('/api/status', methods=['GET'])
+def status():
+    """Get server status"""
+    db = ScopedSession()
+    try:
+        account_count = db.query(Account).count()
+        active_symbols = db.query(SubscribedSymbol).filter_by(active=True).count()
+
+        return jsonify({
+            'status': 'running',
+            'server_time': datetime.utcnow().isoformat(),
+            'accounts': account_count,
+            'active_symbols': active_symbols
+        }), 200
+    finally:
+        db.close()
+
+
+@app_command.route('/api/auto-trade/enable', methods=['POST'])
+def enable_auto_trade():
+    """Enable auto-trading with optional min confidence"""
+    try:
+        data = request.get_json() or {}
+        min_confidence_raw = data.get('min_confidence', 40)  # Default 40%
+
+        # VALIDATION: Validate confidence is in valid range
+        try:
+            min_confidence = validate_confidence(min_confidence_raw, 'min_confidence')
+        except ValueError as ve:
+            return jsonify({
+                'status': 'error',
+                'message': str(ve)
+            }), 400
+
+        from auto_trader import get_auto_trader
+        trader = get_auto_trader()
+        trader.set_min_confidence(min_confidence)
+        trader.enable()
+
+        logger.info(f"Auto-Trading ENABLED with min_confidence={min_confidence}%")
+        return jsonify({
+            'status': 'success',
+            'message': f'Auto-Trading ENABLED (min confidence: {min_confidence}%)'
+        }), 200
+    except Exception as e:
+        logger.error(f"Error enabling auto-trade: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_command.route('/api/auto-trade/disable', methods=['POST'])
+def disable_auto_trade():
+    """Disable auto-trading (kill-switch)"""
+    from auto_trader import get_auto_trader
+    trader = get_auto_trader()
+    trader.disable()
+    return jsonify({'status': 'success', 'message': 'Auto-Trading DISABLED'}), 200
+
+
+@app_command.route('/api/auto-trade/status', methods=['GET'])
+def auto_trade_status():
+    """Get auto-trading status"""
+    from auto_trader import get_auto_trader
+    trader = get_auto_trader()
+    return jsonify({
+        'enabled': trader.enabled,
+        'max_positions': trader.max_positions,
+        'min_confidence': trader.min_signal_confidence,
+        'max_drawdown': trader.max_drawdown_percent,
+        'processed_signals': len(trader.processed_signals)
+    }), 200
+
+
+@app_command.route('/api/monitoring/<int:account_id>', methods=['GET'])
+def get_monitoring_data(account_id):
+    """Get real-time trade monitoring data"""
+    redis = get_redis()
+    data = redis.get(f"monitoring:account:{account_id}")
+
+    if data:
+        import json
+        try:
+            monitoring = json.loads(data) if isinstance(data, str) else eval(data)
+            return jsonify(monitoring), 200
+        except Exception as e:
+            logger.error(f"Error parsing monitoring data: {e}")
+            return jsonify({'error': 'Failed to parse monitoring data'}), 500
+    else:
+        return jsonify({
+            'positions': [],
+            'total_pnl': 0,
+            'position_count': 0,
+            'message': 'No monitoring data available'
+        }), 200
+
+
+# ============================================================================
+# BACKTESTING & ANALYTICS ENDPOINTS
+# ============================================================================
+
+@app_command.route('/api/backtest/create', methods=['POST'])
+def create_backtest():
+    """Create a new backtest run"""
+    try:
+        data = request.get_json()
+        from models import BacktestRun
+
+        # Validate required fields
+        required = ['account_id', 'name', 'start_date', 'end_date']
+        for field in required:
+            if field not in data:
+                return jsonify({'error': f'Missing required field: {field}'}), 400
+
+        # Parse dates
+        start_date = datetime.fromisoformat(data['start_date'].replace('Z', '+00:00'))
+        end_date = datetime.fromisoformat(data['end_date'].replace('Z', '+00:00'))
+
+        # Validate timeframe requirements based on period length
+        timeframes = data.get('timeframes', 'H1').split(',')
+        days = (end_date - start_date).days
+
+        # Minimum days required for each timeframe to get enough bars
+        # H4: 6 bars/day -> need 50 bars = 9 days minimum
+        # D1: 1 bar/day -> need 30 bars = 30 days minimum
+        if 'H4' in timeframes and days < 9:
+            return jsonify({'error': 'H4 timeframe requires at least 9 days of data. Please extend the date range or remove H4.'}), 400
+        if 'D1' in timeframes and days < 30:
+            return jsonify({'error': 'D1 timeframe requires at least 30 days of data. Please extend the date range or remove D1.'}), 400
+
+        db = ScopedSession()
+        try:
+            backtest = BacktestRun(
+                account_id=data['account_id'],
+                name=data['name'],
+                description=data.get('description'),
+                symbols=data.get('symbols', 'BTCUSD'),
+                timeframes=data.get('timeframes', 'H1'),
+                start_date=start_date,
+                end_date=end_date,
+                initial_balance=data.get('initial_balance', 10000.0),
+                min_confidence=data.get('min_confidence', 0.50),
+                position_size_percent=data.get('position_size_percent', 0.01),
+                max_positions=data.get('max_positions', 5)
+            )
+
+            db.add(backtest)
+            db.commit()
+
+            return jsonify({
+                'status': 'success',
+                'backtest_id': backtest.id,
+                'message': f'Backtest "{backtest.name}" created'
+            }), 201
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Error creating backtest: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app_command.route('/api/backtest/<int:backtest_id>/start', methods=['POST'])
+def start_backtest(backtest_id):
+    """Start a backtest run in background"""
+    try:
+        from threading import Thread
+        from backtesting_engine import run_backtest
+        from models import BacktestRun
+        from command_helper import create_command
+
+        # Get backtest run details
+        db = ScopedSession()
+        try:
+            backtest = db.query(BacktestRun).filter_by(id=backtest_id).first()
+            if not backtest:
+                return jsonify({'error': 'Backtest not found'}), 404
+
+            # Request OHLC data from EA for backtest period
+            symbols = backtest.symbols.split(',') if backtest.symbols else []
+            timeframes = backtest.timeframes.split(',') if backtest.timeframes else ['H1']
+
+            logger.info(f"Requesting OHLC data from EA for backtest {backtest_id}")
+            logger.info(f"Period: {backtest.start_date} to {backtest.end_date}")
+            logger.info(f"Symbols: {symbols}, Timeframes: {timeframes}")
+
+            # Send OHLC request command to EA for each symbol/timeframe combination
+            for symbol in symbols:
+                for timeframe in timeframes:
+                    # Create command to request historical OHLC data
+                    command = create_command(
+                        db=db,
+                        account_id=backtest.account_id,
+                        command_type='REQUEST_OHLC',
+                        payload={
+                            'symbol': symbol.strip(),
+                            'timeframe': timeframe.strip(),
+                            'start_date': backtest.start_date.isoformat(),
+                            'end_date': backtest.end_date.isoformat(),
+                            'bars': 500  # Request up to 500 bars
+                        }
+                    )
+                    logger.info(f"Created OHLC request command {command.id} for {symbol} {timeframe}")
+
+        finally:
+            db.close()
+
+        # Start backtest in background thread (will wait for OHLC data if needed)
+        thread = Thread(target=run_backtest, args=(backtest_id,), daemon=True)
+        thread.start()
+
+        return jsonify({
+            'status': 'success',
+            'message': f'Backtest {backtest_id} started. Requesting historical OHLC data from EA...'
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error starting backtest: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app_command.route('/api/backtest/list', methods=['GET'])
+def list_backtests():
+    """Get list of all backtest runs"""
+    try:
+        account_id = int(request.args.get('account_id', 1))
+        from models import BacktestRun
+        db = ScopedSession()
+        try:
+            backtests = db.query(BacktestRun).filter_by(
+                account_id=account_id
+            ).order_by(BacktestRun.id.desc()).all()
+
+            return jsonify({
+                'backtests': [{
+                    'id': bt.id,
+                    'name': bt.name,
+                    'status': bt.status,
+                    'progress_percent': float(bt.progress_percent) if bt.progress_percent else 0,
+                    'current_status': bt.current_status if hasattr(bt, 'current_status') else None,
+                    'symbols': bt.symbols,
+                    'timeframes': bt.timeframes,
+                    'start_date': bt.start_date.isoformat() if bt.start_date else None,
+                    'end_date': bt.end_date.isoformat() if bt.end_date else None,
+                    'total_trades': bt.total_trades,
+                    'win_rate': float(bt.win_rate) if bt.win_rate else None,
+                    'profit_factor': float(bt.profit_factor) if bt.profit_factor else None,
+                    'net_profit': float(bt.final_balance - bt.initial_balance) if bt.final_balance and bt.initial_balance else None
+                } for bt in backtests]
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Error listing backtests: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app_command.route('/api/backtest/<int:backtest_id>', methods=['GET'])
+def get_backtest(backtest_id):
+    """Get backtest run details and results"""
+    try:
+        from models import BacktestRun
+        db = ScopedSession()
+        try:
+            backtest = db.query(BacktestRun).filter_by(id=backtest_id).first()
+
+            if not backtest:
+                return jsonify({'error': 'Backtest not found'}), 404
+
+            return jsonify({
+                'id': backtest.id,
+                'name': backtest.name,
+                'status': backtest.status,
+                'symbols': backtest.symbols,
+                'timeframes': backtest.timeframes,
+                'start_date': backtest.start_date.isoformat() if backtest.start_date else None,
+                'end_date': backtest.end_date.isoformat() if backtest.end_date else None,
+                'initial_balance': float(backtest.initial_balance) if backtest.initial_balance else None,
+                'final_balance': float(backtest.final_balance) if backtest.final_balance else None,
+                'total_trades': backtest.total_trades,
+                'winning_trades': backtest.winning_trades,
+                'losing_trades': backtest.losing_trades,
+                'win_rate': float(backtest.win_rate) if backtest.win_rate else None,
+                'profit_factor': float(backtest.profit_factor) if backtest.profit_factor else None,
+                'total_profit': float(backtest.total_profit) if backtest.total_profit else None,
+                'total_loss': float(backtest.total_loss) if backtest.total_loss else None,
+                'max_drawdown': float(backtest.max_drawdown) if backtest.max_drawdown else None,
+                'max_drawdown_percent': float(backtest.max_drawdown_percent) if backtest.max_drawdown_percent else None,
+                'sharpe_ratio': float(backtest.sharpe_ratio) if backtest.sharpe_ratio else None,
+                'started_at': backtest.started_at.isoformat() if backtest.started_at else None,
+                'completed_at': backtest.completed_at.isoformat() if backtest.completed_at else None,
+                'error_message': backtest.error_message,
+                # Detailed progress information
+                'progress_percent': float(backtest.progress_percent) if backtest.progress_percent else 0,
+                'current_status': backtest.current_status if hasattr(backtest, 'current_status') else None,
+                'current_processing_date': backtest.current_processing_date.isoformat() if backtest.current_processing_date else None,
+                'processed_candles': backtest.processed_candles,
+                'total_candles': backtest.total_candles,
+                'estimated_completion': backtest.estimated_completion.isoformat() if backtest.estimated_completion else None
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Error getting backtest: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app_command.route('/api/backtest/<int:backtest_id>/trades', methods=['GET'])
+def get_backtest_trades(backtest_id):
+    """Get all trades from a backtest run"""
+    try:
+        from models import BacktestTrade
+        db = ScopedSession()
+        try:
+            trades = db.query(BacktestTrade).filter_by(
+                backtest_run_id=backtest_id
+            ).order_by(BacktestTrade.entry_time.desc()).all()
+
+            return jsonify({
+                'trades': [{
+                    'id': t.id,
+                    'direction': t.direction,
+                    'symbol': t.symbol,
+                    'timeframe': t.timeframe,
+                    'volume': float(t.volume) if t.volume else None,
+                    'entry_time': t.entry_time.isoformat() if t.entry_time else None,
+                    'entry_price': float(t.entry_price) if t.entry_price else None,
+                    'entry_reason': t.entry_reason,
+                    'exit_time': t.exit_time.isoformat() if t.exit_time else None,
+                    'exit_price': float(t.exit_price) if t.exit_price else None,
+                    'exit_reason': t.exit_reason,
+                    'profit': float(t.profit) if t.profit else None,
+                    'profit_percent': float(t.profit_percent) if t.profit_percent else None,
+                    'duration_minutes': t.duration_minutes,
+                    'signal_confidence': float(t.signal_confidence) if t.signal_confidence else None,
+                    'trailing_stop_used': t.trailing_stop_used
+                } for t in trades]
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Error getting backtest trades: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app_command.route('/api/backtest/<int:backtest_id>', methods=['DELETE'])
+def delete_backtest(backtest_id):
+    """Delete a backtest run and all associated trades"""
+    try:
+        from models import BacktestRun, BacktestTrade
+        db = ScopedSession()
+        try:
+            backtest = db.query(BacktestRun).filter_by(id=backtest_id).first()
+
+            if not backtest:
+                return jsonify({'error': 'Backtest not found'}), 404
+
+            # Delete associated trades first
+            db.query(BacktestTrade).filter_by(backtest_run_id=backtest_id).delete()
+
+            # Delete backtest run
+            db.delete(backtest)
+            db.commit()
+
+            logger.info(f"Deleted backtest {backtest_id}: {backtest.name}")
+            return jsonify({'status': 'success', 'message': 'Backtest deleted'}), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Error deleting backtest: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app_command.route('/api/backtest/<int:backtest_id>/learned-scores', methods=['GET'])
+def get_backtest_learned_scores(backtest_id):
+    """
+    Get indicator scores learned during backtest
+    These are ISOLATED from live scores - purely for analysis
+
+    Returns:
+        - learned_scores: Dict of symbol -> timeframe -> indicator scores
+        - Can be used to seed initial scores for live system
+    """
+    try:
+        from models import BacktestRun
+        db = ScopedSession()
+        try:
+            backtest = db.query(BacktestRun).filter_by(id=backtest_id).first()
+
+            if not backtest:
+                return jsonify({'error': 'Backtest not found'}), 404
+
+            if backtest.status != 'completed':
+                return jsonify({
+                    'status': 'error',
+                    'message': f'Backtest not completed yet (status: {backtest.status})'
+                }), 400
+
+            learned_scores = backtest.learned_scores or {}
+
+            return jsonify({
+                'status': 'success',
+                'backtest_id': backtest_id,
+                'backtest_name': backtest.name,
+                'learned_scores': learned_scores,
+                'total_symbols': len(learned_scores),
+                'note': 'These scores are from backtest simulation only - NOT live scores'
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Error getting learned scores: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app_command.route('/api/analytics/overview', methods=['GET'])
+def get_analytics_overview():
+    """Get overall analytics for account"""
+    try:
+        account_id = int(request.args.get('account_id', 1))
+        period_days = int(request.args.get('period_days', 30))
+
+        from trade_analytics import TradeAnalyticsEngine
+        analytics = TradeAnalyticsEngine(account_id)
+
+        metrics = analytics.calculate_analytics(
+            period_start=datetime.utcnow() - timedelta(days=period_days)
+        )
+
+        return jsonify(metrics), 200
+
+    except Exception as e:
+        logger.error(f"Error getting analytics: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app_command.route('/api/analytics/best-pairs', methods=['GET'])
+def get_best_pairs():
+    """Get best performing symbol/timeframe combinations"""
+    try:
+        account_id = int(request.args.get('account_id', 1))
+        period_days = int(request.args.get('period_days', 30))
+        min_trades = int(request.args.get('min_trades', 5))
+
+        from trade_analytics import TradeAnalyticsEngine
+        analytics = TradeAnalyticsEngine(account_id)
+
+        best = analytics.get_best_pairs(period_days, min_trades)
+        worst = analytics.get_worst_pairs(period_days, min_trades)
+
+        return jsonify({
+            'best_pairs': best,
+            'worst_pairs': worst
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error getting best/worst pairs: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================================
+# PORT 9901 - TICK STREAM
+# ============================================================================
+
+@app_ticks.route('/api/ticks', methods=['POST'])
+@require_api_key
+def receive_ticks(account, db):
+    """
+    Receive batched tick data from EA
+    """
+    try:
+        from models import Tick
+
+        data = request.get_json()
+        ticks = data.get('ticks', [])
+
+        if not ticks:
+            return jsonify({'status': 'error', 'message': 'No ticks provided'}), 400
+
+        # Extract account data if provided
+        balance = data.get('balance')
+        equity = data.get('equity')
+        margin = data.get('margin')
+        free_margin = data.get('free_margin')
+        profit_today = data.get('profit_today')
+        profit_week = data.get('profit_week')
+        profit_month = data.get('profit_month')
+        profit_year = data.get('profit_year')
+
+        # Update account data if provided
+        if balance is not None:
+            account.balance = balance
+        if equity is not None:
+            account.equity = equity
+        if margin is not None:
+            account.margin = margin
+        if free_margin is not None:
+            account.free_margin = free_margin
+        if profit_today is not None:
+            account.profit_today = profit_today
+        if profit_week is not None:
+            account.profit_week = profit_week
+        if profit_month is not None:
+            account.profit_month = profit_month
+        if profit_year is not None:
+            account.profit_year = profit_year
+
+        # Commit account updates to database immediately
+        db.commit()
+
+        # Cache account state in Redis for fast access
+        try:
+            redis = get_redis()
+            redis.cache_account_state(account.id, {
+                'balance': float(balance) if balance is not None else None,
+                'equity': float(equity) if equity is not None else None,
+                'margin': float(margin) if margin is not None else None,
+                'free_margin': float(free_margin) if free_margin is not None else None,
+                'profit_today': float(profit_today) if profit_today is not None else None,
+                'profit_week': float(profit_week) if profit_week is not None else None,
+                'profit_month': float(profit_month) if profit_month is not None else None,
+                'profit_year': float(profit_year) if profit_year is not None else None,
+                'last_update': datetime.utcnow().isoformat()
+            }, ttl=60)  # 60 seconds TTL
+        except Exception as e:
+            logger.error(f"Failed to cache account state in Redis: {e}")
+
+        # Buffer ticks in Redis instead of immediate PostgreSQL write
+        latest_prices = {}  # Track latest price per symbol for WebSocket broadcast
+
+        try:
+            redis = get_redis()
+
+            # Prepare ticks for buffering
+            buffered_ticks = []
+            for tick_data in ticks:
+                # Calculate spread if not provided
+                bid = tick_data.get('bid', 0)
+                ask = tick_data.get('ask', 0)
+                spread = tick_data.get('spread', ask - bid if ask and bid else None)
+
+                # Add account_id to tick data
+                tick_with_account = {
+                    'account_id': account.id,
+                    'symbol': tick_data.get('symbol'),
+                    'bid': bid,
+                    'ask': ask,
+                    'spread': spread,
+                    'volume': tick_data.get('volume', 0),
+                    'timestamp': tick_data.get('timestamp') or datetime.utcnow().timestamp()
+                }
+                buffered_ticks.append(tick_with_account)
+
+                # Keep only the latest price per symbol for WebSocket
+                symbol = tick_data.get('symbol')
+                latest_prices[symbol] = {
+                    'symbol': symbol,
+                    'bid': float(bid),
+                    'ask': float(ask),
+                    'spread': float(spread) if spread else None,
+                    'timestamp': tick_data.get('timestamp')
+                }
+
+            # Buffer all ticks in Redis at once (fast!)
+            redis.buffer_ticks_batch(account.id, buffered_ticks)
+
+            logger.debug(f"Buffered {len(buffered_ticks)} ticks in Redis for account {account.id}")
+
+        except Exception as e:
+            logger.error(f"Failed to buffer ticks in Redis: {e}")
+            # Fallback: Write directly to PostgreSQL
+            tick_objects = []
+            for tick_data in ticks:
+                tick = Tick(
+                    account_id=account.id,
+                    symbol=tick_data.get('symbol'),
+                    bid=tick_data.get('bid'),
+                    ask=tick_data.get('ask'),
+                    volume=tick_data.get('volume', 0),
+                    timestamp=datetime.fromtimestamp(tick_data.get('timestamp')) if tick_data.get('timestamp') else datetime.utcnow()
+                )
+                tick_objects.append(tick)
+
+            db.bulk_save_objects(tick_objects)
+            db.commit()
+            logger.warning(f"Redis buffer failed, wrote {len(tick_objects)} ticks directly to PostgreSQL")
+
+        # Broadcast latest prices via WebSocket
+        for symbol, price_data in latest_prices.items():
+            socketio.emit('price_update', price_data)
+
+        # Broadcast account update if balance/equity/margin changed
+        if balance is not None or equity is not None or margin is not None or free_margin is not None:
+            socketio.emit('account_update', {
+                'number': account.mt5_account_number,
+                'balance': float(balance) if balance is not None else 0.0,
+                'equity': float(equity) if equity is not None else 0.0,
+                'margin': float(margin) if margin is not None else 0.0,
+                'free_margin': float(free_margin) if free_margin is not None else 0.0
+            })
+
+        # Broadcast profit update if profit values changed
+        if profit_today is not None or profit_week is not None or profit_month is not None or profit_year is not None:
+            socketio.emit('profit_update', {
+                'today': float(profit_today) if profit_today is not None else 0.0,
+                'week': float(profit_week) if profit_week is not None else 0.0,
+                'month': float(profit_month) if profit_month is not None else 0.0,
+                'year': float(profit_year) if profit_year is not None else 0.0
+            })
+
+        logger.debug(f"Received {len(ticks)} ticks from account {account.mt5_account_number}")
+
+        return jsonify({
+            'status': 'success',
+            'received': len(ticks)
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Tick receive error: {str(e)}")
+        db.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_command.route('/api/ohlc/historical', methods=['POST'])
+@require_api_key
+def receive_historical_ohlc(account, db):
+    """
+    Receive historical OHLC data from EA
+    """
+    try:
+        from models import OHLCData
+        from datetime import datetime, timezone
+
+        data = request.get_json()
+        symbol = data.get('symbol')
+        timeframe = data.get('timeframe')
+        candles = data.get('candles', [])
+
+        if not symbol or not timeframe or not candles:
+            return jsonify({'status': 'error', 'message': 'Missing required fields'}), 400
+
+        logger.info(f"Receiving {len(candles)} historical candles for {symbol} {timeframe}")
+
+        # Process candles - MT5 sends timestamps in broker timezone (usually UTC or UTC+2/+3)
+        # We store everything in UTC
+        imported_count = 0
+        skipped_count = 0
+
+        for candle in candles:
+            # Convert MT5 timestamp (seconds since 1970-01-01) to datetime
+            # MT5 timestamps are in broker timezone, treat as UTC for consistency
+            timestamp = datetime.fromtimestamp(candle['timestamp'], tz=timezone.utc).replace(tzinfo=None)
+
+            # Check if candle already exists
+            existing = db.query(OHLCData).filter_by(
+                account_id=account.id,
+                symbol=symbol,
+                timeframe=timeframe,
+                timestamp=timestamp
+            ).first()
+
+            if existing:
+                skipped_count += 1
+                continue
+
+            # Create new OHLC entry
+            ohlc = OHLCData(
+                account_id=account.id,
+                symbol=symbol,
+                timeframe=timeframe,
+                timestamp=timestamp,
+                open=float(candle['open']),
+                high=float(candle['high']),
+                low=float(candle['low']),
+                close=float(candle['close']),
+                volume=int(candle.get('volume', 0))
+            )
+            db.add(ohlc)
+            imported_count += 1
+
+        db.commit()
+
+        logger.info(f"Historical OHLC import for {symbol} {timeframe}: {imported_count} imported, {skipped_count} skipped (duplicates)")
+
+        return jsonify({
+            'status': 'success',
+            'imported': imported_count,
+            'skipped': skipped_count,
+            'total': len(candles)
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Historical OHLC receive error: {str(e)}")
+        db.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_command.route('/api/request_historical_data', methods=['POST'])
+def request_historical_data():
+    """
+    Request historical OHLC data from EA for a specific date range
+
+    Payload:
+    {
+        "symbol": "BTCUSD",
+        "timeframe": "H4",
+        "start_date": "2024-10-05",  // YYYY-MM-DD
+        "end_date": "2025-10-05"     // YYYY-MM-DD
+    }
+    """
+    db = ScopedSession()
+    try:
+        from datetime import datetime
+        from command_helper import create_command
+
+        data = request.get_json()
+        symbol = data.get('symbol')
+        timeframe = data.get('timeframe')
+        start_date_str = data.get('start_date')
+        end_date_str = data.get('end_date')
+
+        # Validation
+        if not symbol or not timeframe or not start_date_str or not end_date_str:
+            return jsonify({
+                'status': 'error',
+                'message': 'Missing required fields: symbol, timeframe, start_date, end_date'
+            }), 400
+
+        # Parse dates
+        try:
+            start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
+            end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
+        except ValueError:
+            return jsonify({
+                'status': 'error',
+                'message': 'Invalid date format. Use YYYY-MM-DD'
+            }), 400
+
+        # Convert to Unix timestamps
+        start_timestamp = int(start_date.timestamp())
+        end_timestamp = int(end_date.timestamp())
+
+        # Get first account (assume single account for now)
+        account = db.query(Account).first()
+        if not account:
+            return jsonify({
+                'status': 'error',
+                'message': 'No account found'
+            }), 404
+
+        # Create command for EA
+        command = create_command(
+            db=db,
+            account_id=account.id,
+            command_type='REQUEST_HISTORICAL_DATA',
+            payload={
+                'symbol': symbol,
+                'timeframe': timeframe,
+                'start_date': start_timestamp,
+                'end_date': end_timestamp
+            },
+            push_to_redis=True
+        )
+
+        logger.info(f"Created REQUEST_HISTORICAL_DATA command {command.id} for {symbol} {timeframe} from {start_date_str} to {end_date_str}")
+
+        return jsonify({
+            'status': 'success',
+            'command_id': command.id,
+            'message': f'Historical data request sent to EA for {symbol} {timeframe}'
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Request historical data error: {str(e)}")
+        db.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    finally:
+        db.remove()
+
+
+# ============================================================================
+# PORT 9902 - TRADE UPDATES
+# ============================================================================
+
+@app_trades.route('/api/trades/sync', methods=['POST'])
+@require_api_key
+def sync_trades(account, db):
+    """
+    Sync all trades from MT5 EA (open positions and closed trades)
+    Called periodically by EA to keep server in sync with MT5 terminal
+    """
+    try:
+        from models import Trade
+        data = request.get_json()
+        trades = data.get('trades', [])
+
+        synced_count = 0
+        updated_count = 0
+
+        for trade_data in trades:
+            ticket = trade_data.get('ticket')
+            if not ticket:
+                continue
+
+            # Check if trade exists
+            existing_trade = db.query(Trade).filter_by(
+                account_id=account.id,
+                ticket=ticket
+            ).first()
+
+            if existing_trade:
+                # Update existing trade
+                existing_trade.status = trade_data.get('status', 'open')
+                existing_trade.close_price = trade_data.get('close_price')
+                existing_trade.close_time = datetime.fromisoformat(trade_data['close_time']) if trade_data.get('close_time') else None
+                existing_trade.profit = trade_data.get('profit')
+                existing_trade.commission = trade_data.get('commission')
+                existing_trade.swap = trade_data.get('swap')
+                existing_trade.updated_at = datetime.utcnow()
+                updated_count += 1
+            else:
+                # Create new trade record
+                new_trade = Trade(
+                    account_id=account.id,
+                    ticket=ticket,
+                    symbol=trade_data.get('symbol'),
+                    type=trade_data.get('type', 'MARKET'),
+                    direction=trade_data.get('direction'),
+                    volume=trade_data.get('volume'),
+                    open_price=trade_data.get('open_price'),
+                    open_time=datetime.fromisoformat(trade_data['open_time']) if trade_data.get('open_time') else datetime.utcnow(),
+                    close_price=trade_data.get('close_price'),
+                    close_time=datetime.fromisoformat(trade_data['close_time']) if trade_data.get('close_time') else None,
+                    sl=trade_data.get('sl'),
+                    tp=trade_data.get('tp'),
+                    profit=trade_data.get('profit'),
+                    commission=trade_data.get('commission'),
+                    swap=trade_data.get('swap'),
+                    source=trade_data.get('source', 'MT5'),  # MT5, Dashboard, AutoTrade
+                    command_id=trade_data.get('command_id'),
+                    response_data=trade_data.get('response_data'),
+                    status=trade_data.get('status', 'open'),
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow()
+                )
+                db.add(new_trade)
+                synced_count += 1
+
+        db.commit()
+
+        logger.info(f"Trade sync for account {account.mt5_account_number}: {synced_count} new, {updated_count} updated")
+
+        return jsonify({
+            'status': 'success',
+            'synced': synced_count,
+            'updated': updated_count
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Trade sync error: {str(e)}")
+        db.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_trades.route('/api/trades/update', methods=['POST'])
+@require_api_key
+def update_trade(account, db):
+    """
+    Update single trade (called on OnTrade event in EA)
+    """
+    try:
+        from models import Trade
+        data = request.get_json()
+        ticket = data.get('ticket')
+
+        if not ticket:
+            return jsonify({'status': 'error', 'message': 'Missing ticket'}), 400
+
+        # Find trade
+        trade = db.query(Trade).filter_by(
+            account_id=account.id,
+            ticket=ticket
+        ).first()
+
+        if trade:
+            # Update existing
+            trade.status = data.get('status', trade.status)
+            trade.close_price = data.get('close_price', trade.close_price)
+
+            # Handle close_time - convert Unix timestamp to datetime
+            if data.get('close_time'):
+                close_time_val = data.get('close_time')
+                if isinstance(close_time_val, int):
+                    trade.close_time = datetime.utcfromtimestamp(close_time_val)
+                elif isinstance(close_time_val, str):
+                    trade.close_time = datetime.fromisoformat(close_time_val)
+
+            trade.profit = data.get('profit', trade.profit)
+            trade.commission = data.get('commission', trade.commission)
+            trade.swap = data.get('swap', trade.swap)
+            trade.sl = data.get('sl', trade.sl)
+            trade.tp = data.get('tp', trade.tp)
+            trade.close_reason = data.get('close_reason', trade.close_reason)
+            trade.updated_at = datetime.utcnow()
+
+            db.commit()
+            logger.info(f"Trade #{ticket} updated: status={trade.status}, profit={trade.profit}, close_reason={trade.close_reason}")
+
+            # Update indicator scores if trade was closed
+            if trade.status == 'closed' and trade.signal_id:
+                try:
+                    from models import TradingSignal
+                    from indicator_scorer import IndicatorScorer
+
+                    # Get the signal that generated this trade
+                    signal = db.query(TradingSignal).filter_by(id=trade.signal_id).first()
+
+                    if signal and signal.indicators_used:
+                        # Determine if profitable
+                        was_profitable = trade.profit and float(trade.profit) > 0
+                        profit_amount = float(trade.profit) if trade.profit else 0.0
+
+                        # Update scores for all indicators used
+                        scorer = IndicatorScorer(account.id, trade.symbol, signal.timeframe)
+                        scorer.update_multiple_scores(
+                            signal.indicators_used,
+                            was_profitable,
+                            profit_amount
+                        )
+
+                        logger.info(
+                            f"📊 Updated indicator scores for trade #{ticket}: "
+                            f"{'✅ PROFIT' if was_profitable else '❌ LOSS'} ${profit_amount:+.2f}"
+                        )
+
+                except Exception as e:
+                    logger.error(f"Error updating indicator scores for trade #{ticket}: {e}")
+
+            # Set cooldown after SL hit to prevent revenge trading
+            if trade.close_reason == 'SL_HIT' and trade.symbol:
+                from auto_trader import get_auto_trader
+                from models import GlobalSettings
+                auto_trader = get_auto_trader()
+                if auto_trader:
+                    settings = GlobalSettings.get_settings(db)
+                    if settings.sl_cooldown_minutes > 0:
+                        cooldown_until = datetime.utcnow() + timedelta(minutes=settings.sl_cooldown_minutes)
+                        auto_trader.symbol_cooldowns[trade.symbol] = cooldown_until
+                        logger.info(f"🕐 {trade.symbol} cooldown set until {cooldown_until} after SL hit ({settings.sl_cooldown_minutes}min)")
+        else:
+            # Create new trade if it doesn't exist
+            # Handle open_time - convert Unix timestamp to datetime
+            open_time_val = data.get('open_time')
+            if isinstance(open_time_val, int):
+                open_time = datetime.utcfromtimestamp(open_time_val)
+            elif isinstance(open_time_val, str):
+                open_time = datetime.fromisoformat(open_time_val)
+            else:
+                open_time = datetime.utcnow()
+
+            # Handle close_time
+            close_time_val = data.get('close_time')
+            if close_time_val:
+                if isinstance(close_time_val, int):
+                    close_time = datetime.utcfromtimestamp(close_time_val)
+                elif isinstance(close_time_val, str):
+                    close_time = datetime.fromisoformat(close_time_val)
+                else:
+                    close_time = None
+            else:
+                close_time = None
+
+            new_trade = Trade(
+                account_id=account.id,
+                ticket=ticket,
+                symbol=data.get('symbol'),
+                type=data.get('type', 'MARKET'),
+                direction=data.get('direction'),
+                volume=data.get('volume'),
+                open_price=data.get('open_price'),
+                open_time=open_time,
+                close_price=data.get('close_price'),
+                close_time=close_time,
+                sl=data.get('sl'),
+                tp=data.get('tp'),
+                profit=data.get('profit'),
+                commission=data.get('commission'),
+                swap=data.get('swap'),
+                source=data.get('source', 'MT5'),
+                command_id=data.get('command_id'),
+                close_reason=data.get('close_reason'),
+                status=data.get('status', 'open'),
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow()
+            )
+            db.add(new_trade)
+            db.commit()
+            logger.info(f"Trade #{ticket} created from MT5 update")
+
+        return jsonify({'status': 'success'}), 200
+
+    except Exception as e:
+        logger.error(f"Trade update error: {str(e)}")
+        db.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# ============================================================================
+# PORT 9903 - LOGGING
+# ============================================================================
+
+@app_logs.route('/api/log', methods=['POST'])
+@require_api_key
+def log_message(account, db):
+    """
+    Receive logs from EA
+    """
+    try:
+        data = request.get_json()
+        level = data.get('level', 'INFO')
+        message = data.get('message', '')
+        details = data.get('details', {})
+
+        if not message:
+            return jsonify({'status': 'error', 'message': 'No log message provided'}), 400
+
+        # Create log entry
+        log_entry = Log(
+            account_id=account.id,
+            level=level,
+            message=message,
+            details=details,
+            timestamp=datetime.utcnow()
+        )
+        db.add(log_entry)
+        db.commit()
+
+        logger.info(f"[EA {account.mt5_account_number}] {level}: {message}")
+
+        return jsonify({'status': 'success'}), 200
+
+    except Exception as e:
+        logger.error(f"Log error: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# ============================================================================
+# BACKGROUND TASKS
+# ============================================================================
+
+def cleanup_ticks_job():
+    """Background job to aggregate ticks to OHLC and cleanup old ticks"""
+    import time
+    from ohlc_aggregator import cleanup_ticks_with_aggregation
+    from models import Account
+
+    while True:
+        try:
+            time.sleep(60)  # Run every minute
+            db = ScopedSession()
+            try:
+                # Get all accounts
+                accounts = db.query(Account).all()
+
+                for account in accounts:
+                    # Aggregate and cleanup for each account
+                    # Keep ticks for 5 minutes (sufficient for M5/M15 aggregation)
+                    aggregated, deleted = cleanup_ticks_with_aggregation(
+                        db, account.id, minutes=5
+                    )
+
+                    if aggregated > 0 or deleted > 0:
+                        logger.info(
+                            f"Account {account.mt5_account_number}: "
+                            f"Aggregated {aggregated} M1 candles, deleted {deleted} ticks"
+                        )
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"Tick cleanup/aggregation error: {e}")
+
+
+def ohlc_cleanup_job():
+    """Background job to cleanup OHLC data older than 1 year (daily)"""
+    import time
+    from cleanup_old_ohlc import cleanup_old_ohlc_data
+
+    # Wait 5 minutes after startup before first run
+    time.sleep(300)
+
+    while True:
+        try:
+            logger.info("🗑️  Running daily OHLC cleanup...")
+            cleanup_old_ohlc_data(days_to_keep=365)
+            logger.info("✅ OHLC cleanup completed")
+
+            # Run once per day (24 hours)
+            time.sleep(86400)
+
+        except Exception as e:
+            logger.error(f"OHLC cleanup error: {e}")
+            # Retry in 1 hour on error
+            time.sleep(3600)
+
+
+def retention_cleanup_job():
+    """Background job for long-term data retention cleanup (daily)"""
+    import time
+    from database import cleanup_old_data
+
+    while True:
+        try:
+            # Run once per day (86400 seconds)
+            time.sleep(86400)
+            db = ScopedSession()
+            try:
+                result = cleanup_old_data(
+                    db,
+                    tick_days=30,      # Keep ticks for 30 days
+                    ohlc_days=730      # Keep OHLC for 2 years
+                )
+                logger.info(
+                    f"Retention cleanup: {result['deleted_ticks']} ticks (>30d), "
+                    f"{result['deleted_ohlc']} OHLC records (>2y) deleted"
+                )
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"Retention cleanup error: {e}")
+
+
+# ============================================================================
+# PORT 9905 - WEB UI & DASHBOARD
+# ============================================================================
+
+@app_webui.route('/')
+def dashboard():
+    """Main dashboard view"""
+    return render_template('dashboard.html')
+
+
+@app_webui.route('/api/dashboard/status')
+def dashboard_status():
+    """Get account status for dashboard"""
+    try:
+        db = ScopedSession()
+        try:
+            account = db.query(Account).first()
+
+            if not account:
+                return jsonify({'status': 'error', 'message': 'No account found'}), 404
+
+            # Profits are already adjusted in DB when heartbeat/tick updates come in
+            return jsonify({
+                'status': 'success',
+                'account': {
+                    'number': account.mt5_account_number,
+                    'broker': account.broker,
+                    'balance': float(account.balance) if account.balance else 0.0,
+                    'equity': float(account.equity) if account.equity else 0.0,
+                    'margin': float(account.margin) if account.margin else 0.0,
+                    'free_margin': float(account.free_margin) if account.free_margin else 0.0,
+                    'profit_today': float(account.profit_today or 0.0),
+                    'profit_week': float(account.profit_week or 0.0),
+                    'profit_month': float(account.profit_month or 0.0),
+                    'profit_year': float(account.profit_year or 0.0),
+                    'last_heartbeat': account.last_heartbeat.isoformat() if account.last_heartbeat else None
+                }
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Dashboard status error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_webui.route('/api/dashboard/info')
+def dashboard_info():
+    """Get dashboard info bar data (database size, time, etc.)"""
+    try:
+        db = ScopedSession()
+        try:
+            from datetime import datetime
+            import pytz
+
+            # Get database size
+            result = db.execute(text("""
+                SELECT
+                    pg_size_pretty(pg_database_size(current_database())) as db_size,
+                    (SELECT COUNT(*) FROM ticks) as tick_count,
+                    (SELECT COUNT(*) FROM ohlc_data) as ohlc_count
+            """))
+            row = result.fetchone()
+
+            # Get current times
+            utc_now = datetime.utcnow()
+            local_tz = pytz.timezone('Europe/Berlin')  # Adjust if needed
+            local_now = utc_now.replace(tzinfo=pytz.utc).astimezone(local_tz)
+
+            return jsonify({
+                'status': 'success',
+                'info': {
+                    'db_size': row[0] if row else '-',
+                    'tick_count': row[1] if row else 0,
+                    'ohlc_count': row[2] if row else 0,
+                    'server_time': utc_now.strftime('%H:%M:%S UTC'),
+                    'local_time': local_now.strftime('%H:%M:%S'),
+                    'date': local_now.strftime('%d.%m.%Y'),
+                    'weekday': local_now.strftime('%A')
+                }
+            })
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Error in dashboard_info: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_webui.route('/api/dashboard/symbols')
+def dashboard_symbols():
+    """Get subscribed symbols with latest tick data"""
+    try:
+        db = ScopedSession()
+        try:
+            account = db.query(Account).first()
+
+            if not account:
+                return jsonify({'status': 'error', 'message': 'No account found'}), 404
+
+            subscribed = db.query(SubscribedSymbol).filter_by(
+                account_id=account.id,
+                active=True
+            ).all()
+
+            symbols_data = []
+            for sub in subscribed:
+                latest_tick = db.query(Tick).filter_by(
+                    account_id=account.id,
+                    symbol=sub.symbol
+                ).order_by(Tick.timestamp.desc()).first()
+
+                tick_count = db.query(Tick).filter_by(
+                    account_id=account.id,
+                    symbol=sub.symbol
+                ).count()
+
+                # Calculate trends for different timeframes
+                trends = {}
+                for tf in ['M5', 'M15', 'H1', 'H4']:
+                    ohlc_data = db.query(OHLCData).filter_by(
+                        account_id=account.id,
+                        symbol=sub.symbol,
+                        timeframe=tf
+                    ).order_by(OHLCData.timestamp.desc()).limit(2).all()
+
+                    if len(ohlc_data) >= 2:
+                        current = float(ohlc_data[0].close)
+                        previous = float(ohlc_data[1].close)
+                        diff_percent = ((current - previous) / previous) * 100
+
+                        if diff_percent > 0.01:
+                            trends[tf] = 'up'
+                        elif diff_percent < -0.01:
+                            trends[tf] = 'down'
+                        else:
+                            trends[tf] = 'neutral'
+                    else:
+                        trends[tf] = 'neutral'
+
+                symbols_data.append({
+                    'symbol': sub.symbol,
+                    'bid': f"{latest_tick.bid:.5f}" if latest_tick else None,
+                    'ask': f"{latest_tick.ask:.5f}" if latest_tick else None,
+                    'tick_count': tick_count,
+                    'last_tick': latest_tick.timestamp.strftime('%H:%M:%S') if latest_tick else None,
+                    'trends': trends,
+                    'tradeable': latest_tick.tradeable if latest_tick else True
+                })
+
+            # Add account data with profit values
+            account_data = {
+                'number': account.mt5_account_number,
+                'balance': float(account.balance) if account.balance else 0.0,
+                'equity': float(account.equity) if account.equity else 0.0,
+                'margin': float(account.margin) if account.margin else 0.0,
+                'free_margin': float(account.free_margin) if account.free_margin else 0.0,
+                'profit_today': float(account.profit_today) if account.profit_today else 0.0,
+                'profit_week': float(account.profit_week) if account.profit_week else 0.0,
+                'profit_month': float(account.profit_month) if account.profit_month else 0.0,
+                'profit_year': float(account.profit_year) if account.profit_year else 0.0
+            }
+
+            return jsonify({
+                'status': 'success',
+                'symbols': symbols_data,
+                'account': account_data
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Dashboard symbols error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_webui.route('/api/dashboard/ohlc')
+def dashboard_ohlc():
+    """Get OHLC data for specified timeframe"""
+    try:
+        timeframe = request.args.get('timeframe', 'M1')
+
+        db = ScopedSession()
+        try:
+            account = db.query(Account).first()
+
+            if not account:
+                return jsonify({'status': 'error', 'message': 'No account found'}), 404
+
+            ohlc_data = db.query(OHLCData).filter_by(
+                account_id=account.id,
+                timeframe=timeframe
+            ).order_by(OHLCData.timestamp.desc()).limit(20).all()
+
+            ohlc_list = []
+            for ohlc in reversed(ohlc_data):
+                ohlc_list.append({
+                    'symbol': ohlc.symbol,
+                    'timestamp': ohlc.timestamp.isoformat(),
+                    'open': f"{ohlc.open:.5f}",
+                    'high': f"{ohlc.high:.5f}",
+                    'low': f"{ohlc.low:.5f}",
+                    'close': f"{ohlc.close:.5f}",
+                    'volume': ohlc.volume
+                })
+
+            return jsonify({'status': 'success', 'timeframe': timeframe, 'ohlc': ohlc_list}), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Dashboard OHLC error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_webui.route('/api/dashboard/storage')
+def dashboard_storage():
+    """Get database storage statistics"""
+    try:
+        db = ScopedSession()
+        try:
+            from sqlalchemy import text
+
+            # Get table sizes
+            result = db.execute(text("""
+                SELECT
+                    tablename,
+                    pg_size_pretty(pg_total_relation_size('public.'||tablename)) AS size,
+                    pg_total_relation_size('public.'||tablename) AS bytes
+                FROM pg_tables
+                WHERE schemaname = 'public'
+                ORDER BY pg_total_relation_size('public.'||tablename) DESC
+            """))
+
+            tables = []
+            for row in result:
+                tables.append({
+                    'table': row[0],
+                    'size': row[1],
+                    'bytes': row[2]
+                })
+
+            # Get record counts
+            tick_count = db.query(Tick).count()
+            ohlc_count = db.query(OHLCData).count()
+
+            # Get date ranges
+            tick_range = db.execute(text("SELECT MIN(timestamp), MAX(timestamp) FROM ticks")).fetchone()
+            ohlc_range = db.execute(text("SELECT MIN(timestamp), MAX(timestamp) FROM ohlc_data")).fetchone()
+
+            return jsonify({
+                'status': 'success',
+                'tables': tables,
+                'stats': {
+                    'tick_count': tick_count,
+                    'ohlc_count': ohlc_count,
+                    'tick_range': {
+                        'first': tick_range[0].isoformat() if tick_range[0] else None,
+                        'last': tick_range[1].isoformat() if tick_range[1] else None
+                    },
+                    'ohlc_range': {
+                        'first': ohlc_range[0].isoformat() if ohlc_range[0] else None,
+                        'last': ohlc_range[1].isoformat() if ohlc_range[1] else None
+                    }
+                }
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Storage stats error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_webui.route('/api/dashboard/transactions')
+def dashboard_transactions():
+    """Get recent account transactions"""
+    try:
+        db = ScopedSession()
+        try:
+            account = db.query(Account).first()
+
+            if not account:
+                return jsonify({'status': 'error', 'message': 'No account found'}), 404
+
+            # Get last 50 transactions
+            transactions = db.query(AccountTransaction).filter_by(
+                account_id=account.id
+            ).order_by(AccountTransaction.timestamp.desc()).limit(50).all()
+
+            transactions_data = []
+            for txn in transactions:
+                transactions_data.append({
+                    'id': txn.id,
+                    'type': txn.transaction_type,
+                    'amount': float(txn.amount),
+                    'balance_after': float(txn.balance_after) if txn.balance_after else None,
+                    'comment': txn.comment,
+                    'timestamp': txn.timestamp.isoformat(),
+                    'created_at': txn.created_at.isoformat()
+                })
+
+            return jsonify({
+                'status': 'success',
+                'transactions': transactions_data,
+                'count': len(transactions_data)
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Dashboard transactions error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_webui.route('/api/dashboard/backup/status')
+def backup_status():
+    """Get backup status and statistics"""
+    try:
+        scheduler = get_scheduler()
+        stats = scheduler.get_backup_stats()
+        return jsonify({'status': 'success', 'backup': stats}), 200
+    except Exception as e:
+        logger.error(f"Backup status error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_webui.route('/api/dashboard/backup/trigger', methods=['POST'])
+def trigger_backup():
+    """Manually trigger a backup"""
+    try:
+        scheduler = get_scheduler()
+        if scheduler.backup_enabled or request.json.get('force'):
+            success = scheduler.run_backup()
+            if success:
+                return jsonify({'status': 'success', 'message': 'Backup completed'}), 200
+            else:
+                return jsonify({'status': 'error', 'message': 'Backup failed'}), 500
+        else:
+            return jsonify({'status': 'error', 'message': 'Backup is disabled'}), 400
+    except Exception as e:
+        logger.error(f"Manual backup error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_webui.route('/api/dashboard/tick_writer_stats', methods=['GET'])
+def tick_writer_stats():
+    """Get tick batch writer statistics"""
+    try:
+        writer = get_batch_writer()
+        stats = writer.get_stats()
+
+        # Add Redis buffer stats
+        try:
+            redis = get_redis()
+            # Get buffer sizes for all accounts (simplified - just check account 1)
+            buffer_size = redis.get_total_buffer_size(1)
+            stats['redis_buffer_size'] = buffer_size
+        except:
+            stats['redis_buffer_size'] = 0
+
+        return jsonify({'status': 'success', 'writer': stats}), 200
+    except Exception as e:
+        logger.error(f"Tick writer stats error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@socketio.on('connect')
+def handle_connect():
+    """Handle WebSocket connection"""
+    logger.info("WebSocket client connected")
+    emit('connected', {'status': 'connected'})
+
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    """Handle WebSocket disconnection"""
+    logger.info("WebSocket client disconnected")
+
+
+def broadcast_tick_update(symbol, bid, ask):
+    """Broadcast tick update to all connected clients"""
+    socketio.emit('tick_update', {
+        'symbol': symbol,
+        'bid': bid,
+        'ask': ask,
+        'timestamp': datetime.utcnow().isoformat()
+    })
+
+
+# ============================================================================
+# TRADING SIGNALS API
+# ============================================================================
+
+@app_webui.route('/api/signals')
+def get_signals():
+    """Get active trading signals with filters"""
+    try:
+        # Get query parameters
+        symbol = request.args.get('symbol')
+        timeframe = request.args.get('timeframe')
+        min_confidence = request.args.get('confidence', type=float, default=0)
+        signal_type = request.args.get('type')  # BUY or SELL
+
+        db = ScopedSession()
+        try:
+            account = db.query(Account).first()
+            if not account:
+                return jsonify({'status': 'error', 'message': 'No account found'}), 404
+
+            # Expire old signals BEFORE querying (clean up on every refresh)
+            now = datetime.utcnow()
+            expired_count = db.query(TradingSignal).filter(
+                TradingSignal.account_id == account.id,
+                TradingSignal.status == 'active',
+                TradingSignal.expires_at <= now
+            ).update({'status': 'expired'}, synchronize_session=False)
+
+            if expired_count > 0:
+                db.commit()
+                logger.info(f"Expired {expired_count} old signals on /api/signals refresh")
+
+            # Build query for active signals
+            # Note: Signal validation (pattern/indicator check) is now handled automatically
+            # by signal_worker when it calls generate_signal() every 10-20s
+            query = db.query(TradingSignal).filter_by(
+                account_id=account.id,
+                status='active'
+            )
+
+            # Apply filters
+            if symbol:
+                query = query.filter_by(symbol=symbol)
+            if timeframe:
+                query = query.filter_by(timeframe=timeframe)
+            if min_confidence:
+                query = query.filter(TradingSignal.confidence >= min_confidence)
+            if signal_type:
+                query = query.filter_by(signal_type=signal_type)
+
+            # Get signals
+            signals = query.order_by(TradingSignal.created_at.desc()).limit(50).all()
+
+            # Get tradeable status for symbols using server-side validation
+            signals_data = []
+            for sig in signals:
+                # Use server-side market hours check
+                tradeable = is_symbol_tradeable_now(sig.symbol)
+
+                signals_data.append({
+                    'id': sig.id,
+                    'symbol': sig.symbol,
+                    'timeframe': sig.timeframe,
+                    'signal_type': sig.signal_type,
+                    'confidence': float(sig.confidence),
+                    'entry_price': float(sig.entry_price) if sig.entry_price else None,
+                    'sl_price': float(sig.sl_price) if sig.sl_price else None,
+                    'tp_price': float(sig.tp_price) if sig.tp_price else None,
+                    'indicators_used': sig.indicators_used,
+                    'patterns_detected': sig.patterns_detected,
+                    'reasons': sig.reasons,
+                    'status': sig.status,
+                    'tradeable': tradeable,
+                    'created_at': sig.created_at.isoformat(),
+                    'expires_at': sig.expires_at.isoformat() if sig.expires_at else None
+                })
+
+            # Get volatility level and interval from Redis
+            from redis_client import get_redis
+            redis = get_redis()
+            volatility_level = redis.get('market_volatility')
+            signal_interval = redis.get('signal_interval')
+
+            if not volatility_level:
+                volatility_level = 'normal'
+
+            if signal_interval:
+                signal_interval = int(signal_interval)
+            else:
+                signal_interval = 10
+
+            response = jsonify({
+                'status': 'success',
+                'signals': signals_data,
+                'count': len(signals_data),
+                'volatility': volatility_level,
+                'interval': signal_interval
+            })
+            response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+            response.headers['Pragma'] = 'no-cache'
+            response.headers['Expires'] = '0'
+            return response, 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Get signals error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_webui.route('/api/signals/<int:signal_id>')
+def get_signal_details(signal_id):
+    """Get detailed information about a specific signal"""
+    try:
+        db = ScopedSession()
+        try:
+            signal = db.query(TradingSignal).filter_by(id=signal_id).first()
+
+            if not signal:
+                return jsonify({'status': 'error', 'message': 'Signal not found'}), 404
+
+            signal_data = {
+                'id': signal.id,
+                'symbol': signal.symbol,
+                'timeframe': signal.timeframe,
+                'signal_type': signal.signal_type,
+                'confidence': float(signal.confidence),
+                'entry_price': float(signal.entry_price) if signal.entry_price else None,
+                'sl_price': float(signal.sl_price) if signal.sl_price else None,
+                'tp_price': float(signal.tp_price) if signal.tp_price else None,
+                'indicators_used': signal.indicators_used,
+                'patterns_detected': signal.patterns_detected,
+                'reasons': signal.reasons,
+                'status': signal.status,
+                'created_at': signal.created_at.isoformat(),
+                'expires_at': signal.expires_at.isoformat() if signal.expires_at else None,
+                'executed_at': signal.executed_at.isoformat() if signal.executed_at else None
+            }
+
+            return jsonify({'status': 'success', 'signal': signal_data}), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Get signal details error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_webui.route('/api/signals/<int:signal_id>/ignore', methods=['POST'])
+def ignore_signal(signal_id):
+    """Mark a signal as ignored"""
+    try:
+        db = ScopedSession()
+        try:
+            signal = db.query(TradingSignal).filter_by(id=signal_id).first()
+
+            if not signal:
+                return jsonify({'status': 'error', 'message': 'Signal not found'}), 404
+
+            signal.status = 'ignored'
+            db.commit()
+
+            logger.info(f"Signal {signal_id} marked as ignored")
+
+            return jsonify({'status': 'success', 'message': 'Signal ignored'}), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Ignore signal error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_webui.route('/api/open_trade', methods=['POST'])
+def open_trade_from_dashboard():
+    """Open trade from dashboard (one-click trading)"""
+    try:
+        from command_helper import create_command
+        from trade_helper import normalize_volume, validate_trade_params
+
+        data = request.get_json()
+        symbol = data.get('symbol')
+        order_type = data.get('order_type')
+        volume = data.get('volume', 0.01)
+        sl = data.get('sl')
+        tp = data.get('tp')
+        comment = data.get('comment', 'Dashboard Trade')
+        trailing_stop = data.get('trailing_stop')  # Optional trailing stop in pips
+        signal_id = data.get('signal_id')  # Optional signal ID for tracking
+        timeframe = data.get('timeframe')  # Optional timeframe
+
+        if not symbol or not order_type or not sl or not tp:
+            return jsonify({'status': 'error', 'message': 'Missing required fields'}), 400
+
+        db = ScopedSession()
+        try:
+            # Get first account (assuming single account setup)
+            account = db.query(Account).first()
+            if not account:
+                return jsonify({'status': 'error', 'message': 'No account found'}), 404
+
+            # Normalize volume based on symbol specifications
+            normalized_volume = normalize_volume(account.id, symbol, float(volume))
+
+            # Validate trade parameters
+            validation = validate_trade_params(account.id, symbol, normalized_volume, sl, tp)
+            if not validation['valid']:
+                error_msg = '; '.join(validation['errors'])
+                logger.error(f"Trade validation failed for {symbol}: {error_msg}")
+                return jsonify({
+                    'status': 'error',
+                    'message': f'Trade validation failed: {error_msg}'
+                }), 400
+
+            # Create trade command
+            payload = {
+                'symbol': symbol,
+                'order_type': order_type,
+                'volume': normalized_volume,
+                'sl': float(sl),
+                'tp': float(tp),
+                'comment': comment
+            }
+
+            # Add trailing stop if provided
+            if trailing_stop is not None:
+                payload['trailing_stop'] = float(trailing_stop)
+
+            # Add signal tracking metadata
+            if signal_id is not None:
+                payload['signal_id'] = int(signal_id)
+            if timeframe is not None:
+                payload['timeframe'] = timeframe
+
+            command = create_command(
+                db=db,
+                account_id=account.id,
+                command_type='OPEN_TRADE',
+                payload=payload
+            )
+
+            logger.info(f"Trade command created: {command.id} - {order_type} {symbol} {normalized_volume} lot (normalized from {volume})")
+
+            return jsonify({
+                'status': 'success',
+                'message': 'Trade command created',
+                'command_id': command.id,
+                'normalized_volume': normalized_volume
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Open trade error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_webui.route('/api/signals/stats')
+def get_signal_stats():
+    """Get signal statistics"""
+    try:
+        db = ScopedSession()
+        try:
+            account = db.query(Account).first()
+            if not account:
+                return jsonify({'status': 'error', 'message': 'No account found'}), 404
+
+            # Count active signals
+            active_count = db.query(TradingSignal).filter_by(
+                account_id=account.id,
+                status='active'
+            ).count()
+
+            # Count by signal type
+            buy_count = db.query(TradingSignal).filter_by(
+                account_id=account.id,
+                status='active',
+                signal_type='BUY'
+            ).count()
+
+            sell_count = db.query(TradingSignal).filter_by(
+                account_id=account.id,
+                status='active',
+                signal_type='SELL'
+            ).count()
+
+            # Get signal worker stats
+            from signal_worker import get_signal_worker
+            worker = get_signal_worker()
+            worker_stats = worker.get_stats()
+
+            return jsonify({
+                'status': 'success',
+                'stats': {
+                    'active_signals': active_count,
+                    'buy_signals': buy_count,
+                    'sell_signals': sell_count,
+                    'worker': worker_stats
+                }
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Get signal stats error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# ============================================================================
+# TRADE ANALYTICS & ERROR ANALYSIS
+# ============================================================================
+
+@app_webui.route('/api/trades/analytics')
+def get_trade_analytics():
+    """Get comprehensive trade analytics including error analysis"""
+    try:
+        from models import Trade
+        db = ScopedSession()
+        try:
+            account = db.query(Account).first()
+            if not account:
+                return jsonify({'status': 'error', 'message': 'No account found'}), 404
+
+            # Get all trades
+            all_trades = db.query(Trade).filter_by(account_id=account.id).all()
+
+            # Get all commands (to analyze failures)
+            all_commands = db.query(Command).filter_by(account_id=account.id).all()
+
+            # Trade statistics
+            total_trades = len(all_trades)
+            open_trades = len([t for t in all_trades if t.status == 'open'])
+            closed_trades = len([t for t in all_trades if t.status == 'closed'])
+
+            # Profit analysis
+            total_profit = sum(float(t.profit or 0) for t in all_trades if t.profit)
+            winning_trades = [t for t in all_trades if t.profit and float(t.profit) > 0]
+            losing_trades = [t for t in all_trades if t.profit and float(t.profit) < 0]
+
+            win_rate = (len(winning_trades) / closed_trades * 100) if closed_trades > 0 else 0
+
+            # Command analysis
+            successful_commands = len([c for c in all_commands if c.status == 'completed'])
+            failed_commands = len([c for c in all_commands if c.status == 'failed'])
+
+            # Error analysis
+            error_breakdown = {}
+            for cmd in all_commands:
+                if cmd.status == 'failed' and cmd.response:
+                    error_msg = cmd.response.get('error', 'Unknown error')
+                    error_breakdown[error_msg] = error_breakdown.get(error_msg, 0) + 1
+
+            # Source analysis (where trades came from)
+            source_breakdown = {}
+            for trade in all_trades:
+                source_breakdown[trade.source] = source_breakdown.get(trade.source, 0) + 1
+
+            # Timeframe performance
+            timeframe_performance = {}
+            for trade in all_trades:
+                if trade.timeframe and trade.profit:
+                    if trade.timeframe not in timeframe_performance:
+                        timeframe_performance[trade.timeframe] = {'count': 0, 'total_profit': 0, 'wins': 0, 'losses': 0}
+                    timeframe_performance[trade.timeframe]['count'] += 1
+                    timeframe_performance[trade.timeframe]['total_profit'] += float(trade.profit)
+                    if float(trade.profit) > 0:
+                        timeframe_performance[trade.timeframe]['wins'] += 1
+                    else:
+                        timeframe_performance[trade.timeframe]['losses'] += 1
+
+            # Close reason analysis
+            close_reasons = {}
+            for trade in all_trades:
+                if trade.close_reason:
+                    close_reasons[trade.close_reason] = close_reasons.get(trade.close_reason, 0) + 1
+
+            return jsonify({
+                'status': 'success',
+                'analytics': {
+                    'trades': {
+                        'total': total_trades,
+                        'open': open_trades,
+                        'closed': closed_trades,
+                        'winning': len(winning_trades),
+                        'losing': len(losing_trades),
+                        'win_rate': round(win_rate, 2)
+                    },
+                    'profit': {
+                        'total': round(total_profit, 2),
+                        'average_win': round(sum(float(t.profit) for t in winning_trades) / len(winning_trades), 2) if winning_trades else 0,
+                        'average_loss': round(sum(float(t.profit) for t in losing_trades) / len(losing_trades), 2) if losing_trades else 0
+                    },
+                    'commands': {
+                        'successful': successful_commands,
+                        'failed': failed_commands,
+                        'success_rate': round(successful_commands / (successful_commands + failed_commands) * 100, 2) if (successful_commands + failed_commands) > 0 else 0
+                    },
+                    'errors': error_breakdown,
+                    'sources': source_breakdown,
+                    'timeframe_performance': timeframe_performance,
+                    'close_reasons': close_reasons
+                }
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Trade analytics error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_webui.route('/api/trades/history')
+def get_trade_history():
+    """Get trade history with filters"""
+    try:
+        from models import Trade
+        db = ScopedSession()
+        try:
+            account = db.query(Account).first()
+            if not account:
+                return jsonify({'status': 'error', 'message': 'No account found'}), 404
+
+            # Get query parameters
+            status = request.args.get('status')  # open, closed
+            symbol = request.args.get('symbol')
+            timeframe = request.args.get('timeframe')
+            source = request.args.get('source')  # MT5, AutoTrade, Dashboard
+            limit = request.args.get('limit', type=int, default=100)
+
+            # Build query
+            query = db.query(Trade).filter_by(account_id=account.id)
+
+            if status:
+                query = query.filter_by(status=status)
+            if symbol:
+                query = query.filter_by(symbol=symbol)
+            if timeframe:
+                query = query.filter_by(timeframe=timeframe)
+            if source:
+                query = query.filter_by(source=source)
+
+            trades = query.order_by(Trade.created_at.desc()).limit(limit).all()
+
+            trades_data = []
+            for trade in trades:
+                trades_data.append({
+                    'id': trade.id,
+                    'ticket': trade.ticket,
+                    'symbol': trade.symbol,
+                    'type': trade.type,
+                    'direction': trade.direction,
+                    'volume': float(trade.volume),
+                    'open_price': float(trade.open_price) if trade.open_price else None,
+                    'open_time': trade.open_time.isoformat() if trade.open_time else None,
+                    'close_price': float(trade.close_price) if trade.close_price else None,
+                    'close_time': trade.close_time.isoformat() if trade.close_time else None,
+                    'sl': float(trade.sl) if trade.sl else None,
+                    'tp': float(trade.tp) if trade.tp else None,
+                    'profit': float(trade.profit) if trade.profit else None,
+                    'commission': float(trade.commission) if trade.commission else None,
+                    'swap': float(trade.swap) if trade.swap else None,
+                    'source': trade.source,
+                    'timeframe': trade.timeframe,
+                    'close_reason': trade.close_reason,
+                    'signal_id': trade.signal_id,
+                    'status': trade.status
+                })
+
+            return jsonify({
+                'status': 'success',
+                'trades': trades_data,
+                'count': len(trades_data)
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Trade history error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# ==================== GLOBAL SETTINGS ENDPOINTS ====================
+logger.info("Registering /api/settings endpoints...")
+
+@app_command.route('/api/settings')
+def get_settings():
+    """Get global settings"""
+    try:
+        logger.info("⚙️ GET /api/settings called - starting")
+        from models import GlobalSettings
+        db = ScopedSession()
+        try:
+            logger.info("⚙️ Loading settings from DB...")
+            settings = GlobalSettings.get_settings(db)
+            logger.info(f"⚙️ Settings loaded: max_positions={settings.max_positions}")
+            result = jsonify({
+                'max_positions': settings.max_positions,
+                'risk_per_trade_percent': float(settings.risk_per_trade_percent),
+                'position_size_percent': float(settings.position_size_percent),
+                'max_drawdown_percent': float(settings.max_drawdown_percent),
+                'min_signal_confidence': float(settings.min_signal_confidence),
+                'signal_max_age_minutes': settings.signal_max_age_minutes,
+                'sl_cooldown_minutes': settings.sl_cooldown_minutes,
+                'min_bars_required': settings.min_bars_required,
+                'min_bars_d1': settings.min_bars_d1,
+                'realistic_profit_factor': float(settings.realistic_profit_factor),
+                'updated_at': settings.updated_at.isoformat() if settings.updated_at else None
+            })
+            logger.info("⚙️ Returning settings JSON")
+            return result, 200
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"❌ Error getting settings: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app_command.route('/api/settings', methods=['POST'])
+def update_settings():
+    """Update global settings"""
+    try:
+        from models import GlobalSettings
+        data = request.get_json()
+
+        db = ScopedSession()
+        try:
+            settings = GlobalSettings.get_settings(db)
+
+            # Update fields if provided
+            if 'max_positions' in data:
+                settings.max_positions = int(data['max_positions'])
+            if 'risk_per_trade_percent' in data:
+                settings.risk_per_trade_percent = float(data['risk_per_trade_percent'])
+            # VALIDATION: Validate all numeric inputs
+            if 'position_size_percent' in data:
+                settings.position_size_percent = validate_numeric_range(
+                    data['position_size_percent'], 'position_size_percent', 0.001, 100.0
+                )
+            if 'max_drawdown_percent' in data:
+                settings.max_drawdown_percent = validate_numeric_range(
+                    data['max_drawdown_percent'], 'max_drawdown_percent', 1.0, 100.0
+                )
+            if 'min_signal_confidence' in data:
+                settings.min_signal_confidence = validate_confidence(
+                    data['min_signal_confidence'], 'min_signal_confidence'
+                ) / 100.0  # Convert to decimal
+            if 'signal_max_age_minutes' in data:
+                settings.signal_max_age_minutes = int(validate_numeric_range(
+                    data['signal_max_age_minutes'], 'signal_max_age_minutes', 1, 1440
+                ))
+            if 'sl_cooldown_minutes' in data:
+                settings.sl_cooldown_minutes = int(validate_numeric_range(
+                    data['sl_cooldown_minutes'], 'sl_cooldown_minutes', 0, 1440
+                ))
+            if 'min_bars_required' in data:
+                settings.min_bars_required = int(validate_numeric_range(
+                    data['min_bars_required'], 'min_bars_required', 10, 500
+                ))
+            if 'min_bars_d1' in data:
+                settings.min_bars_d1 = int(validate_numeric_range(
+                    data['min_bars_d1'], 'min_bars_d1', 10, 500
+                ))
+            if 'realistic_profit_factor' in data:
+                settings.realistic_profit_factor = validate_numeric_range(
+                    data['realistic_profit_factor'], 'realistic_profit_factor', 0.1, 10.0
+                )
+
+            settings.updated_at = datetime.utcnow()
+            settings.updated_by = 'webui'
+
+            db.commit()
+
+            logger.info(f"Global settings updated: {data.keys()}")
+            return jsonify({'status': 'success', 'message': 'Settings updated'}), 200
+
+        finally:
+            db.close()
+    except ValueError as ve:
+        # Validation error - return 400 Bad Request
+        logger.warning(f"Validation error updating settings: {ve}")
+        return jsonify({'status': 'error', 'message': str(ve)}), 400
+    except Exception as e:
+        # Other errors - return 500 Internal Server Error
+        logger.error(f"Error updating settings: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================================
+# AUTO-OPTIMIZATION API
+# ============================================================================
+
+@app_webui.route('/api/auto-optimization/config', methods=['GET'])
+def get_auto_optimization_config():
+    """Get auto-optimization configuration for account"""
+    try:
+        account_id = request.args.get('account_id', 1, type=int)
+
+        from models import AutoOptimizationConfig
+        db = ScopedSession()
+        try:
+            config = db.query(AutoOptimizationConfig).filter_by(account_id=account_id).first()
+
+            if not config:
+                # Create default config
+                config = AutoOptimizationConfig(account_id=account_id)
+                db.add(config)
+                db.commit()
+
+            return jsonify({
+                'status': 'success',
+                'config': {
+                    'enabled': config.enabled,
+                    'auto_disable_enabled': config.auto_disable_enabled,
+                    'auto_enable_enabled': config.auto_enable_enabled,
+                    'shadow_trading_enabled': config.shadow_trading_enabled,
+                    'backtest_window_days': config.backtest_window_days,
+                    'backtest_schedule_time': config.backtest_schedule_time,
+                    'backtest_min_confidence': float(config.backtest_min_confidence),
+                    'disable_consecutive_loss_days': config.disable_consecutive_loss_days,
+                    'disable_min_win_rate': float(config.disable_min_win_rate),
+                    'disable_max_loss_percent': float(config.disable_max_loss_percent),
+                    'disable_max_drawdown_percent': float(config.disable_max_drawdown_percent),
+                    'enable_consecutive_profit_days': config.enable_consecutive_profit_days,
+                    'enable_min_win_rate': float(config.enable_min_win_rate),
+                    'enable_min_profit_percent': float(config.enable_min_profit_percent),
+                    'email_enabled': config.email_enabled,
+                    'email_recipient': config.email_recipient
+                }
+            }), 200
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Error getting auto-optimization config: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app_webui.route('/api/auto-optimization/status', methods=['GET'])
+def get_auto_optimization_status():
+    """Get current auto-optimization status for all symbols"""
+    try:
+        account_id = request.args.get('account_id', 1, type=int)
+
+        from models import SymbolPerformanceTracking
+        from sqlalchemy import func, desc
+
+        db = ScopedSession()
+        try:
+            # Get latest performance for each symbol
+            subquery = db.query(
+                SymbolPerformanceTracking.symbol,
+                func.max(SymbolPerformanceTracking.evaluation_date).label('max_date')
+            ).filter(
+                SymbolPerformanceTracking.account_id == account_id
+            ).group_by(SymbolPerformanceTracking.symbol).subquery()
+
+            performances = db.query(SymbolPerformanceTracking).join(
+                subquery,
+                (SymbolPerformanceTracking.symbol == subquery.c.symbol) &
+                (SymbolPerformanceTracking.evaluation_date == subquery.c.max_date)
+            ).all()
+
+            symbols_data = []
+            for perf in performances:
+                symbols_data.append({
+                    'symbol': perf.symbol,
+                    'status': perf.status,
+                    'evaluation_date': perf.evaluation_date.isoformat() if perf.evaluation_date else None,
+                    'backtest_total_trades': perf.backtest_total_trades,
+                    'backtest_win_rate': float(perf.backtest_win_rate) if perf.backtest_win_rate else 0,
+                    'backtest_profit': float(perf.backtest_profit) if perf.backtest_profit else 0,
+                    'backtest_profit_percent': float(perf.backtest_profit_percent) if perf.backtest_profit_percent else 0,
+                    'consecutive_loss_days': perf.consecutive_loss_days,
+                    'consecutive_profit_days': perf.consecutive_profit_days,
+                    'shadow_trades': perf.shadow_trades,
+                    'shadow_profit': float(perf.shadow_profit) if perf.shadow_profit else 0,
+                    'auto_disabled_reason': perf.auto_disabled_reason
+                })
+
+            # Count by status
+            status_counts = {
+                'active': sum(1 for s in symbols_data if s['status'] == 'active'),
+                'watch': sum(1 for s in symbols_data if s['status'] == 'watch'),
+                'disabled': sum(1 for s in symbols_data if s['status'] == 'disabled')
+            }
+
+            return jsonify({
+                'status': 'success',
+                'symbols': symbols_data,
+                'status_counts': status_counts,
+                'total_symbols': len(symbols_data)
+            }), 200
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Error getting auto-optimization status: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app_webui.route('/api/auto-optimization/trigger', methods=['POST'])
+def trigger_manual_backtest():
+    """Manually trigger a daily backtest run"""
+    try:
+        from daily_backtest_scheduler import trigger_manual_backtest as trigger_bt
+
+        logger.info("🔧 Manual backtest triggered via API")
+
+        # Run in background thread
+        from threading import Thread
+        thread = Thread(target=trigger_bt, daemon=True)
+        thread.start()
+
+        return jsonify({
+            'status': 'success',
+            'message': 'Backtest triggered successfully'
+        }), 200
+    except Exception as e:
+        logger.error(f"Error triggering manual backtest: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app_webui.route('/api/auto-optimization/events', methods=['GET'])
+def get_auto_optimization_events():
+    """Get recent auto-optimization events"""
+    try:
+        account_id = request.args.get('account_id', 1, type=int)
+        limit = request.args.get('limit', 50, type=int)
+
+        from models import AutoOptimizationEvent
+        from sqlalchemy import desc
+
+        db = ScopedSession()
+        try:
+            events = db.query(AutoOptimizationEvent).filter(
+                AutoOptimizationEvent.account_id == account_id
+            ).order_by(desc(AutoOptimizationEvent.event_timestamp)).limit(limit).all()
+
+            events_data = []
+            for event in events:
+                events_data.append({
+                    'id': event.id,
+                    'symbol': event.symbol,
+                    'event_type': event.event_type,
+                    'event_timestamp': event.event_timestamp.isoformat() if event.event_timestamp else None,
+                    'old_status': event.old_status,
+                    'new_status': event.new_status,
+                    'trigger_reason': event.trigger_reason,
+                    'metrics': event.metrics
+                })
+
+            return jsonify({
+                'status': 'success',
+                'events': events_data,
+                'count': len(events_data)
+            }), 200
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Error getting auto-optimization events: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================================
+# INDICATOR SCORES API
+# ============================================================================
+
+@app_command.route('/api/indicator-scores/<symbol>/<timeframe>', methods=['GET'])
+@require_api_key
+def get_indicator_scores(account, symbol, timeframe):
+    """
+    Get indicator scores for a specific symbol and timeframe
+
+    Query params:
+    - top: int (optional) - return only top N indicators
+    """
+    try:
+        from indicator_scorer import IndicatorScorer
+
+        top = request.args.get('top', type=int)
+
+        scorer = IndicatorScorer(account.id, symbol, timeframe)
+
+        if top:
+            scores = scorer.get_top_indicators(limit=top)
+        else:
+            scores = scorer.get_all_scores()
+
+        return jsonify({
+            'status': 'success',
+            'symbol': symbol,
+            'timeframe': timeframe,
+            'scores': scores
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error getting indicator scores: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app_command.route('/api/indicator-scores/all', methods=['GET'])
+@require_api_key
+def get_all_indicator_scores(account):
+    """
+    Get all indicator scores across all symbols/timeframes
+
+    Returns summary statistics for each indicator
+    """
+    try:
+        from models import IndicatorScore
+        from database import ScopedSession
+
+        db = ScopedSession()
+        try:
+            # Get all scores for this account
+            all_scores = db.query(IndicatorScore).filter_by(
+                account_id=account.id
+            ).all()
+
+            # Aggregate by indicator name
+            indicator_stats = {}
+
+            for score in all_scores:
+                name = score.indicator_name
+
+                if name not in indicator_stats:
+                    indicator_stats[name] = {
+                        'indicator_name': name,
+                        'total_signals': 0,
+                        'successful_signals': 0,
+                        'failed_signals': 0,
+                        'total_profit': 0.0,
+                        'symbols': []
+                    }
+
+                indicator_stats[name]['total_signals'] += score.total_signals
+                indicator_stats[name]['successful_signals'] += score.successful_signals
+                indicator_stats[name]['failed_signals'] += score.failed_signals
+                indicator_stats[name]['total_profit'] += float(score.total_profit or 0)
+                indicator_stats[name]['symbols'].append({
+                    'symbol': score.symbol,
+                    'timeframe': score.timeframe,
+                    'score': float(score.score),
+                    'signals': score.total_signals
+                })
+
+            # Calculate aggregated stats
+            for name, stats in indicator_stats.items():
+                if stats['total_signals'] > 0:
+                    stats['win_rate'] = (stats['successful_signals'] / stats['total_signals']) * 100
+                    stats['avg_profit'] = stats['total_profit'] / stats['total_signals']
+                else:
+                    stats['win_rate'] = 0
+                    stats['avg_profit'] = 0
+
+            # Sort by total profit
+            sorted_indicators = sorted(
+                indicator_stats.values(),
+                key=lambda x: x['total_profit'],
+                reverse=True
+            )
+
+            return jsonify({
+                'status': 'success',
+                'indicators': sorted_indicators
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Error getting all indicator scores: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app_webui.route('/api/spread/stats', methods=['GET'])
+def get_spread_stats():
+    """Get spread statistics for all symbols or a specific symbol"""
+    try:
+        from models import Tick
+        from sqlalchemy import func
+
+        symbol = request.args.get('symbol')
+        hours = request.args.get('hours', 24, type=int)
+
+        db = ScopedSession()
+
+        try:
+            cutoff_time = datetime.utcnow() - timedelta(hours=hours)
+
+            query = db.query(
+                Tick.symbol,
+                func.count(Tick.id).label('tick_count'),
+                func.avg(Tick.spread).label('avg_spread'),
+                func.min(Tick.spread).label('min_spread'),
+                func.max(Tick.spread).label('max_spread'),
+                func.min(Tick.timestamp).label('first_tick'),
+                func.max(Tick.timestamp).label('last_tick')
+            ).filter(
+                Tick.spread.isnot(None),
+                Tick.timestamp >= cutoff_time
+            )
+
+            if symbol:
+                query = query.filter(Tick.symbol == symbol)
+
+            stats = query.group_by(Tick.symbol).all()
+
+            result = []
+            for stat in stats:
+                result.append({
+                    'symbol': stat.symbol,
+                    'tick_count': stat.tick_count,
+                    'avg_spread': float(stat.avg_spread) if stat.avg_spread else 0,
+                    'min_spread': float(stat.min_spread) if stat.min_spread else 0,
+                    'max_spread': float(stat.max_spread) if stat.max_spread else 0,
+                    'first_tick': stat.first_tick.isoformat() if stat.first_tick else None,
+                    'last_tick': stat.last_tick.isoformat() if stat.last_tick else None,
+                    'spread_volatility': float(stat.max_spread - stat.min_spread) if stat.max_spread and stat.min_spread else 0
+                })
+
+            return jsonify({
+                'status': 'success',
+                'hours': hours,
+                'symbol_count': len(result),
+                'stats': result
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Error getting spread stats: {e}", exc_info=True)
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# ============================================================================
+# SERVER STARTUP
+# ============================================================================
+
+def run_server(app, port, name):
+    """Run Flask app on specific port"""
+    logger.info(f"Starting {name} server on port {port}")
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+
+
+if __name__ == '__main__':
+    logger.info("=" * 60)
+    logger.info("ngTradingBot Server Starting...")
+    logger.info("=" * 60)
+
+    # Initialize database
+    try:
+        init_db()
+        logger.info("Database initialized successfully")
+    except Exception as e:
+        logger.error(f"Database initialization failed: {e}")
+        exit(1)
+
+    # Initialize Redis
+    try:
+        init_redis()
+        logger.info("Redis initialized successfully")
+    except Exception as e:
+        logger.error(f"Redis initialization failed: {e}")
+        exit(1)
+
+    # Start background tasks
+    cleanup_thread = Thread(target=cleanup_ticks_job, daemon=True)
+    cleanup_thread.start()
+
+    retention_thread = Thread(target=retention_cleanup_job, daemon=True)
+    retention_thread.start()
+
+    # Start OHLC cleanup job (runs daily to delete data older than 1 year)
+    ohlc_cleanup_thread = Thread(target=ohlc_cleanup_job, daemon=True)
+    ohlc_cleanup_thread.start()
+
+    # Start backup scheduler
+    start_backup_scheduler()
+
+    # Start tick batch writer (writes buffered ticks from Redis to PostgreSQL)
+    start_batch_writer(interval=5, batch_size=1000)
+
+    # Clear all old signals on startup to force fresh generation
+    from models import TradingSignal
+    startup_db = ScopedSession()
+    try:
+        old_signals = startup_db.query(TradingSignal).filter_by(status='active').all()
+        if old_signals:
+            logger.info(f"Clearing {len(old_signals)} old active signals on startup")
+            for sig in old_signals:
+                sig.status = 'expired'
+            startup_db.commit()
+    except Exception as e:
+        logger.error(f"Error clearing old signals: {e}")
+        startup_db.rollback()
+    finally:
+        startup_db.close()
+
+    # Start signal worker (generates trading signals)
+    from signal_worker import start_signal_worker
+    start_signal_worker(interval=10)  # Every 10 seconds
+
+    # Start trade monitor (real-time P&L tracking)
+    from trade_monitor import start_trade_monitor
+    start_trade_monitor()
+
+    # Start auto-trader (signal → trade automation) - DISABLED by default
+    from auto_trader import start_auto_trader
+    auto_trader = start_auto_trader(enabled=False)  # Set enabled=True to activate
+    logger.info("🤖 Auto-Trader initialized (DISABLED - enable via /api/auto-trade/enable)")
+
+    # Start daily backtest scheduler for auto-optimization
+    from daily_backtest_scheduler import start_scheduler as start_backtest_scheduler
+    start_backtest_scheduler()
+    logger.info("📊 Daily Backtest Scheduler started (runs at 00:00 UTC daily)")
+
+    logger.info("Background tasks started (tick aggregation + retention cleanup + backup + tick batch writer + signal worker + trade monitor + auto-trader + daily backtest scheduler)")
+
+    # Start all servers in separate threads
+    ports = [
+        (app_command, 9900, "Command & Control"),
+        (app_ticks, 9901, "Tick Stream"),
+        (app_trades, 9902, "Trade Updates"),
+        (app_logs, 9903, "Logging")
+    ]
+
+    logger.info("All servers starting...")
+
+    threads = []
+    for app, port, name in ports:
+        thread = Thread(target=run_server, args=(app, port, name), daemon=True)
+        thread.start()
+        threads.append(thread)
+
+    # Start WebUI with SocketIO (runs in main thread)
+    logger.info("Starting WebUI & Dashboard server on port 9905")
+    logger.info("=== app_webui routes ===")
+    for rule in app_webui.url_map.iter_rules():
+        logger.info(f"  {rule.rule} -> {rule.endpoint} {list(rule.methods)}")
+    logger.info("=========================")
+    socketio.run(app_webui, host='0.0.0.0', port=9905, debug=False, use_reloader=False, allow_unsafe_werkzeug=True)
