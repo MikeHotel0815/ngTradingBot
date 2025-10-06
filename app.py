@@ -2300,6 +2300,142 @@ def dashboard_transactions():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+@app_webui.route('/api/dashboard/statistics')
+def dashboard_statistics():
+    """Get live trading statistics (Win Rate, Profit Factor, etc.)"""
+    try:
+        from models import Trade
+        db = ScopedSession()
+        try:
+            account = db.query(Account).first()
+            if not account:
+                return jsonify({'status': 'error', 'message': 'No account found'}), 404
+
+            # Helper function to calculate stats for a set of trades
+            def calculate_stats(trades):
+                if not trades:
+                    return {
+                        'total_trades': 0,
+                        'winning_trades': 0,
+                        'losing_trades': 0,
+                        'win_rate': 0.0,
+                        'total_profit': 0.0,
+                        'total_loss': 0.0,
+                        'profit_factor': 0.0,
+                        'avg_win': 0.0,
+                        'avg_loss': 0.0,
+                        'best_trade': 0.0,
+                        'worst_trade': 0.0,
+                        'avg_trade_duration': None
+                    }
+
+                total_trades = len(trades)
+                winning_trades = [t for t in trades if t.profit and t.profit > 0]
+                losing_trades = [t for t in trades if t.profit and t.profit < 0]
+
+                total_profit = sum(t.profit for t in winning_trades)
+                total_loss = abs(sum(t.profit for t in losing_trades))
+
+                profit_factor = (total_profit / total_loss) if total_loss > 0 else 0.0
+                win_rate = (len(winning_trades) / total_trades * 100) if total_trades > 0 else 0.0
+
+                avg_win = (total_profit / len(winning_trades)) if winning_trades else 0.0
+                avg_loss = (total_loss / len(losing_trades)) if losing_trades else 0.0
+
+                all_profits = [t.profit for t in trades if t.profit]
+                best_trade = max(all_profits) if all_profits else 0.0
+                worst_trade = min(all_profits) if all_profits else 0.0
+
+                # Calculate average trade duration
+                durations = []
+                for t in trades:
+                    if t.open_time and t.close_time:
+                        duration = (t.close_time - t.open_time).total_seconds() / 3600  # hours
+                        durations.append(duration)
+                avg_duration_hours = (sum(durations) / len(durations)) if durations else None
+
+                return {
+                    'total_trades': total_trades,
+                    'winning_trades': len(winning_trades),
+                    'losing_trades': len(losing_trades),
+                    'win_rate': round(win_rate, 2),
+                    'total_profit': round(total_profit, 2),
+                    'total_loss': round(total_loss, 2),
+                    'profit_factor': round(profit_factor, 2),
+                    'avg_win': round(avg_win, 2),
+                    'avg_loss': round(avg_loss, 2),
+                    'best_trade': round(best_trade, 2),
+                    'worst_trade': round(worst_trade, 2),
+                    'avg_trade_duration_hours': round(avg_duration_hours, 2) if avg_duration_hours else None
+                }
+
+            # Get date ranges
+            now = datetime.utcnow()
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            week_start = today_start - timedelta(days=now.weekday())  # Monday
+            month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+            # Query closed trades for different periods
+            base_query = db.query(Trade).filter(
+                Trade.account_id == account.id,
+                Trade.status == 'closed',
+                Trade.profit != None
+            )
+
+            today_trades = base_query.filter(Trade.close_time >= today_start).all()
+            week_trades = base_query.filter(Trade.close_time >= week_start).all()
+            month_trades = base_query.filter(Trade.close_time >= month_start).all()
+            all_trades = base_query.all()
+
+            return jsonify({
+                'status': 'success',
+                'statistics': {
+                    'today': calculate_stats(today_trades),
+                    'week': calculate_stats(week_trades),
+                    'month': calculate_stats(month_trades),
+                    'all_time': calculate_stats(all_trades)
+                }
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Dashboard statistics error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_webui.route('/api/dashboard/traded-symbols')
+def get_traded_symbols():
+    """Get list of symbols that have been traded (for filter dropdowns)"""
+    try:
+        from models import Trade
+        db = ScopedSession()
+        try:
+            account = db.query(Account).first()
+            if not account:
+                return jsonify({'status': 'error', 'message': 'No account found'}), 404
+
+            # Get distinct symbols from trades
+            symbols = db.query(Trade.symbol).filter(
+                Trade.account_id == account.id
+            ).distinct().order_by(Trade.symbol).all()
+
+            symbol_list = [s[0] for s in symbols if s[0]]
+
+            return jsonify({
+                'status': 'success',
+                'symbols': symbol_list
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Traded symbols error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
 @app_webui.route('/api/dashboard/backup/status')
 def backup_status():
     """Get backup status and statistics"""
@@ -2794,7 +2930,7 @@ def get_trade_analytics():
 
 @app_webui.route('/api/trades/history')
 def get_trade_history():
-    """Get trade history with filters"""
+    """Get trade history with advanced filters and pagination"""
     try:
         from models import Trade
         db = ScopedSession()
@@ -2804,28 +2940,77 @@ def get_trade_history():
                 return jsonify({'status': 'error', 'message': 'No account found'}), 404
 
             # Get query parameters
-            status = request.args.get('status')  # open, closed
-            symbol = request.args.get('symbol')
-            timeframe = request.args.get('timeframe')
-            source = request.args.get('source')  # MT5, AutoTrade, Dashboard
-            limit = request.args.get('limit', type=int, default=100)
+            status = request.args.get('status', 'closed')  # open, closed (default: closed)
+            symbol = request.args.get('symbol')  # Optional symbol filter
+            direction = request.args.get('direction')  # BUY, SELL
+            profit_status = request.args.get('profit_status')  # profit, loss
 
-            # Build query
-            query = db.query(Trade).filter_by(account_id=account.id)
+            # Period filters: all, year, month, week, today, custom
+            period = request.args.get('period', 'all')
+            start_date = request.args.get('start_date')  # For custom range (ISO format)
+            end_date = request.args.get('end_date')  # For custom range (ISO format)
 
+            # Pagination
+            page = request.args.get('page', type=int, default=1)
+            per_page = request.args.get('per_page', type=int, default=20)
+
+            # Build base query
+            query = db.query(Trade).filter(Trade.account_id == account.id)
+
+            # Apply status filter
             if status:
-                query = query.filter_by(status=status)
+                query = query.filter(Trade.status == status)
+
+            # Apply period filter
+            now = datetime.utcnow()
+            if period == 'today':
+                today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                query = query.filter(Trade.close_time >= today_start)
+            elif period == 'week':
+                week_start = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=now.weekday())
+                query = query.filter(Trade.close_time >= week_start)
+            elif period == 'month':
+                month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                query = query.filter(Trade.close_time >= month_start)
+            elif period == 'year':
+                year_start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+                query = query.filter(Trade.close_time >= year_start)
+            elif period == 'custom' and start_date and end_date:
+                try:
+                    start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+                    end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+                    query = query.filter(Trade.close_time >= start_dt, Trade.close_time <= end_dt)
+                except ValueError as ve:
+                    return jsonify({'status': 'error', 'message': f'Invalid date format: {ve}'}), 400
+
+            # Apply optional filters
             if symbol:
-                query = query.filter_by(symbol=symbol)
-            if timeframe:
-                query = query.filter_by(timeframe=timeframe)
-            if source:
-                query = query.filter_by(source=source)
+                query = query.filter(Trade.symbol == symbol)
 
-            trades = query.order_by(Trade.created_at.desc()).limit(limit).all()
+            if direction:
+                query = query.filter(Trade.direction == direction.upper())
 
+            if profit_status == 'profit':
+                query = query.filter(Trade.profit > 0)
+            elif profit_status == 'loss':
+                query = query.filter(Trade.profit < 0)
+
+            # Get total count before pagination
+            total = query.count()
+
+            # Apply pagination
+            offset = (page - 1) * per_page
+            trades = query.order_by(Trade.close_time.desc()).limit(per_page).offset(offset).all()
+
+            # Format trades data
             trades_data = []
             for trade in trades:
+                # Calculate trade duration
+                duration_hours = None
+                if trade.open_time and trade.close_time:
+                    duration_seconds = (trade.close_time - trade.open_time).total_seconds()
+                    duration_hours = round(duration_seconds / 3600, 2)
+
                 trades_data.append({
                     'id': trade.id,
                     'ticket': trade.ticket,
@@ -2846,13 +3031,24 @@ def get_trade_history():
                     'timeframe': trade.timeframe,
                     'close_reason': trade.close_reason,
                     'signal_id': trade.signal_id,
-                    'status': trade.status
+                    'status': trade.status,
+                    'duration_hours': duration_hours
                 })
+
+            # Calculate total pages
+            total_pages = (total + per_page - 1) // per_page
 
             return jsonify({
                 'status': 'success',
                 'trades': trades_data,
-                'count': len(trades_data)
+                'pagination': {
+                    'total': total,
+                    'page': page,
+                    'per_page': per_page,
+                    'total_pages': total_pages,
+                    'has_next': page < total_pages,
+                    'has_prev': page > 1
+                }
             }), 200
 
         finally:
