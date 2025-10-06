@@ -1523,7 +1523,19 @@
 
         // WebSocket event handlers for real-time updates
         socket.on('connected', (data) => {
-            console.log('WebSocket connected:', data);
+            console.log('🟢 WebSocket connected successfully:', data);
+        });
+
+        socket.on('connect', () => {
+            console.log('🟢 WebSocket connect event fired');
+        });
+
+        socket.on('disconnect', () => {
+            console.warn('🔴 WebSocket disconnected');
+        });
+
+        socket.on('connect_error', (error) => {
+            console.error('🔴 WebSocket connection error:', error);
         });
 
         socket.on('account_update', (data) => {
@@ -1574,7 +1586,10 @@
 
         // Real-time position updates via WebSocket
         socket.on('positions_update', (data) => {
-            console.log('Positions update (real-time):', data);
+            console.log('🔴 WEBSOCKET RECEIVED - Positions update:', data);
+            console.log('🔴 Position count:', data?.positions?.length || 0);
+            console.log('🔴 Total P&L:', data?.total_pnl);
+
             if (data && data.positions) {
                 const positions = data.positions;
                 document.getElementById('open-trades-count').textContent = positions.length;
@@ -1584,7 +1599,10 @@
                 } else {
                     const gridHTML = '<div class="trades-grid">' + positions.map(pos => renderOpenTradeCard(pos)).join('') + '</div>';
                     document.getElementById('open-trades-list').innerHTML = gridHTML;
+                    console.log('🔴 Updated trade cards with', positions.length, 'positions');
                 }
+            } else {
+                console.warn('🔴 No positions data in WebSocket message');
             }
         });
 
