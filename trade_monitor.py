@@ -70,6 +70,61 @@ class TradeMonitor:
             logger.error(f"Error getting EURUSD rate: {e}")
             return 1.17  # Fallback
 
+    def calculate_price_to_eur(self, symbol: str, price_diff: float, volume: float, current_price: float) -> float:
+        """
+        Convert price difference to EUR value based on symbol type.
+
+        Args:
+            symbol: Trading symbol (e.g., 'EURUSD', 'USDJPY', 'XAUUSD')
+            price_diff: Price difference in symbol's price units
+            volume: Position volume in lots
+            current_price: Current market price (for conversion)
+
+        Returns:
+            EUR value of the price difference
+        """
+        symbol_upper = symbol.upper()
+
+        # For XXX/EUR pairs: quote currency is EUR, direct calculation
+        if symbol_upper.endswith('EUR'):
+            # Example: USDEUR - quote is EUR
+            from spread_utils import get_contract_size
+            contract_size = get_contract_size(symbol)
+            return price_diff * volume * contract_size
+
+        # For EUR/XXX pairs: base currency is EUR, need to account for quote currency
+        if symbol_upper.startswith('EUR'):
+            # Example: EURUSD - quote is USD, need to convert USD profit to EUR
+            from spread_utils import get_contract_size
+            contract_size = get_contract_size(symbol)
+            profit_in_usd = price_diff * volume * contract_size
+            # For now, assume 1:1 USD:EUR (should use actual EUR/USD rate)
+            # TODO: Get actual EURUSD rate for conversion
+            return profit_in_usd  # Simplified for now
+
+        # For XXX/JPY pairs: quote currency is JPY, need to convert
+        if symbol_upper.endswith('JPY'):
+            # Example: USDJPY - quote is JPY
+            # Profit in JPY = price_diff × volume × 100,000
+            # Profit in USD/EUR = Profit_JPY / current_price
+            profit_in_jpy = price_diff * volume * 100000
+            profit_in_usd = profit_in_jpy / current_price
+            return profit_in_usd  # Assume USD ≈ EUR for simplicity
+
+        # For USD pairs (quote is USD): XXXUSD
+        if symbol_upper.endswith('USD'):
+            # Examples: GBPUSD, AUDUSD, XAUUSD, BTCUSD
+            from spread_utils import get_contract_size
+            contract_size = get_contract_size(symbol)
+            profit_in_usd = price_diff * volume * contract_size
+            # Assume USD ≈ EUR for simplicity (should use actual EUR/USD rate)
+            return profit_in_usd
+
+        # Default: use standard formula
+        from spread_utils import get_contract_size
+        contract_size = get_contract_size(symbol)
+        return price_diff * volume * contract_size
+
     def calculate_position_pnl(self, trade: Trade, current_price: Dict, eurusd_rate: float = None) -> Dict:
         """
         Calculate current P&L for open position in EUR (account currency)
@@ -107,9 +162,11 @@ class TradeMonitor:
             # Calculate points moved (for display only)
             points = abs(close_price - open_price)
 
-            # Distance to TP/SL in price points (for display)
+            # Distance to TP/SL in price points and EUR value
             distance_to_tp = None
+            distance_to_tp_eur = None
             distance_to_sl = None
+            distance_to_sl_eur = None
 
             if trade.tp:
                 tp_val = float(trade.tp)
@@ -118,6 +175,12 @@ class TradeMonitor:
                 else:  # SELL
                     distance_to_tp = close_price_val - tp_val
 
+                # Calculate EUR value using symbol-specific conversion
+                if distance_to_tp and distance_to_tp > 0:
+                    distance_to_tp_eur = self.calculate_price_to_eur(
+                        trade.symbol, distance_to_tp, volume, close_price_val
+                    )
+
             if trade.sl:
                 sl_val = float(trade.sl)
                 if is_buy:  # BUY
@@ -125,14 +188,20 @@ class TradeMonitor:
                 else:  # SELL
                     distance_to_sl = sl_val - close_price_val
 
+                # Calculate EUR value using symbol-specific conversion
+                if distance_to_sl and distance_to_sl > 0:
+                    distance_to_sl_eur = self.calculate_price_to_eur(
+                        trade.symbol, distance_to_sl, volume, close_price_val
+                    )
+
             return {
                 'current_price': close_price,
                 'pnl': round(mt5_profit, 2),  # ✅ Use MT5 profit - already correct!
                 'points': round(points, 5),
                 'distance_to_tp': round(distance_to_tp, 5) if distance_to_tp else None,
-                'distance_to_tp_eur': None,  # Remove broken EUR calculation
+                'distance_to_tp_eur': round(distance_to_tp_eur, 2) if distance_to_tp_eur else None,
                 'distance_to_sl': round(distance_to_sl, 5) if distance_to_sl else None,
-                'distance_to_sl_eur': None,  # Remove broken EUR calculation
+                'distance_to_sl_eur': round(distance_to_sl_eur, 2) if distance_to_sl_eur else None,
                 'tp_reached': distance_to_tp is not None and distance_to_tp <= 0,
                 'sl_reached': distance_to_sl is not None and distance_to_sl <= 0
             }
@@ -205,7 +274,9 @@ class TradeMonitor:
                     'tp': float(trade.tp) if trade.tp else None,
                     'sl': float(trade.sl) if trade.sl else None,
                     'distance_to_tp': pnl_data.get('distance_to_tp') if pnl_data else None,
+                    'distance_to_tp_eur': pnl_data.get('distance_to_tp_eur') if pnl_data else None,
                     'distance_to_sl': pnl_data.get('distance_to_sl') if pnl_data else None,
+                    'distance_to_sl_eur': pnl_data.get('distance_to_sl_eur') if pnl_data else None,
                     'open_time': trade.open_time.isoformat() if trade.open_time else None,
                     'has_trailing_stop': has_trailing_stop,
                     'trailing_stop_info': trailing_stop_info,
@@ -301,7 +372,9 @@ class TradeMonitor:
                     'tp': float(trade.tp) if trade.tp else None,
                     'sl': float(trade.sl) if trade.sl else None,
                     'distance_to_tp': pnl_data['distance_to_tp'] if pnl_data else None,
+                    'distance_to_tp_eur': pnl_data.get('distance_to_tp_eur') if pnl_data else None,
                     'distance_to_sl': pnl_data['distance_to_sl'] if pnl_data else None,
+                    'distance_to_sl_eur': pnl_data.get('distance_to_sl_eur') if pnl_data else None,
                     'has_trailing_stop': has_trailing_stop,
                     'open_time': trade.open_time.isoformat() if trade.open_time else None,
                     'source': trade.source,

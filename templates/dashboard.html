@@ -308,6 +308,23 @@
             box-shadow: 0 2px 4px rgba(0,0,0,0.3);
         }
 
+        /* Clickable countdown timer */
+        .signal-countdown-container {
+            transition: all 0.2s ease;
+            padding: 5px 10px;
+            border-radius: 5px;
+            background: rgba(76, 175, 80, 0.1);
+        }
+
+        .signal-countdown-container:hover {
+            background: rgba(76, 175, 80, 0.25);
+            transform: scale(1.05);
+        }
+
+        .signal-countdown-container:active {
+            transform: scale(0.98);
+        }
+
         .signal-item {
             background: #3d3d3d;
             padding: 8px 15px;
@@ -588,6 +605,24 @@
         @keyframes pulse-price {
             0%, 100% { transform: scale(1); }
             50% { transform: scale(1.15); }
+        }
+
+        /* P/L fade animation - fades to white and back to original color */
+        .pnl-fade {
+            animation: pnl-fade-animation 0.6s ease;
+        }
+
+        @keyframes pnl-fade-animation {
+            0% {
+                filter: brightness(1);
+            }
+            50% {
+                filter: brightness(3);
+                color: #ffffff;
+            }
+            100% {
+                filter: brightness(1);
+            }
         }
 
         .signal-updated {
@@ -1041,8 +1076,11 @@
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
                     <h2 style="margin: 0;">🎯 Trading Signals</h2>
-                    <div style="font-size: 1.1em; color: #4CAF50; font-weight: 600;">
-                        Update: <span id="signal-countdown">10</span>s <span id="volatility-level"></span>
+                    <div class="signal-countdown-container"
+                         style="font-size: 1.1em; color: #4CAF50; font-weight: 600; cursor: pointer; user-select: none;"
+                         onclick="triggerImmediateSignalUpdate()"
+                         title="Click to trigger immediate signal discovery">
+                        🔄 Update: <span id="signal-countdown">10</span>s <span id="volatility-level"></span>
                     </div>
                 </div>
                 <div class="signals-filter">
@@ -1091,6 +1129,30 @@
             </div>
         </div>
 
+        <!-- SYMBOL PERFORMANCE TRACKING -->
+        <div class="grid">
+            <div class="card">
+                <h2>🎯 Symbol Performance (Live 24h)</h2>
+                <div id="symbol-performance-container" style="margin-top: 15px;">
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <thead>
+                            <tr style="border-bottom: 2px solid #444; text-align: left;">
+                                <th style="padding: 10px;">Symbol</th>
+                                <th style="padding: 10px;">Status</th>
+                                <th style="padding: 10px; text-align: right;">Trades</th>
+                                <th style="padding: 10px; text-align: right;">Win-Rate</th>
+                                <th style="padding: 10px; text-align: right;">Profit</th>
+                                <th style="padding: 10px;">Reason</th>
+                            </tr>
+                        </thead>
+                        <tbody id="symbol-performance-list">
+                            <tr><td colspan="6" style="text-align: center; padding: 20px; color: #888;">Loading performance data...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
         <!-- TRADING STATISTICS -->
         <div class="grid">
             <div class="card">
@@ -1106,11 +1168,47 @@
             </div>
         </div>
 
+        <!-- AI DECISION LOG -->
+        <div class="grid">
+            <div class="card">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                    <h2 style="margin: 0;">🤖 AI Decision Log</h2>
+                    <div style="display: flex; gap: 10px; align-items: center;">
+                        <span id="action-required-badge" style="display: none; background: #f44336; color: white; padding: 5px 10px; border-radius: 12px; font-size: 0.85em; font-weight: 600;">
+                            ⚠️ <span id="action-required-count">0</span> Action Required
+                        </span>
+                        <select id="decision-type-filter" style="padding: 5px 10px; background: #2a2a2a; border: 1px solid #444; border-radius: 4px; color: #fff; font-size: 0.9em;">
+                            <option value="">All Decisions</option>
+                            <option value="TRADE_OPEN">Trade Open</option>
+                            <option value="TRADE_CLOSE">Trade Close</option>
+                            <option value="SIGNAL_SKIP">Signal Skip</option>
+                            <option value="SYMBOL_DISABLE">Symbol Disable</option>
+                            <option value="SYMBOL_ENABLE">Symbol Enable</option>
+                            <option value="RISK_LIMIT">Risk Limit</option>
+                            <option value="CORRELATION_BLOCK">Correlation Block</option>
+                            <option value="NEWS_PAUSE">News Pause</option>
+                            <option value="DD_LIMIT">DD Limit</option>
+                            <option value="SUPERTREND_SL">SuperTrend SL</option>
+                            <option value="MTF_CONFLICT">MTF Conflict</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="ai-decision-log-container" style="max-height: 400px; overflow-y: auto;">
+                    <div style="text-align: center; padding: 20px; color: #888;">Loading decisions...</div>
+                </div>
+            </div>
+        </div>
+
         <!-- OPEN POSITIONS -->
         <div class="grid">
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                    <h2 style="margin: 0;">📊 Open Positions (<span id="open-trades-count">0</span>)</h2>
+                    <div style="display: flex; align-items: center; gap: 15px;">
+                        <h2 style="margin: 0;">📊 Open Positions (<span id="open-trades-count">0</span>)</h2>
+                        <span style="font-size: 0.9em; color: #888;">
+                            🔄 <span id="positions-last-update" style="font-weight: 600;">--:--:--</span>
+                        </span>
+                    </div>
                     <div>
                         <button onclick="closeAllProfitable()" class="global-action-btn close-profitable-btn" title="Close all trades currently in profit">
                             ✓ Close Profitable
@@ -1172,7 +1270,15 @@
     </div>
 
     <script>
-        const socket = io();
+        // Initialize Socket.IO with explicit configuration
+        // WebSocket runs on port 9905 (same as web UI), NOT 9900 (API only)
+        const socketUrl = window.location.protocol + '//' + window.location.hostname + ':9905';
+        const socket = io(socketUrl, {
+            transports: ['websocket', 'polling'],
+            reconnection: true,
+            reconnectionDelay: 1000,
+            reconnectionAttempts: 10
+        });
         const previousPrices = {}; // Track previous prices for pulse animation
 
         // Update profit display with color
@@ -1386,17 +1492,56 @@
         const autotradeSlider = document.getElementById('autotrade-confidence-slider');
         const autotradeValue = document.getElementById('autotrade-confidence-value');
 
-        // Load AutoTrade settings from localStorage
-        const savedAutotradeEnabled = localStorage.getItem('autotrade_enabled') === 'true';
-        const savedAutotradeConfidence = localStorage.getItem('autotrade_confidence') || '40';
+        // Load AutoTrade status from server (not localStorage!)
+        async function loadAutoTradeStatus() {
+            try {
+                const apiBase = window.location.protocol + '//' + window.location.hostname + ':9900';
+                const response = await fetch(apiBase + '/api/auto-trade/status');
+                const data = await response.json();
 
-        autotradeEnabled.checked = savedAutotradeEnabled;
-        autotradeSlider.value = savedAutotradeConfidence;
-        autotradeValue.textContent = savedAutotradeConfidence;
+                if (response.ok) {
+                    // Update UI based on server status
+                    autotradeEnabled.checked = data.enabled;
+                    autotradeSlider.value = data.min_confidence;
+                    autotradeValue.textContent = data.min_confidence;
 
-        if (savedAutotradeEnabled) {
-            autotradeSettings.style.display = 'block';
+                    // Sync localStorage with server state
+                    localStorage.setItem('autotrade_enabled', data.enabled);
+                    localStorage.setItem('autotrade_confidence', data.min_confidence);
+
+                    if (data.enabled) {
+                        autotradeSettings.style.display = 'block';
+                    }
+
+                    console.log('✅ Auto-Trade status loaded from server:', data);
+                } else {
+                    console.error('❌ Failed to load auto-trade status:', data);
+                    // Fallback to localStorage if server fails
+                    const savedAutotradeEnabled = localStorage.getItem('autotrade_enabled') === 'true';
+                    const savedAutotradeConfidence = localStorage.getItem('autotrade_confidence') || '40';
+                    autotradeEnabled.checked = savedAutotradeEnabled;
+                    autotradeSlider.value = savedAutotradeConfidence;
+                    autotradeValue.textContent = savedAutotradeConfidence;
+                    if (savedAutotradeEnabled) {
+                        autotradeSettings.style.display = 'block';
+                    }
+                }
+            } catch (error) {
+                console.error('❌ Error loading auto-trade status:', error);
+                // Fallback to localStorage if server fails
+                const savedAutotradeEnabled = localStorage.getItem('autotrade_enabled') === 'true';
+                const savedAutotradeConfidence = localStorage.getItem('autotrade_confidence') || '40';
+                autotradeEnabled.checked = savedAutotradeEnabled;
+                autotradeSlider.value = savedAutotradeConfidence;
+                autotradeValue.textContent = savedAutotradeConfidence;
+                if (savedAutotradeEnabled) {
+                    autotradeSettings.style.display = 'block';
+                }
+            }
         }
+
+        // Load status from server on page load
+        loadAutoTradeStatus();
 
         // Toggle AutoTrade settings visibility
         autotradeEnabled.addEventListener('change', function() {
@@ -1540,7 +1685,6 @@
 
         socket.on('account_update', (data) => {
             // Update account info immediately via WebSocket
-            console.log('Account update:', data);
             document.getElementById('account-number').textContent = data.number;
             document.getElementById('balance').textContent = '€' + (data.balance || 0).toFixed(2);
             document.getElementById('equity').textContent = '€' + (data.equity || 0).toFixed(2);
@@ -1577,7 +1721,6 @@
 
         socket.on('profit_update', (data) => {
             // Update profit values in real-time
-            console.log('Profit update:', data);
             updateProfitValue('profit-today', data.today);
             updateProfitValue('profit-week', data.week);
             updateProfitValue('profit-month', data.month);
@@ -1585,21 +1728,67 @@
         });
 
         // Real-time position updates via WebSocket
+        // Track previous position data for change detection
+        let previousPositions = {};
+        let lastUpdateTime = 0;
+        const UPDATE_THROTTLE_MS = 500; // Only update UI every 500ms max
+
         socket.on('positions_update', (data) => {
-            console.log('🔴 WEBSOCKET RECEIVED - Positions update:', data);
-            console.log('🔴 Position count:', data?.positions?.length || 0);
-            console.log('🔴 Total P&L:', data?.total_pnl);
+            // Throttle UI updates to reduce CPU usage
+            const now = Date.now();
+            if (now - lastUpdateTime < UPDATE_THROTTLE_MS) {
+                return; // Skip this update
+            }
+            lastUpdateTime = now;
 
             if (data && data.positions) {
                 const positions = data.positions;
+                const currentTickets = new Set(positions.map(p => p.ticket));
+                const previousTickets = new Set(Object.keys(previousPositions).map(Number));
+
+                // Detect closed positions (tickets that were in previousPositions but not in current positions)
+                const closedTickets = [...previousTickets].filter(ticket => !currentTickets.has(ticket));
+                if (closedTickets.length > 0) {
+                    console.log('🔔 Trade(s) closed:', closedTickets);
+                    // Refresh trade history when positions are closed
+                    setTimeout(() => loadTradeHistory(currentPage), 1000); // Delay 1s to ensure DB is updated
+                }
+
                 document.getElementById('open-trades-count').textContent = positions.length;
 
                 if (positions.length === 0) {
                     document.getElementById('open-trades-list').innerHTML = '<div style="text-align: center; color: #888; padding: 20px;">No open positions</div>';
+                    previousPositions = {};
                 } else {
-                    const gridHTML = '<div class="trades-grid">' + positions.map(pos => renderOpenTradeCard(pos)).join('') + '</div>';
+                    // Check which positions have changed
+                    const changedTickets = new Set();
+                    positions.forEach(pos => {
+                        const prev = previousPositions[pos.ticket];
+                        if (prev && (
+                            prev.current_price !== pos.current_price ||
+                            prev.pnl !== pos.pnl
+                        )) {
+                            changedTickets.add(pos.ticket);
+                        }
+                        // Store current data for next comparison
+                        previousPositions[pos.ticket] = {
+                            current_price: pos.current_price,
+                            pnl: pos.pnl
+                        };
+                    });
+
+                    const gridHTML = '<div class="trades-grid">' + positions.map(pos => renderOpenTradeCard(pos, changedTickets.has(pos.ticket))).join('') + '</div>';
                     document.getElementById('open-trades-list').innerHTML = gridHTML;
-                    console.log('🔴 Updated trade cards with', positions.length, 'positions');
+                }
+
+                // Update last update timestamp
+                const now = new Date();
+                const timeStr = now.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                const timestampEl = document.getElementById('positions-last-update');
+                if (timestampEl) {
+                    timestampEl.textContent = timeStr;
+                    timestampEl.classList.add('price-pulse');
+                    setTimeout(() => timestampEl.classList.remove('price-pulse'), 400);
                 }
             } else {
                 console.warn('🔴 No positions data in WebSocket message');
@@ -2086,14 +2275,196 @@
             updateInfoBar();
         }, 1000);
 
+        // Poll auto-trade status every 10 seconds to keep dashboard in sync
+        setInterval(() => {
+            loadAutoTradeStatus();
+        }, 10000);
+
+        // Load symbol performance every 15 seconds
+        async function loadSymbolPerformance() {
+            try {
+                const apiBase = window.location.protocol + '//' + window.location.hostname + ':9900';
+                const response = await fetch(apiBase + '/api/performance/symbols');
+                const data = await response.json();
+
+                if (response.ok && data.symbols) {
+                    const tbody = document.getElementById('symbol-performance-list');
+                    if (!tbody) return;
+
+                    if (data.symbols.length === 0) {
+                        tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 20px; color: #888;">No performance data yet</td></tr>';
+                        return;
+                    }
+
+                    tbody.innerHTML = data.symbols.map(s => {
+                        const statusIcon = s.status === 'active' ? '✅' : s.status === 'disabled' ? '⛔' : '⚠️';
+                        const statusColor = s.status === 'active' ? '#4CAF50' : s.status === 'disabled' ? '#f44336' : '#ff9800';
+                        const profitColor = s.live_profit > 0 ? '#4CAF50' : s.live_profit < 0 ? '#f44336' : '#888';
+                        const winRateColor = s.live_win_rate >= 70 ? '#4CAF50' : s.live_win_rate >= 50 ? '#ff9800' : '#f44336';
+
+                        return `
+                            <tr style="border-bottom: 1px solid #333;">
+                                <td style="padding: 10px; font-weight: bold;">${s.symbol}</td>
+                                <td style="padding: 10px;">
+                                    <span style="color: ${statusColor};">${statusIcon} ${s.status.toUpperCase()}</span>
+                                </td>
+                                <td style="padding: 10px; text-align: right;">${s.live_trades || 0}</td>
+                                <td style="padding: 10px; text-align: right; color: ${winRateColor}; font-weight: bold;">
+                                    ${s.live_win_rate ? s.live_win_rate.toFixed(1) : 0}%
+                                </td>
+                                <td style="padding: 10px; text-align: right; color: ${profitColor}; font-weight: bold;">
+                                    €${s.live_profit ? s.live_profit.toFixed(2) : '0.00'}
+                                </td>
+                                <td style="padding: 10px; font-size: 0.85em; color: #888;">
+                                    ${s.auto_disabled_reason || '-'}
+                                </td>
+                            </tr>
+                        `;
+                    }).join('');
+                }
+            } catch (error) {
+                console.error('❌ Error loading symbol performance:', error);
+            }
+        }
+
+        // Initial load and periodic refresh
+        loadSymbolPerformance();
+        setInterval(loadSymbolPerformance, 15000);
+
+        // Load AI Decision Log
+        async function loadAIDecisionLog() {
+            try {
+                const filter = document.getElementById('decision-type-filter').value;
+
+                let url = '/api/ai-decisions?limit=30';
+                if (filter) {
+                    url += '&type=' + filter;
+                }
+
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (response.ok && data.decisions) {
+                    renderDecisions(data.decisions);
+                } else {
+                    document.getElementById('ai-decision-log-container').innerHTML =
+                        '<div style="text-align: center; padding: 20px; color: #f44336;">Error loading decisions</div>';
+                }
+
+                // Load action-required count
+                const actionResponse = await fetch('/api/ai-decisions/action-required');
+                const actionData = await actionResponse.json();
+
+                if (actionResponse.ok && actionData.count > 0) {
+                    document.getElementById('action-required-count').textContent = actionData.count;
+                    document.getElementById('action-required-badge').style.display = 'inline-block';
+                } else {
+                    document.getElementById('action-required-badge').style.display = 'none';
+                }
+
+            } catch (error) {
+                console.error('Error loading AI decisions:', error);
+                document.getElementById('ai-decision-log-container').innerHTML =
+                    '<div style="text-align: center; padding: 20px; color: #f44336;">Connection error</div>';
+            }
+        }
+
+        function renderDecisions(decisions) {
+            const container = document.getElementById('ai-decision-log-container');
+
+            if (decisions.length === 0) {
+                container.innerHTML = '<div style="text-align: center; padding: 20px; color: #888;">No decisions yet</div>';
+                return;
+            }
+
+            const emoji = {
+                'TRADE_OPEN': '🔵',
+                'TRADE_CLOSE': '🔴',
+                'SIGNAL_SKIP': '⏭️',
+                'SYMBOL_DISABLE': '⛔',
+                'SYMBOL_ENABLE': '✅',
+                'RISK_LIMIT': '⚠️',
+                'CORRELATION_BLOCK': '🔗',
+                'NEWS_PAUSE': '📰',
+                'DD_LIMIT': '📉',
+                'SUPERTREND_SL': '🎯',
+                'MTF_CONFLICT': '📊',
+                'BACKTEST_START': '🔬',
+                'BACKTEST_COMPLETE': '✅'
+            };
+
+            const impactColors = {
+                'LOW': '#4CAF50',
+                'MEDIUM': '#FFA500',
+                'HIGH': '#FF5722',
+                'CRITICAL': '#f44336'
+            };
+
+            let html = '<div style="display: flex; flex-direction: column; gap: 10px;">';
+
+            decisions.forEach(d => {
+                const time = new Date(d.timestamp).toLocaleString('de-DE');
+                const decisionEmoji = emoji[d.decision_type] || '🤖';
+                const impactColor = impactColors[d.impact_level] || '#888';
+
+                // Decision outcome color
+                let outcomeColor = '#888';
+                if (d.decision === 'APPROVED') outcomeColor = '#4CAF50';
+                if (d.decision === 'REJECTED') outcomeColor = '#f44336';
+                if (d.decision === 'BLOCKED') outcomeColor = '#FF5722';
+                if (d.decision === 'DISABLED') outcomeColor = '#f44336';
+                if (d.decision === 'ENABLED') outcomeColor = '#4CAF50';
+
+                html += `
+                    <div style="background: ${d.user_action_required ? '#3a1f1f' : '#2a2a2a'}; border-left: 4px solid ${impactColor}; padding: 12px; border-radius: 6px; ${d.user_action_required ? 'box-shadow: 0 0 10px rgba(244,67,54,0.3);' : ''}">
+                        <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <span style="font-size: 1.2em;">${decisionEmoji}</span>
+                                <span style="font-weight: 600; color: #fff;">${d.decision_type.replace('_', ' ')}</span>
+                                ${d.symbol ? `<span style="background: #444; padding: 2px 8px; border-radius: 4px; font-size: 0.85em;">${d.symbol}</span>` : ''}
+                                ${d.timeframe ? `<span style="background: #444; padding: 2px 8px; border-radius: 4px; font-size: 0.85em;">${d.timeframe}</span>` : ''}
+                            </div>
+                            <div style="text-align: right;">
+                                <div style="font-size: 0.85em; color: ${outcomeColor}; font-weight: 600;">${d.decision}</div>
+                                <div style="font-size: 0.75em; color: #888;">${time}</div>
+                            </div>
+                        </div>
+
+                        <div style="color: #fff; margin-bottom: 6px;">${d.primary_reason}</div>
+
+                        ${d.user_action_required ? '<div style="background: #f44336; color: white; padding: 6px 10px; border-radius: 4px; font-size: 0.85em; font-weight: 600; display: inline-block; margin-top: 6px;">⚠️ ACTION REQUIRED</div>' : ''}
+
+                        ${d.confidence_score ? `<div style="font-size: 0.85em; color: #888; margin-top: 6px;">Confidence: ${d.confidence_score.toFixed(1)}%</div>` : ''}
+
+                        ${d.detailed_reasoning ? `<details style="margin-top: 8px; cursor: pointer;">
+                            <summary style="font-size: 0.85em; color: #888; cursor: pointer;">View Details</summary>
+                            <pre style="background: #1a1a1a; padding: 10px; border-radius: 4px; margin-top: 8px; font-size: 0.8em; color: #aaa; overflow-x: auto;">${d.detailed_reasoning}</pre>
+                        </details>` : ''}
+                    </div>
+                `;
+            });
+
+            html += '</div>';
+            container.innerHTML = html;
+        }
+
+        // Event listener for filter
+        document.getElementById('decision-type-filter').addEventListener('change', loadAIDecisionLog);
+
+        // Initial load and periodic refresh
+        loadAIDecisionLog();
+        setInterval(loadAIDecisionLog, 10000);  // Refresh every 10 seconds
+
         // Reduced polling interval to 30 seconds (WebSocket handles real-time price updates)
         setInterval(() => {
             updateSymbols();  // Refresh tick counts, timestamps, and trends
         }, 30000);
 
         // Countdown for next signal update (optimized for H1/H4 timeframes)
-        // H1 candles close every 60 minutes, so check every 5 minutes is sufficient
-        let signalInterval = 300;  // 5 minutes = 300 seconds (optimized for H1/H4)
+        // H1 candles close every 60 minutes (top of each hour: 10:00, 11:00, etc.)
+        // H4 candles close every 4 hours (00:00, 04:00, 08:00, 12:00, 16:00, 20:00)
+        // Check every 2 minutes for faster signal updates after candle close
+        let signalInterval = 120;  // 2 minutes = 120 seconds (optimized for H1/H4)
 
         // Calculate seconds until next interval boundary
         function getSecondsToNextInterval(interval) {
@@ -2123,6 +2494,24 @@
                 countdownEl.textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
             }
         }, 1000);
+
+        // Trigger immediate signal update (manual refresh)
+        function triggerImmediateSignalUpdate() {
+            console.log('🔄 Manual signal discovery triggered');
+            updateSignals();  // Fetch signals immediately
+            signalCountdown = signalInterval;  // Reset countdown to full interval
+
+            // Visual feedback - briefly change color
+            const countdownEl = document.getElementById('signal-countdown');
+            if (countdownEl) {
+                const parent = countdownEl.parentElement;
+                const originalColor = parent.style.color;
+                parent.style.color = '#FF9800';
+                setTimeout(() => {
+                    parent.style.color = originalColor;
+                }, 300);
+            }
+        }
 
         // ============================================================================
         // EXPLANATION MODAL FOR INDICATORS AND PATTERNS
@@ -2522,10 +2911,11 @@
             }
         }
 
-        function renderOpenTradeCard(pos) {
+        function renderOpenTradeCard(pos, hasChanged = false) {
             const isProfitable = pos.pnl > 0;
             const profitClass = isProfitable ? 'profit' : (pos.pnl < 0 ? 'loss' : '');
             const directionClass = pos.direction === 'BUY' ? 'buy' : 'sell';
+            const changedClass = hasChanged ? 'pnl-fade' : '';  // Changed to pnl-fade for P/L animation
 
             const openTime = new Date(pos.open_time);
             const now = new Date();
@@ -2539,14 +2929,18 @@
                         <span class="trade-symbol">${pos.symbol}</span>
                         <span class="trade-direction ${directionClass}">${pos.direction}</span>
                     </div>
-                    <div class="trade-pnl ${profitClass}">${isProfitable ? '+' : ''}€${pos.pnl.toFixed(2)}</div>
+                    <div class="trade-pnl ${profitClass} ${changedClass}">${isProfitable ? '+' : ''}€${pos.pnl.toFixed(2)}</div>
+                    <div class="trade-info-row" style="background: rgba(100, 149, 237, 0.1); padding: 4px 6px; border-radius: 4px; margin: 4px 0;">
+                        <span style="color: #6495ED; font-weight: bold;">Opened:</span>
+                        <span class="value" style="font-size: 0.9em; color: #6495ED;">${pos.opening_reason || 'Manual (MT5)'}</span>
+                    </div>
                     <div class="trade-info-row">
                         <span>Entry:</span>
                         <span class="value">${pos.open_price.toFixed(5)}</span>
                     </div>
                     <div class="trade-info-row">
                         <span>Current:</span>
-                        <span class="value">${pos.current_price.toFixed(5)}</span>
+                        <span class="value ${changedClass}">${pos.current_price.toFixed(5)}</span>
                     </div>
                     <div class="trade-info-row">
                         <span>Volume:</span>
@@ -2554,11 +2948,15 @@
                     </div>
                     <div class="trade-info-row">
                         <span>TP:</span>
-                        <span class="value">${pos.tp ? pos.tp.toFixed(5) + ' (Dist: ' + (pos.distance_to_tp ? pos.distance_to_tp.toFixed(5) : 'N/A') + ')' : 'N/A'}</span>
+                        <span class="value">${pos.tp ? pos.tp.toFixed(5) + (pos.distance_to_tp_eur ? ' (Potential: €' + pos.distance_to_tp_eur.toFixed(2) + ')' : '') : 'N/A'}</span>
                     </div>
                     <div class="trade-info-row">
                         <span>SL:</span>
-                        <span class="value">${pos.sl ? pos.sl.toFixed(5) + ' (Dist: ' + (pos.distance_to_sl ? pos.distance_to_sl.toFixed(5) : 'N/A') + ')' : 'N/A'}</span>
+                        <span class="value">${pos.sl ? pos.sl.toFixed(5) + (pos.distance_to_sl_eur ? ' (Risk: €' + pos.distance_to_sl_eur.toFixed(2) + ')' : '') : 'N/A'}</span>
+                    </div>
+                    <div class="trade-info-row" style="background: ${pos.trailing_stop_info && pos.trailing_stop_info.enabled ? 'rgba(76, 175, 80, 0.1)' : 'rgba(128, 128, 128, 0.1)'}; padding: 6px; border-radius: 4px; margin: 4px 0;">
+                        <span style="color: ${pos.trailing_stop_info && pos.trailing_stop_info.enabled ? '#4CAF50' : '#888'}; font-weight: bold;">Trailing Stop:</span>
+                        <span class="value" style="color: ${pos.trailing_stop_info && pos.trailing_stop_info.enabled ? '#4CAF50' : '#888'};">${pos.trailing_stop_info && pos.trailing_stop_info.enabled ? pos.trailing_stop_info.stage_label + ' (' + pos.trailing_stop_info.profit_percent + '%)' + (pos.trailing_stop_info.sl_distance_eur ? ' (Protected: €' + pos.trailing_stop_info.sl_distance_eur.toFixed(2) + ')' : '') + (pos.trailing_stop_info.next_trigger ? ' → ' + pos.trailing_stop_info.next_trigger + ' @' + pos.trailing_stop_info.next_trigger_percent + '%' : ' - Final Stage') : 'n/a'}</span>
                     </div>
                     <div class="trade-info-row">
                         <span>Duration:</span>
@@ -2569,11 +2967,11 @@
                         <span class="value">#${pos.ticket}</span>
                     </div>
                     <div style="display: flex; gap: 8px; margin-top: 12px;">
-                        <button onclick="closeTrade(${pos.ticket})" class="trade-action-btn trade-close-btn" title="Close this trade">
-                            ✕ Close
+                        <button data-action="close-trade" data-ticket="${pos.ticket}" data-pnl="${pos.pnl}" class="trade-action-btn trade-close-btn" title="Close this trade and lock in ${pos.pnl >= 0 ? '+' : ''}€${pos.pnl.toFixed(2)}">
+                            ✕ Close (€${pos.pnl.toFixed(2)})
                         </button>
-                        <button onclick="showSetTrailingStopModal(${pos.ticket}, '${pos.symbol}')" class="trade-action-btn trade-ts-btn" title="Set trailing stop">
-                            📈 Set TS
+                        <button data-action="set-trailing-stop" data-ticket="${pos.ticket}" data-symbol="${pos.symbol}" data-volume="${pos.volume}" class="trade-action-btn trade-ts-btn" title="Set trailing stop to protect €${pos.pnl.toFixed(2)} profit">
+                            📈 Set TS (€${pos.pnl.toFixed(2)})
                         </button>
                     </div>
                 </div>
@@ -2642,6 +3040,8 @@
                             <th>Ticket</th>
                             <th>Symbol</th>
                             <th>Dir</th>
+                            <th>TF</th>
+                            <th>Conf%</th>
                             <th>Open</th>
                             <th>Close</th>
                             <th>Duration</th>
@@ -2657,12 +3057,17 @@
                 const openTime = trade.open_time ? new Date(trade.open_time).toLocaleString('de-DE') : 'N/A';
                 const closeTime = trade.close_time ? new Date(trade.close_time).toLocaleString('de-DE') : 'N/A';
                 const duration = trade.duration_hours ? `${trade.duration_hours}h` : 'N/A';
+                const timeframe = trade.timeframe || '-';
+                const confidence = trade.confidence ? `${trade.confidence.toFixed(1)}%` : '-';
+                const confidenceColor = trade.confidence >= 70 ? '#4CAF50' : (trade.confidence >= 55 ? '#FFA500' : '#888');
 
                 tableHTML += `
                     <tr>
                         <td>#${trade.ticket}</td>
                         <td><strong>${trade.symbol}</strong></td>
                         <td><span class="trade-direction ${trade.direction.toLowerCase()}">${trade.direction}</span></td>
+                        <td style="font-size: 0.85em; color: #888;">${timeframe}</td>
+                        <td style="font-size: 0.85em; color: ${confidenceColor}; font-weight: 600;">${confidence}</td>
                         <td style="font-size: 0.8em;">${openTime}</td>
                         <td style="font-size: 0.8em;">${closeTime}</td>
                         <td>${duration}</td>
@@ -2699,6 +3104,27 @@
             loadOpenTrades();
             loadTradedSymbols();
             loadTradeHistory();
+
+            // Event delegation for trade action buttons (prevents issues with dynamic re-rendering)
+            document.getElementById('open-trades-list').addEventListener('click', (e) => {
+                const btn = e.target.closest('button[data-action]');
+                if (!btn) return;
+
+                const action = btn.dataset.action;
+                const ticket = parseInt(btn.dataset.ticket);
+
+                if (action === 'close-trade') {
+                    const pnl = parseFloat(btn.dataset.pnl);
+                    // Disable button immediately to prevent double-clicks
+                    btn.disabled = true;
+                    btn.style.opacity = '0.5';
+                    closeTrade(ticket, pnl);
+                } else if (action === 'set-trailing-stop') {
+                    const symbol = btn.dataset.symbol;
+                    const volume = parseFloat(btn.dataset.volume);
+                    showSetTrailingStopModal(ticket, symbol, volume);
+                }
+            });
 
             // Update open trades every 5 seconds
             setInterval(loadOpenTrades, 5000);
@@ -3479,9 +3905,12 @@
         // ==================== TRADE MANAGEMENT FUNCTIONS ====================
 
         // Close individual trade
-        async function closeTrade(ticket) {
-            if (!confirm(`Are you sure you want to close trade #${ticket}?`)) {
-                return;
+        async function closeTrade(ticket, pnl) {
+            // Only ask for confirmation if closing at a loss
+            if (pnl < 0) {
+                if (!confirm(`Close trade #${ticket} at a loss of €${Math.abs(pnl).toFixed(2)}?`)) {
+                    return;
+                }
             }
 
             try {
@@ -3489,16 +3918,24 @@
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'}
                 });
+
+                if (!response.ok) {
+                    console.error(`Failed to close trade ${ticket}: HTTP ${response.status}`);
+                    return;
+                }
+
                 const data = await response.json();
 
                 if (data.status === 'success') {
-                    alert(`✓ Close command sent for trade #${ticket}`);
-                    loadOpenTrades(); // Refresh
+                    // Silent close - just refresh after short delay
+                    setTimeout(() => {
+                        loadOpenTrades();
+                    }, 500);
                 } else {
-                    alert(`✗ Error: ${data.message}`);
+                    console.error(`Failed to close trade ${ticket}: ${data.message}`);
                 }
             } catch (error) {
-                alert(`✗ Error closing trade: ${error.message}`);
+                console.error('Close trade error:', error);
             }
         }
 
@@ -3557,12 +3994,104 @@
             }
         }
 
+        // Calculate € value for trailing stop distance
+        function calculateTSValue(symbol, volume, pips) {
+            // Pip values per standard lot (simplified)
+            let pipValuePerLot = 10; // Default for most Forex pairs (EUR/USD, GBP/USD, etc.)
+
+            // Symbol-specific adjustments
+            if (symbol.includes('JPY')) {
+                pipValuePerLot = 9.09; // JPY pairs (e.g., USD/JPY: 1000 / 110 ≈ 9.09)
+            } else if (symbol.includes('XAU') || symbol.includes('GOLD')) {
+                pipValuePerLot = 10; // Gold: $10 per pip per lot
+            } else if (symbol.includes('BTC')) {
+                pipValuePerLot = 10; // BTC: ~$10 per pip (simplified)
+            } else if (symbol.includes('EUR') || symbol.includes('GBP')) {
+                pipValuePerLot = 10; // Major Forex pairs
+            }
+
+            // Calculate total value: pips × pip_value_per_lot × volume
+            const value = pips * pipValuePerLot * volume;
+            return value;
+        }
+
         // Show trailing stop modal
-        function showSetTrailingStopModal(ticket, symbol) {
+        function showSetTrailingStopModal(ticket, symbol, volume) {
+            // Calculate realistic default pips based on position size
+            let basePips = 20; // Safe fallback
+
+            // Dynamic pip calculation based on volume (lot size)
+            if (volume <= 0.01) {
+                basePips = 10; // Micro lots: tight stop
+            } else if (volume <= 0.05) {
+                basePips = 15; // Small positions
+            } else if (volume <= 0.1) {
+                basePips = 25; // Medium positions
+            } else if (volume <= 0.5) {
+                basePips = 35; // Larger positions
+            } else {
+                basePips = 50; // Very large positions
+            }
+
+            // Calculate preset options: Conservative, Recommended, Aggressive
+            const conservative = Math.round(basePips * 1.5);
+            const recommended = basePips;
+            const aggressive = Math.round(basePips * 0.6);
+
+            // Calculate € values
+            const conservativeValue = calculateTSValue(symbol, volume, conservative);
+            const recommendedValue = calculateTSValue(symbol, volume, recommended);
+            const aggressiveValue = calculateTSValue(symbol, volume, aggressive);
+
+            console.log(`💡 TS Options for ${symbol} (${volume} lots): Conservative=${conservative} pips (€${conservativeValue.toFixed(2)}), Recommended=${recommended} pips (€${recommendedValue.toFixed(2)}), Aggressive=${aggressive} pips (€${aggressiveValue.toFixed(2)})`);
+
             document.getElementById('ts-ticket').textContent = ticket;
             document.getElementById('ts-symbol').textContent = symbol;
-            document.getElementById('ts-input').value = '50';
+            document.getElementById('ts-volume').textContent = volume;
+            document.getElementById('ts-input').value = recommended;
+            document.getElementById('ts-input').placeholder = `e.g. ${recommended}`;
+
+            // Update quick-select buttons with € values
+            document.getElementById('ts-conservative').innerHTML = `${conservative} pips<br><small style="opacity: 0.7;">≈ €${conservativeValue.toFixed(2)}</small>`;
+            document.getElementById('ts-conservative').onclick = () => selectTSPreset(conservative, symbol, volume);
+            document.getElementById('ts-recommended').innerHTML = `${recommended} pips<br><small style="opacity: 0.7;">≈ €${recommendedValue.toFixed(2)}</small>`;
+            document.getElementById('ts-recommended').onclick = () => selectTSPreset(recommended, symbol, volume);
+            document.getElementById('ts-aggressive').innerHTML = `${aggressive} pips<br><small style="opacity: 0.7;">≈ €${aggressiveValue.toFixed(2)}</small>`;
+            document.getElementById('ts-aggressive').onclick = () => selectTSPreset(aggressive, symbol, volume);
+
+            // Store symbol and volume for live calculation
+            document.getElementById('ts-modal').dataset.symbol = symbol;
+            document.getElementById('ts-modal').dataset.volume = volume;
+
+            // Update € value display on input change
+            updateTSValueDisplay();
+            document.getElementById('ts-input').oninput = updateTSValueDisplay;
+
             document.getElementById('ts-modal').style.display = 'flex';
+        }
+
+        function selectTSPreset(pips, symbol, volume) {
+            document.getElementById('ts-input').value = pips;
+            updateTSValueDisplay();
+            // Visual feedback
+            document.getElementById('ts-input').style.background = '#2a4a2a';
+            setTimeout(() => {
+                document.getElementById('ts-input').style.background = '';
+            }, 200);
+        }
+
+        function updateTSValueDisplay() {
+            const pips = parseFloat(document.getElementById('ts-input').value) || 0;
+            const symbol = document.getElementById('ts-modal').dataset.symbol;
+            const volume = parseFloat(document.getElementById('ts-modal').dataset.volume);
+
+            if (pips > 0 && symbol && volume) {
+                const value = calculateTSValue(symbol, volume, pips);
+                document.getElementById('ts-value-display').innerHTML =
+                    `<strong style="color: #4CAF50;">≈ €${value.toFixed(2)}</strong> maximum risk if stopped out`;
+            } else {
+                document.getElementById('ts-value-display').innerHTML = '';
+            }
         }
 
         // Set trailing stop
@@ -3578,7 +4107,8 @@
             document.getElementById('ts-modal').style.display = 'none';
 
             try {
-                const response = await fetch(`/api/set_trailing_stop/${ticket}`, {
+                const apiBase = window.location.protocol + '//' + window.location.hostname + ':9905';
+                const response = await fetch(`${apiBase}/api/set_trailing_stop/${ticket}`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({trailing_stop_pips: parseFloat(pips)})
@@ -3601,21 +4131,45 @@
         }
 
         // Version info for cache busting verification
-        console.log('🚀 Dashboard Version: 2025-10-06 18:12:00 - Trade Management Added');
+        console.log('🚀 Dashboard Version: 2025-10-07 20:15:00 - Improved Trailing Stop UI with Quick-Select');
     </script>
 
     <!-- Trailing Stop Modal -->
     <div id="ts-modal" class="modal-overlay">
-        <div class="modal-content">
-            <h3 class="modal-title">Set Trailing Stop</h3>
-            <p style="color: #aaa; margin-bottom: 15px;">
-                Ticket: #<span id="ts-ticket"></span> (<span id="ts-symbol"></span>)
+        <div class="modal-content" style="max-width: 500px;">
+            <h3 class="modal-title">📈 Set Trailing Stop</h3>
+            <p style="color: #aaa; margin-bottom: 15px; font-size: 0.95em;">
+                Ticket: #<span id="ts-ticket"></span> • <span id="ts-symbol"></span> • <span id="ts-volume"></span> lots
             </p>
-            <label style="color: #aaa; font-size: 0.9em; display: block; margin-bottom: 8px;">Trailing Stop (pips):</label>
-            <input type="number" id="ts-input" class="modal-input" placeholder="e.g. 50" min="1" step="1">
-            <div class="modal-buttons">
+
+            <!-- Quick Select Presets -->
+            <div style="display: flex; gap: 8px; margin-bottom: 15px;">
+                <button id="ts-conservative" class="modal-btn" style="flex: 1; background: #3a4a3a; font-size: 0.85em; padding: 10px 8px; line-height: 1.3; min-height: 60px;">
+                    Conservative
+                </button>
+                <button id="ts-recommended" class="modal-btn" style="flex: 1; background: #2a5a2a; font-size: 0.85em; padding: 10px 8px; line-height: 1.3; min-height: 60px; border: 2px solid #4CAF50;">
+                    Recommended ⭐
+                </button>
+                <button id="ts-aggressive" class="modal-btn" style="flex: 1; background: #4a3a2a; font-size: 0.85em; padding: 10px 8px; line-height: 1.3; min-height: 60px;">
+                    Aggressive
+                </button>
+            </div>
+
+            <label style="color: #aaa; font-size: 0.9em; display: block; margin-bottom: 8px;">Custom Trailing Stop (pips):</label>
+            <input type="number" id="ts-input" class="modal-input" placeholder="e.g. 20" min="1" step="1">
+
+            <!-- Live € Value Display -->
+            <div id="ts-value-display" style="color: #aaa; font-size: 0.9em; margin-top: 10px; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 5px; min-height: 20px; text-align: center;">
+            </div>
+
+            <p style="color: #666; font-size: 0.8em; margin-top: 8px; line-height: 1.4;">
+                💡 <strong>Tip:</strong> Lower pips = tighter protection (locks profit sooner, higher risk of early exit).<br>
+                Higher pips = more breathing room (less protection, allows bigger swings).
+            </p>
+
+            <div class="modal-buttons" style="margin-top: 15px;">
                 <button onclick="closeModal('ts-modal')" class="modal-btn modal-btn-cancel">Cancel</button>
-                <button onclick="setTrailingStop()" class="modal-btn modal-btn-primary">Set TS</button>
+                <button onclick="setTrailingStop()" class="modal-btn modal-btn-primary">✓ Activate TS</button>
             </div>
         </div>
     </div>

@@ -144,15 +144,15 @@ def get_contract_size(symbol: str) -> float:
     """
     symbol_upper = symbol.upper()
 
-    # Forex: 1 standard lot = 100,000 units
-    if any(fx in symbol_upper for fx in ['EUR', 'GBP', 'USD', 'JPY', 'CHF', 'AUD', 'CAD', 'NZD']):
-        if 'JPY' in symbol_upper:
-            # JPY pairs: spread is in 0.01, contract is 100,000
-            # Example: 0.018 spread × 0.1 lot × 1,000 = $1.80
-            return 1000.0
-        # Non-JPY: spread is in 0.00001, contract is 100,000
-        # Example: 0.00020 spread × 0.1 lot × 100,000 = $2.00
-        return 100000.0
+    # IMPORTANT: Check crypto FIRST before USD check (BTCUSD, ETHUSD contain USD!)
+    # Bitcoin: 1 lot = 1 BTC (usually)
+    # Example: 8.0 spread × 0.01 lot × 1 = $0.08
+    if 'BTC' in symbol_upper:
+        return 1.0
+
+    # Ethereum: 1 lot = 1 ETH (usually)
+    if 'ETH' in symbol_upper:
+        return 1.0
 
     # Gold (XAUUSD): 1 lot = 100 oz
     # Example: 0.50 spread × 0.02 lot × 100 = $1.00
@@ -163,18 +163,19 @@ def get_contract_size(symbol: str) -> float:
     if 'XAG' in symbol_upper:
         return 50.0
 
-    # Bitcoin: 1 lot = 1 BTC (usually)
-    # Example: 8.0 spread × 0.01 lot × 1 = $0.08
-    if 'BTC' in symbol_upper:
-        return 1.0
-
-    # Ethereum: 1 lot = 1 ETH (usually)
-    if 'ETH' in symbol_upper:
-        return 1.0
-
     # Indices: 1 lot = 1 contract (usually $1 per point)
     if any(idx in symbol_upper for idx in ['DAX', 'DE40', 'SPX', 'US500', 'NDX', 'US100']):
         return 1.0
+
+    # Forex: 1 standard lot = 100,000 units (check AFTER crypto/metals/indices!)
+    if any(fx in symbol_upper for fx in ['EUR', 'GBP', 'USD', 'JPY', 'CHF', 'AUD', 'CAD', 'NZD']):
+        if 'JPY' in symbol_upper:
+            # JPY pairs: spread is in 0.01, contract is 100,000
+            # Example: 0.018 spread × 0.1 lot × 1,000 = $1.80
+            return 1000.0
+        # Non-JPY: spread is in 0.00001, contract is 100,000
+        # Example: 0.00020 spread × 0.1 lot × 100,000 = $2.00
+        return 100000.0
 
     # Default: assume Forex
     return 100000.0

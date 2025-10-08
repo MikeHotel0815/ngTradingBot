@@ -9,7 +9,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Dict, Optional, Tuple
 from sqlalchemy.orm import Session
-from models import Trade, Command, GlobalSettings, Tick
+from models import Trade, Command, GlobalSettings, Tick, BrokerSymbol
 from database import ScopedSession
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ class TrailingStopManager:
             # Stage 1: Break-even
             'breakeven_enabled': True,
             'breakeven_trigger_percent': 30.0,  # Move to BE at 30% of TP distance
-            'breakeven_offset_points': 5.0,     # Offset above/below entry (covers spread)
+            'breakeven_offset_pips': 2.0,       # Offset above/below entry (covers spread)
 
             # Stage 2: Partial trailing
             'partial_trailing_trigger_percent': 50.0,  # Start at 50% of TP distance
@@ -87,6 +87,108 @@ class TrailingStopManager:
             logger.warning(f"Could not load trailing stop settings, using defaults: {e}")
             return self.default_settings
 
+    def get_symbol_info(self, db: Session, symbol: str, account_id: int) -> Dict:
+        """Get symbol specifications from BrokerSymbol table"""
+        try:
+            broker_symbol = db.query(BrokerSymbol).filter_by(
+                account_id=account_id,
+                symbol=symbol
+            ).first()
+
+            if broker_symbol:
+                return {
+                    'digits': int(broker_symbol.digits),
+                    'point': float(broker_symbol.point_value),
+                    'stops_level': int(broker_symbol.stops_level) if broker_symbol.stops_level else 10
+                }
+            else:
+                # Fallback: derive from symbol name
+                logger.warning(f"No BrokerSymbol entry for {symbol}, using fallback")
+                if 'JPY' in symbol:
+                    return {'digits': 3, 'point': 0.001, 'stops_level': 10}
+                else:
+                    return {'digits': 5, 'point': 0.00001, 'stops_level': 10}
+        except Exception as e:
+            logger.error(f"Error loading symbol info: {e}")
+            # Safe fallback
+            return {'digits': 5, 'point': 0.00001, 'stops_level': 10}
+
+    def get_current_spread(self, db: Session, symbol: str, account_id: int) -> float:
+        """Get current spread from latest tick"""
+        try:
+            latest_tick = db.query(Tick).filter_by(
+                account_id=account_id,
+                symbol=symbol
+            ).order_by(Tick.timestamp.desc()).first()
+
+            if latest_tick:
+                spread = float(latest_tick.ask) - float(latest_tick.bid)
+                return spread
+            else:
+                logger.warning(f"No tick data for {symbol}, using default spread")
+                return 0.00020  # Default 2 pips spread
+        except Exception as e:
+            logger.error(f"Error getting spread: {e}")
+            return 0.00020
+
+    def calculate_dynamic_pip_distance(self, trade: Trade, db: Session, symbol_info: Dict) -> float:
+        """
+        Calculate dynamic pip distance based on position size and account balance
+        Returns distance in PIPS (not price points)
+
+        Logic:
+        - Smaller positions (< 0.05 lots) = 10-20 pips
+        - Medium positions (0.05-0.1 lots) = 20-30 pips
+        - Larger positions (> 0.1 lots) = 30-50 pips
+        - Adjusted by account balance (higher balance = can afford wider stops)
+        """
+        try:
+            volume = float(trade.volume)
+
+            # Get account balance
+            from models import Account
+            account = db.query(Account).filter_by(id=trade.account_id).first()
+            balance = float(account.balance) if account and account.balance else 1000.0
+
+            # Base pip distance calculation
+            if volume <= 0.01:
+                base_pips = 10  # Micro lots: very tight
+            elif volume <= 0.05:
+                base_pips = 15  # Small positions
+            elif volume <= 0.1:
+                base_pips = 25  # Medium positions
+            elif volume <= 0.5:
+                base_pips = 35  # Larger positions
+            else:
+                base_pips = 50  # Very large positions
+
+            # Adjust based on account balance (risk management)
+            # Larger accounts can afford slightly wider stops for better breathing room
+            if balance >= 5000:
+                balance_multiplier = 1.3
+            elif balance >= 1000:
+                balance_multiplier = 1.1
+            else:
+                balance_multiplier = 1.0  # Small accounts need tight stops
+
+            dynamic_pips = base_pips * balance_multiplier
+
+            # Apply min/max limits
+            min_pips = max(10, symbol_info.get('stops_level', 10))
+            max_pips = 100
+
+            dynamic_pips = max(min_pips, min(dynamic_pips, max_pips))
+
+            logger.debug(f"Dynamic pip calculation for {trade.symbol} (vol={volume}): "
+                        f"base={base_pips}, balance_mult={balance_multiplier:.2f}, "
+                        f"final={dynamic_pips:.2f} pips (limits: {min_pips}-{max_pips})")
+
+            return dynamic_pips
+
+        except Exception as e:
+            logger.error(f"Error calculating dynamic pips: {e}")
+            return 20.0  # Safe fallback
+
     def should_update_trailing_stop(self, trade: Trade) -> bool:
         """Check if enough time has passed since last update"""
         now = datetime.utcnow()
@@ -104,10 +206,12 @@ class TrailingStopManager:
         self,
         trade: Trade,
         current_price: float,
-        settings: Dict
+        settings: Dict,
+        db: Session = None
     ) -> Optional[Dict]:
         """
         Calculate new trailing stop level based on current price and profit
+        Uses dynamic pip calculation based on position size and account balance
 
         Returns:
             Dict with 'new_sl', 'stage', 'reason' or None if no adjustment needed
@@ -132,6 +236,26 @@ class TrailingStopManager:
                 logger.debug(f"Trade {trade.ticket} has no SL, skipping trailing stop")
                 return None
 
+            # Get symbol specifications and spread
+            if db:
+                symbol_info = self.get_symbol_info(db, trade.symbol, trade.account_id)
+                spread = self.get_current_spread(db, trade.symbol, trade.account_id)
+                dynamic_pips = self.calculate_dynamic_pip_distance(trade, db, symbol_info)
+
+                # Store for use in calculations
+                settings['dynamic_trailing_pips'] = dynamic_pips
+                settings['symbol_point'] = symbol_info['point']
+                settings['symbol_digits'] = symbol_info['digits']
+                settings['current_spread'] = spread
+
+                logger.info(f"Trade {trade.ticket}: Using {dynamic_pips:.2f} pips trailing stop "
+                           f"(point={symbol_info['point']}, spread={spread/symbol_info['point']:.1f} pips)")
+            else:
+                settings['dynamic_trailing_pips'] = 20.0  # Fallback
+                settings['symbol_point'] = 0.00001
+                settings['symbol_digits'] = 5
+                settings['current_spread'] = 0.00020
+
             # Calculate distances
             if is_buy:
                 # BUY trade
@@ -150,7 +274,8 @@ class TrailingStopManager:
             logger.debug(
                 f"Trade {trade.ticket} ({trade.symbol}): "
                 f"Profit {profit_percent:.1f}% of TP distance, "
-                f"Current SL distance: {sl_distance:.5f}"
+                f"Current SL distance: {sl_distance:.5f}, "
+                f"Dynamic pips: {settings.get('dynamic_trailing_pips', 20):.2f}"
             )
 
             # Determine which stage to apply
@@ -229,15 +354,23 @@ class TrailingStopManager:
         entry_price: float,
         settings: Dict
     ) -> Tuple[float, str]:
-        """Calculate break-even SL"""
-        offset = settings['breakeven_offset_points'] * 0.00001  # Convert points to price
+        """Calculate break-even SL with spread protection"""
+        symbol_point = settings.get('symbol_point', 0.00001)
+        spread = settings.get('current_spread', 0.00020)
+        dynamic_pips = settings.get('dynamic_trailing_pips', 20.0)
+
+        # Offset = spread + 30% of dynamic trailing pips (for safety buffer)
+        spread_pips = spread / symbol_point
+        safety_pips = dynamic_pips * 0.3
+        total_offset_pips = spread_pips + safety_pips
+        offset = total_offset_pips * symbol_point
 
         if is_buy:
-            new_sl = entry_price + offset  # Slightly above entry
+            new_sl = entry_price + offset  # Entry + spread + buffer
         else:
-            new_sl = entry_price - offset  # Slightly below entry
+            new_sl = entry_price - offset  # Entry - spread - buffer
 
-        return new_sl, f"Break-even + {settings['breakeven_offset_points']} points"
+        return new_sl, f"Break-even + {total_offset_pips:.1f} pips (spread {spread_pips:.1f} + buffer {safety_pips:.1f})"
 
     def _calculate_partial_trailing(
         self,
@@ -246,15 +379,19 @@ class TrailingStopManager:
         tp_distance: float,
         settings: Dict
     ) -> Tuple[float, str]:
-        """Calculate partial trailing SL"""
-        trail_distance = tp_distance * (settings['partial_trailing_distance_percent'] / 100)
+        """Calculate partial trailing SL using dynamic pip distance"""
+        symbol_point = settings.get('symbol_point', 0.00001)
+        dynamic_pips = settings.get('dynamic_trailing_pips', 20.0)
+
+        # Use 100% of dynamic pips for partial trailing
+        trail_distance = dynamic_pips * symbol_point
 
         if is_buy:
             new_sl = current_price - trail_distance
         else:
             new_sl = current_price + trail_distance
 
-        return new_sl, f"Partial trail {settings['partial_trailing_distance_percent']}%"
+        return new_sl, f"Partial trail {dynamic_pips:.1f} pips"
 
     def _calculate_aggressive_trailing(
         self,
@@ -263,15 +400,20 @@ class TrailingStopManager:
         tp_distance: float,
         settings: Dict
     ) -> Tuple[float, str]:
-        """Calculate aggressive trailing SL"""
-        trail_distance = tp_distance * (settings['aggressive_trailing_distance_percent'] / 100)
+        """Calculate aggressive trailing SL using tighter dynamic pips"""
+        symbol_point = settings.get('symbol_point', 0.00001)
+        dynamic_pips = settings.get('dynamic_trailing_pips', 20.0)
+
+        # Use 60% of dynamic pips for aggressive trailing (tighter)
+        aggressive_pips = dynamic_pips * 0.6
+        trail_distance = aggressive_pips * symbol_point
 
         if is_buy:
             new_sl = current_price - trail_distance
         else:
             new_sl = current_price + trail_distance
 
-        return new_sl, f"Aggressive trail {settings['aggressive_trailing_distance_percent']}%"
+        return new_sl, f"Aggressive trail {aggressive_pips:.1f} pips"
 
     def _calculate_near_tp_protection(
         self,
@@ -280,15 +422,20 @@ class TrailingStopManager:
         tp_distance: float,
         settings: Dict
     ) -> Tuple[float, str]:
-        """Calculate near-TP protection SL"""
-        trail_distance = tp_distance * (settings['near_tp_trailing_distance_percent'] / 100)
+        """Calculate near-TP protection SL using very tight dynamic pips"""
+        symbol_point = settings.get('symbol_point', 0.00001)
+        dynamic_pips = settings.get('dynamic_trailing_pips', 20.0)
+
+        # Use 40% of dynamic pips for near-TP protection (very tight)
+        near_tp_pips = dynamic_pips * 0.4
+        trail_distance = near_tp_pips * symbol_point
 
         if is_buy:
             new_sl = current_price - trail_distance
         else:
             new_sl = current_price + trail_distance
 
-        return new_sl, f"Near-TP protection {settings['near_tp_trailing_distance_percent']}%"
+        return new_sl, f"Near-TP protection {near_tp_pips:.1f} pips"
 
     def _validate_new_sl(
         self,
@@ -396,8 +543,8 @@ class TrailingStopManager:
             # Load settings
             settings = self._load_settings(db)
 
-            # Calculate new trailing stop
-            result = self.calculate_trailing_stop(trade, current_price, settings)
+            # Calculate new trailing stop with dynamic pip calculation
+            result = self.calculate_trailing_stop(trade, current_price, settings, db=db)
 
             if not result:
                 return None
@@ -425,6 +572,159 @@ class TrailingStopManager:
 
         except Exception as e:
             logger.error(f"Error processing trade {trade.ticket} for trailing stop: {e}")
+            return None
+
+    def _calculate_price_to_eur(self, symbol: str, price_diff: float, volume: float, current_price: float) -> float:
+        """
+        Convert price difference to EUR value based on symbol type.
+
+        Args:
+            symbol: Trading symbol (e.g., 'EURUSD', 'USDJPY', 'XAUUSD')
+            price_diff: Price difference in symbol's price units
+            volume: Position volume in lots
+            current_price: Current market price (for conversion)
+
+        Returns:
+            EUR value of the price difference
+        """
+        symbol_upper = symbol.upper()
+
+        # For XXX/EUR pairs: quote currency is EUR, direct calculation
+        if symbol_upper.endswith('EUR'):
+            from spread_utils import get_contract_size
+            contract_size = get_contract_size(symbol)
+            return price_diff * volume * contract_size
+
+        # For EUR/XXX pairs: base currency is EUR
+        if symbol_upper.startswith('EUR'):
+            from spread_utils import get_contract_size
+            contract_size = get_contract_size(symbol)
+            profit_in_usd = price_diff * volume * contract_size
+            return profit_in_usd  # Assume USD ≈ EUR for simplicity
+
+        # For XXX/JPY pairs: quote currency is JPY, need to convert
+        if symbol_upper.endswith('JPY'):
+            # Profit in JPY = price_diff × volume × 100,000
+            # Profit in USD/EUR = Profit_JPY / current_price
+            profit_in_jpy = price_diff * volume * 100000
+            profit_in_usd = profit_in_jpy / current_price
+            return profit_in_usd  # Assume USD ≈ EUR for simplicity
+
+        # For USD pairs (quote is USD): XXXUSD
+        if symbol_upper.endswith('USD'):
+            from spread_utils import get_contract_size
+            contract_size = get_contract_size(symbol)
+            profit_in_usd = price_diff * volume * contract_size
+            return profit_in_usd  # Assume USD ≈ EUR for simplicity
+
+        # Default: use standard formula
+        from spread_utils import get_contract_size
+        contract_size = get_contract_size(symbol)
+        return price_diff * volume * contract_size
+
+    def get_trailing_stop_info(
+        self,
+        trade: Trade,
+        current_price: float,
+        db: Session
+    ) -> Optional[Dict]:
+        """
+        Get current trailing stop information for display purposes
+
+        Returns:
+            Dict with trailing stop stage, profit %, next trigger, etc.
+        """
+        try:
+            # Load settings
+            settings = self._load_settings(db)
+
+            if not settings.get('trailing_stop_enabled', True):
+                return None
+
+            # Determine direction
+            is_buy = trade.direction.upper() in ['BUY', '0'] if isinstance(trade.direction, str) else trade.direction == 0
+
+            # Get entry, SL, TP (convert all to float to avoid Decimal type issues)
+            try:
+                entry_price = float(trade.open_price) if trade.open_price is not None else 0.0
+                current_sl = float(trade.sl) if trade.sl is not None else None
+                tp_price = float(trade.tp) if trade.tp is not None else None
+                current_price = float(current_price) if current_price is not None else 0.0
+            except (ValueError, TypeError) as e:
+                logger.error(f"Error converting trade {trade.ticket} values to float: {e}")
+                return None
+
+            if not tp_price or not current_sl:
+                return None
+
+            # Calculate distances
+            if is_buy:
+                tp_distance = tp_price - entry_price
+                current_profit_distance = current_price - entry_price
+                sl_distance_pips = (current_price - current_sl) / 0.0001  # Rough pip estimate
+                sl_distance_price = current_price - current_sl
+            else:
+                tp_distance = entry_price - tp_price
+                current_profit_distance = entry_price - current_price
+                sl_distance_pips = (current_sl - current_price) / 0.0001  # Rough pip estimate
+                sl_distance_price = current_sl - current_price
+
+            # Calculate profit as percentage of TP distance
+            profit_percent = (current_profit_distance / tp_distance * 100) if tp_distance > 0 else 0
+
+            # Calculate EUR value for SL distance using symbol-specific conversion
+            volume = float(trade.volume) if trade.volume else 0.0
+            if sl_distance_price > 0:
+                sl_distance_eur = self._calculate_price_to_eur(
+                    trade.symbol, sl_distance_price, volume, current_price
+                )
+            else:
+                sl_distance_eur = 0
+
+            # Determine current stage
+            stage = None
+            stage_label = "None"
+            next_trigger = None
+            next_trigger_percent = None
+
+            if profit_percent >= settings['near_tp_trigger_percent']:
+                stage = "near_tp"
+                stage_label = "Near TP"
+                next_trigger = None  # Final stage
+            elif profit_percent >= settings['aggressive_trailing_trigger_percent']:
+                stage = "aggressive"
+                stage_label = "Aggressive"
+                next_trigger = "Near TP"
+                next_trigger_percent = settings['near_tp_trigger_percent']
+            elif profit_percent >= settings['partial_trailing_trigger_percent']:
+                stage = "partial"
+                stage_label = "Partial"
+                next_trigger = "Aggressive"
+                next_trigger_percent = settings['aggressive_trailing_trigger_percent']
+            elif settings.get('breakeven_enabled') and profit_percent >= settings['breakeven_trigger_percent']:
+                stage = "breakeven"
+                stage_label = "Break-Even"
+                next_trigger = "Partial"
+                next_trigger_percent = settings['partial_trailing_trigger_percent']
+            else:
+                stage = "waiting"
+                stage_label = "Waiting"
+                next_trigger = "Break-Even" if settings.get('breakeven_enabled') else "Partial"
+                next_trigger_percent = settings['breakeven_trigger_percent'] if settings.get('breakeven_enabled') else settings['partial_trailing_trigger_percent']
+
+            return {
+                'enabled': True,
+                'stage': stage,
+                'stage_label': stage_label,
+                'profit_percent': round(profit_percent, 1),
+                'sl_distance_pips': round(sl_distance_pips, 1),
+                'sl_distance_eur': round(sl_distance_eur, 2),
+                'next_trigger': next_trigger,
+                'next_trigger_percent': next_trigger_percent
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting trailing stop info for trade {trade.ticket}: {e}")
             return None
 
 
