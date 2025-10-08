@@ -3046,7 +3046,8 @@
                             <th>Close</th>
                             <th>Duration</th>
                             <th>Profit</th>
-                            <th>Reason</th>
+                            <th>Entry Reason</th>
+                            <th>Exit Reason</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -3072,7 +3073,8 @@
                         <td style="font-size: 0.8em;">${closeTime}</td>
                         <td>${duration}</td>
                         <td style="color: ${profitColor}; font-weight: 700;">${trade.profit > 0 ? '+' : ''}€${trade.profit ? trade.profit.toFixed(2) : '0.00'}</td>
-                        <td style="font-size: 0.8em;">${trade.close_reason || '-'}</td>
+                        <td style="font-size: 0.8em; color: #888;">${trade.entry_reason || '-'}</td>
+                        <td style="font-size: 0.8em; color: ${trade.close_reason ? (trade.close_reason === 'TP_HIT' ? '#4CAF50' : trade.close_reason === 'SL_HIT' ? '#f44336' : '#FFA500') : '#888'};">${trade.close_reason || '-'}</td>
                     </tr>
                 `;
             });

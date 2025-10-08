@@ -1864,6 +1864,44 @@ def sync_trades(account, db):
                 logger.info(f"🔄 Trade sync update: {existing_trade.symbol} #{ticket} profit={existing_trade.profit}")
             else:
                 # Create new trade record
+                # Try to find linked signal to generate entry_reason
+                entry_reason = None
+                command_id = trade_data.get('command_id')
+                if command_id:
+                    # Find the command that created this trade
+                    from models import Command, TradingSignal
+                    command = db.query(Command).filter_by(id=command_id).first()
+                    if command and command.payload:
+                        signal_id = command.payload.get('signal_id')
+                        if signal_id:
+                            signal = db.query(TradingSignal).filter_by(id=signal_id).first()
+                            if signal:
+                                # Build entry reason from signal data
+                                patterns = []
+                                if signal.pattern_data:
+                                    patterns = [p.get('name', 'Pattern') for p in signal.pattern_data if isinstance(signal.pattern_data, list)]
+                                    patterns = patterns[:2]  # Limit to 2 patterns
+
+                                reason_parts = []
+                                if patterns:
+                                    reason_parts.append(f"Patterns: {', '.join(patterns)}")
+                                if signal.confidence:
+                                    reason_parts.append(f"{signal.confidence:.1f}% confidence")
+                                if signal.timeframe:
+                                    reason_parts.append(f"{signal.timeframe} timeframe")
+
+                                entry_reason = " | ".join(reason_parts) if reason_parts else "Auto-traded signal"
+
+                # Fallback entry reasons based on source
+                if not entry_reason:
+                    source = trade_data.get('source', 'MT5')
+                    if source == 'autotrade':
+                        entry_reason = "Auto-trade (signal details unavailable)"
+                    elif source == 'MT5':
+                        entry_reason = "Manual trade (MT5)"
+                    else:
+                        entry_reason = f"Trade from {source}"
+
                 new_trade = Trade(
                     account_id=account.id,
                     ticket=ticket,
@@ -1881,7 +1919,8 @@ def sync_trades(account, db):
                     commission=trade_data.get('commission'),
                     swap=trade_data.get('swap'),
                     source=trade_data.get('source', 'MT5'),  # MT5, Dashboard, AutoTrade
-                    command_id=trade_data.get('command_id'),
+                    command_id=command_id,
+                    entry_reason=entry_reason,
                     response_data=trade_data.get('response_data'),
                     status=trade_data.get('status', 'open'),
                     created_at=datetime.utcnow(),
@@ -3473,6 +3512,7 @@ def get_trade_history():
                     'source': trade.source,
                     'timeframe': trade.timeframe,
                     'confidence': confidence,
+                    'entry_reason': trade.entry_reason,
                     'close_reason': trade.close_reason,
                     'signal_id': trade.signal_id,
                     'status': trade.status,

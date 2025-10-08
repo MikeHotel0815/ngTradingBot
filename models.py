@@ -174,6 +174,7 @@ class Trade(Base):
     command_id = Column(String(64), index=True)  # Link to command if ea_command
     signal_id = Column(Integer, ForeignKey('trading_signals.id'))  # Link to signal if from autotrade
     timeframe = Column(String(10))  # Timeframe signal was generated on
+    entry_reason = Column(String(200))  # Why trade was opened: pattern, indicator confluence, etc
     close_reason = Column(String(100))  # TP_HIT, SL_HIT, MANUAL, TRAILING_STOP, etc
     response_data = Column(JSONB)  # Full EA response
     status = Column(String(20), default='open')  # open, closed, cancelled
