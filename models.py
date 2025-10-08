@@ -351,8 +351,8 @@ class AutoTradeConfig(Base):
     id = Column(Integer, primary_key=True)
     account_id = Column(Integer, ForeignKey('accounts.id'), unique=True, nullable=False)
 
-    # Enable/Disable
-    enabled = Column(Boolean, default=False, nullable=False)
+    # Enable/Disable - ✅ ENABLED BY DEFAULT as requested
+    enabled = Column(Boolean, default=True, nullable=False)
 
     # Risk Management
     max_positions = Column(Integer, default=5, nullable=False)
@@ -360,8 +360,8 @@ class AutoTradeConfig(Base):
     position_size_percent = Column(Numeric(5, 4), default=0.01)  # 1% of balance per trade
     max_drawdown_percent = Column(Numeric(5, 4), default=0.10)  # 10% max drawdown
 
-    # Signal Filtering
-    min_signal_confidence = Column(Numeric(5, 4), default=0.60)  # 60% minimum confidence
+    # Signal Filtering - ✅ 60% DEFAULT CONFIDENCE as requested
+    min_signal_confidence = Column(Numeric(5, 4), default=0.60)  # 60% minimum confidence (default)
     allowed_timeframes = Column(String(100), default='M5,M15,H1,H4')  # Comma-separated
     allowed_symbols = Column(Text)  # Comma-separated, NULL = all
 
@@ -555,6 +555,7 @@ class GlobalSettings(Base):
     
     # Risk Management
     max_positions = Column(Integer, default=5, nullable=False)
+    max_positions_per_symbol_timeframe = Column(Integer, default=1, nullable=False)  # Max 1 position per symbol+timeframe
     risk_per_trade_percent = Column(Numeric(5, 4), default=0.02, nullable=False)  # 2%
     position_size_percent = Column(Numeric(5, 4), default=0.01, nullable=False)  # 1%
     max_drawdown_percent = Column(Numeric(5, 4), default=0.10, nullable=False)  # 10%
@@ -936,6 +937,9 @@ class ShadowTrade(Base):
     profit = Column(Numeric(15, 2))
     profit_percent = Column(Numeric(10, 4))
     duration_minutes = Column(Integer)
+
+    # Status
+    status = Column(String(20), default='open', nullable=False)  # open, closed
 
     # Signal Info
     signal_confidence = Column(Numeric(5, 2))

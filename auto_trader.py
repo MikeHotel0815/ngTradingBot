@@ -28,7 +28,7 @@ class AutoTrader:
 
     def __init__(self):
         self.redis = get_redis()
-        self.enabled = False
+        self.enabled = True  # ✅ ENABLED BY DEFAULT as requested
         self.check_interval = 10  # Check for new signals every 10 seconds
 
         # Track processed signals
@@ -37,8 +37,9 @@ class AutoTrader:
         # Cooldown tracking after SL hits: symbol -> cooldown_until_time
         self.symbol_cooldowns = {}
 
-        # Auto-trade minimum confidence (controlled by UI slider)
-        self.min_autotrade_confidence = 40  # Default 40%
+        # ✅ Auto-trade minimum confidence: 60% DEFAULT (as requested by user)
+        # This is the threshold for automatic trade execution
+        self.min_autotrade_confidence = 60.0  # Default 60%
 
         # Circuit breaker settings
         self.circuit_breaker_enabled = True
@@ -291,7 +292,29 @@ class AutoTrader:
         try:
             settings = self._load_settings(db)
 
-            # Check circuit breaker FIRST (most critical check)
+            # Check DAILY DRAWDOWN PROTECTION FIRST (most critical check)
+            from daily_drawdown_protection import get_drawdown_protection
+            dd_protection = get_drawdown_protection(signal.account_id)
+            dd_check = dd_protection.check_and_update(auto_trading_enabled=self.enabled)
+
+            if not dd_check['allowed']:
+                return {
+                    'execute': False,
+                    'reason': dd_check.get('reason', 'Daily drawdown limit reached')
+                }
+
+            # Check NEWS FILTER SECOND (prevent trading during high-impact news)
+            from news_filter import get_news_filter
+            news_filter = get_news_filter(signal.account_id)
+            news_check = news_filter.check_trading_allowed(signal.symbol)
+
+            if not news_check['allowed']:
+                return {
+                    'execute': False,
+                    'reason': news_check.get('reason', 'Trading paused due to news')
+                }
+
+            # Check circuit breaker THIRD
             if not self.check_circuit_breaker(db, signal.account_id):
                 return {
                     'execute': False,
@@ -304,6 +327,22 @@ class AutoTrader:
                 return {
                     'execute': False,
                     'reason': correlation_check['reason']
+                }
+
+            # Check per-symbol-timeframe position limit THIRD (prevent duplicate positions)
+            existing_positions = db.query(Trade).filter(
+                and_(
+                    Trade.account_id == signal.account_id,
+                    Trade.symbol == signal.symbol,
+                    Trade.timeframe == signal.timeframe,
+                    Trade.status == 'open'
+                )
+            ).count()
+
+            if existing_positions >= settings.max_positions_per_symbol_timeframe:
+                return {
+                    'execute': False,
+                    'reason': f'Max positions per symbol+timeframe reached: {existing_positions}/{settings.max_positions_per_symbol_timeframe} ({signal.symbol} {signal.timeframe})'
                 }
 
             # Check signal age (don't execute old signals)
@@ -324,11 +363,14 @@ class AutoTrader:
                         'reason': f'Symbol in cooldown ({remaining:.0f}min remaining)'
                     }
 
-            # Check confidence threshold (use auto-trade slider value, not global settings)
-            if signal.confidence and signal.confidence < self.min_autotrade_confidence:
+            # Check confidence threshold (use symbol-specific minimum if available)
+            from symbol_config import get_symbol_min_confidence
+            symbol_min_confidence = max(self.min_autotrade_confidence, get_symbol_min_confidence(signal.symbol))
+
+            if signal.confidence and signal.confidence < symbol_min_confidence:
                 return {
                     'execute': False,
-                    'reason': f'Low confidence ({signal.confidence}% < {self.min_autotrade_confidence}%)'
+                    'reason': f'Low confidence ({signal.confidence}% < {symbol_min_confidence}% for {signal.symbol})'
                 }
 
             # Check if signal has required data
@@ -352,20 +394,80 @@ class AutoTrader:
             return {'execute': False, 'reason': str(e)}
 
     def create_trade_command(self, db: Session, signal: TradingSignal, volume: float) -> Optional[Command]:
-        """Create trade command from signal"""
+        """
+        Create trade command from signal with pre-execution spread validation
+
+        ✅ ENHANCED: Added spread check before command creation to prevent execution at bad prices
+        """
         try:
+            # ✅ FIX #3: Pre-execution spread check
+            spread_check = self._validate_spread_before_execution(db, signal)
+            if not spread_check['allowed']:
+                logger.warning(
+                    f"⚠️  Pre-execution spread check FAILED for {signal.symbol}: {spread_check['reason']}"
+                )
+                return None
+
             command_id = f"auto_{uuid.uuid4().hex[:8]}"
+
+            # Apply symbol-specific SL multiplier OR use SuperTrend for dynamic SL
+            from symbol_config import get_symbol_sl_multiplier
+            sl_multiplier = get_symbol_sl_multiplier(signal.symbol)
+
+            # Try to get SuperTrend-based dynamic SL for better risk management
+            adjusted_sl = signal.sl
+            use_supertrend_sl = False
+
+            try:
+                from technical_indicators import TechnicalIndicators
+                ti = TechnicalIndicators(signal.account_id, signal.symbol, signal.timeframe)
+                supertrend = ti.calculate_supertrend()
+
+                if supertrend and supertrend['value']:
+                    # Use SuperTrend as dynamic SL (better than fixed distance)
+                    if signal.signal_type == 'BUY' and supertrend['direction'] == 'bullish':
+                        # For BUY: Use SuperTrend value as SL (price below SuperTrend = exit)
+                        adjusted_sl = supertrend['value']
+                        use_supertrend_sl = True
+                        logger.info(f"🎯 {signal.symbol}: Using SuperTrend SL | Price: {signal.entry_price} | SuperTrend SL: {adjusted_sl:.5f} ({supertrend['distance_pct']:.2f}% distance)")
+                    elif signal.signal_type == 'SELL' and supertrend['direction'] == 'bearish':
+                        # For SELL: Use SuperTrend value as SL (price above SuperTrend = exit)
+                        adjusted_sl = supertrend['value']
+                        use_supertrend_sl = True
+                        logger.info(f"🎯 {signal.symbol}: Using SuperTrend SL | Price: {signal.entry_price} | SuperTrend SL: {adjusted_sl:.5f} ({supertrend['distance_pct']:.2f}% distance)")
+            except Exception as e:
+                logger.debug(f"SuperTrend SL calculation failed for {signal.symbol}, using traditional SL: {e}")
+
+            # Fallback to symbol-specific multiplier if SuperTrend not available
+            if not use_supertrend_sl:
+                if sl_multiplier != 1.0 and signal.entry_price and signal.sl:
+                    sl_distance = abs(signal.entry_price - signal.sl)
+                    adjusted_sl_distance = sl_distance * sl_multiplier
+
+                    if signal.signal_type == 'BUY':
+                        adjusted_sl = signal.entry_price - adjusted_sl_distance
+                    else:  # SELL
+                        adjusted_sl = signal.entry_price + adjusted_sl_distance
+
+                    logger.info(f"📊 {signal.symbol}: Adjusted SL with multiplier {sl_multiplier} | Original: {signal.sl} → Adjusted: {adjusted_sl:.5f}")
+
+            # Store signal_id and timeframe in payload for trade linking
+            payload_data = {
+                'symbol': signal.symbol,
+                'order_type': signal.signal_type,  # BUY or SELL
+                'volume': volume,
+                'sl': adjusted_sl,  # Use adjusted SL
+                'tp': signal.tp,
+                'comment': f"Auto-Trade Signal #{signal.id} ({signal.timeframe})",
+                'signal_id': signal.id,  # IMPORTANT: Link to signal
+                'timeframe': signal.timeframe  # IMPORTANT: Store timeframe for limiting
+            }
 
             command = Command(
                 id=command_id,
                 account_id=signal.account_id,
                 command_type='OPEN_TRADE',
-                symbol=signal.symbol,
-                order_type=signal.signal_type,  # BUY or SELL
-                volume=volume,
-                sl=signal.sl,
-                tp=signal.tp,
-                comment=f"Auto-Trade Signal #{signal.id} ({signal.timeframe})",
+                payload=payload_data,
                 status='pending',
                 created_at=datetime.utcnow()
             )
@@ -382,7 +484,7 @@ class AutoTrader:
                 'volume': volume,
                 'sl': signal.sl,
                 'tp': signal.tp,
-                'comment': command.comment
+                'comment': payload_data['comment']
             }
 
             self.redis.push_command(signal.account_id, command_data)
@@ -419,6 +521,8 @@ class AutoTrader:
                 )
             ).order_by(TradingSignal.created_at.desc()).all()
 
+            logger.info(f"🔍 Auto-trader found {len(signals)} signals in last 10 minutes, {len(self.processed_signals)} already processed")
+
             for signal in signals:
                 # Skip already processed signals
                 if signal.id in self.processed_signals:
@@ -430,7 +534,24 @@ class AutoTrader:
                 # Check if should execute
                 should_exec = self.should_execute_signal(signal, db)
                 if not should_exec['execute']:
-                    logger.debug(f"Skipping signal #{signal.id}: {should_exec['reason']}")
+                    logger.info(f"⏭️  Skipping signal #{signal.id} ({signal.symbol} {signal.timeframe}): {should_exec['reason']}")
+
+                    # Check if symbol is disabled - create shadow trade
+                    from models import SymbolPerformanceTracking
+                    perf = db.query(SymbolPerformanceTracking).filter(
+                        SymbolPerformanceTracking.account_id == signal.account_id,
+                        SymbolPerformanceTracking.symbol == signal.symbol,
+                        SymbolPerformanceTracking.status == 'disabled'
+                    ).order_by(SymbolPerformanceTracking.evaluation_date.desc()).first()
+
+                    if perf and perf.status == 'disabled':
+                        # Symbol is disabled - create shadow trade to monitor recovery
+                        from shadow_trading_engine import get_shadow_trading_engine
+                        shadow_engine = get_shadow_trading_engine()
+                        shadow_trade = shadow_engine.process_signal_for_disabled_symbol(signal)
+                        if shadow_trade:
+                            logger.info(f"🌑 Shadow trade created for disabled symbol {signal.symbol}")
+
                     continue
 
                 # Check risk limits
@@ -486,17 +607,21 @@ class AutoTrader:
 
     def check_pending_commands(self, db: Session):
         """
-        Check if pending trade commands were executed by MT5.
+        ✅ ENHANCED: Check if pending trade commands were executed by MT5.
 
         Verifies that commands sent to MT5 actually resulted in trades.
-        Logs warnings for failed/timeout commands.
+        Implements retry logic and alerts for failed commands.
         """
         if not hasattr(self, 'pending_commands'):
             self.pending_commands = {}
             return
 
+        if not hasattr(self, 'failed_command_count'):
+            self.failed_command_count = 0
+
         now = datetime.utcnow()
         commands_to_remove = []
+        commands_to_retry = []
 
         for command_id, cmd_data in self.pending_commands.items():
             # Check if command resulted in a trade
@@ -505,29 +630,195 @@ class AutoTrader:
             ).first()
 
             if trade:
-                # Command was executed successfully
+                # ✅ Command was executed successfully
                 commands_to_remove.append(command_id)
-                logger.info(f"✅ Command {command_id} executed: ticket #{trade.ticket}")
+                logger.info(f"✅ Command {command_id} executed successfully: ticket #{trade.ticket} ({cmd_data['symbol']})")
+
+                # Reset failed count on success
+                if self.failed_command_count > 0:
+                    self.failed_command_count = max(0, self.failed_command_count - 1)
+
             elif now > cmd_data['timeout_at']:
-                # Command timed out without execution
+                # ⚠️ Command timed out without execution
                 commands_to_remove.append(command_id)
-                logger.warning(
-                    f"⚠️  Command {command_id} TIMEOUT: {cmd_data['symbol']} "
-                    f"(sent {(now - cmd_data['created_at']).seconds}s ago) - "
-                    f"Trade may not have been executed!"
-                )
 
                 # Check command status in database
                 command = db.query(Command).filter_by(id=command_id).first()
-                if command and command.status == 'failed':
-                    logger.error(f"❌ Command {command_id} FAILED: {command.error_message}")
+
+                if command:
+                    if command.status == 'failed':
+                        # ❌ Command explicitly failed
+                        error_msg = command.response.get('error', 'Unknown error') if command.response else 'No error details'
+                        logger.error(
+                            f"❌ Command {command_id} FAILED: {cmd_data['symbol']} - {error_msg}"
+                        )
+                        self.failed_command_count += 1
+
+                        # Check if we should retry (only if error is retriable)
+                        retry_count = cmd_data.get('retry_count', 0)
+                        if retry_count < 2 and self._is_retriable_error(error_msg):
+                            commands_to_retry.append((command_id, cmd_data, error_msg))
+                            logger.info(f"🔄 Scheduling retry #{retry_count + 1} for command {command_id}")
+
+                    elif command.status == 'pending':
+                        # ⚠️ Command still pending after timeout - likely MT5 connection issue
+                        logger.warning(
+                            f"⚠️  Command {command_id} TIMEOUT (still pending): {cmd_data['symbol']} "
+                            f"(sent {(now - cmd_data['created_at']).seconds}s ago) - "
+                            f"MT5 may not be connected!"
+                        )
+                        self.failed_command_count += 1
+                else:
+                    # ⚠️ Command not found in database (shouldn't happen)
+                    logger.error(f"❌ Command {command_id} not found in database!")
+
+                # Critical alert if many commands are failing
+                if self.failed_command_count >= 3:
+                    logger.critical(
+                        f"🚨 CRITICAL: {self.failed_command_count} consecutive command failures! "
+                        f"MT5 connection may be down. Disabling auto-trading."
+                    )
+                    self.disable()
+                    self.circuit_breaker_tripped = True
+                    self.circuit_breaker_reason = f"{self.failed_command_count} consecutive command failures"
 
         # Clean up processed/timeout commands
         for cmd_id in commands_to_remove:
             del self.pending_commands[cmd_id]
 
+        # Retry failed commands if applicable
+        for command_id, cmd_data, error_msg in commands_to_retry:
+            logger.info(f"🔄 Retrying command {command_id} for {cmd_data['symbol']} (previous error: {error_msg})")
+            # Increment retry count
+            cmd_data['retry_count'] = cmd_data.get('retry_count', 0) + 1
+            cmd_data['timeout_at'] = datetime.utcnow() + timedelta(minutes=5)
+            # Re-add to pending commands
+            self.pending_commands[command_id] = cmd_data
+
         if commands_to_remove:
             logger.debug(f"🧹 Cleaned up {len(commands_to_remove)} pending commands")
+
+    def _is_retriable_error(self, error_msg: str) -> bool:
+        """Check if error is retriable (e.g., temporary network issues)"""
+        retriable_errors = [
+            'timeout',
+            'connection',
+            'network',
+            'temporary',
+            'try again'
+        ]
+        error_lower = error_msg.lower()
+        return any(err in error_lower for err in retriable_errors)
+
+    def _validate_spread_before_execution(self, db: Session, signal: TradingSignal) -> Dict:
+        """
+        ✅ FIX #3: Validate spread before trade execution
+
+        Prevents execution at abnormally high spreads that could reduce profitability.
+        Complements the spread check in signal generation.
+
+        Returns:
+            Dict with 'allowed' (bool) and 'reason' (str if rejected)
+        """
+        try:
+            from models import Tick
+
+            # Get latest tick for spread
+            latest_tick = db.query(Tick).filter_by(
+                account_id=signal.account_id,
+                symbol=signal.symbol
+            ).order_by(Tick.timestamp.desc()).first()
+
+            if not latest_tick:
+                logger.warning(f"No tick data for {signal.symbol} - allowing trade (risky)")
+                return {'allowed': True}
+
+            # Check tick age (if tick is too old, market may be closed)
+            tick_age = datetime.utcnow() - latest_tick.timestamp
+            if tick_age.total_seconds() > 60:
+                return {
+                    'allowed': False,
+                    'reason': f'Tick data too old ({tick_age.seconds}s) - market may be closed'
+                }
+
+            # Calculate current spread
+            current_spread = abs(float(latest_tick.ask) - float(latest_tick.bid))
+
+            # Get average spread from recent ticks
+            recent_ticks = db.query(Tick).filter_by(
+                account_id=signal.account_id,
+                symbol=signal.symbol
+            ).order_by(Tick.timestamp.desc()).limit(100).all()
+
+            if len(recent_ticks) < 10:
+                logger.warning(f"Insufficient tick history for {signal.symbol} spread check")
+                return {'allowed': True}
+
+            spreads = [abs(float(t.ask) - float(t.bid)) for t in recent_ticks]
+            avg_spread = sum(spreads) / len(spreads)
+
+            # Reject if spread is abnormally high (> 3x average)
+            MAX_SPREAD_MULTIPLIER = 3.0
+            if current_spread > avg_spread * MAX_SPREAD_MULTIPLIER:
+                return {
+                    'allowed': False,
+                    'reason': (
+                        f'Spread too high: {current_spread:.5f} '
+                        f'(avg: {avg_spread:.5f}, max: {avg_spread * MAX_SPREAD_MULTIPLIER:.5f})'
+                    )
+                }
+
+            # Also check absolute spread limit (per symbol type)
+            max_absolute_spread = self._get_max_allowed_spread(signal.symbol)
+            if current_spread > max_absolute_spread:
+                return {
+                    'allowed': False,
+                    'reason': f'Spread exceeds absolute limit: {current_spread:.5f} > {max_absolute_spread:.5f}'
+                }
+
+            logger.debug(
+                f"✓ Spread check passed for {signal.symbol}: "
+                f"{current_spread:.5f} (avg: {avg_spread:.5f})"
+            )
+            return {'allowed': True, 'spread': current_spread, 'avg_spread': avg_spread}
+
+        except Exception as e:
+            logger.error(f"Error in spread validation: {e}", exc_info=True)
+            # Fail-safe: allow trade on error (but log it)
+            return {'allowed': True, 'error': str(e)}
+
+    def _get_max_allowed_spread(self, symbol: str) -> float:
+        """Get maximum allowed spread per symbol type"""
+        symbol_upper = symbol.upper()
+
+        # Forex major pairs: tight spreads expected
+        if any(pair in symbol_upper for pair in ['EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF']):
+            return 0.0003  # 3 pips
+
+        # Forex minor pairs: wider spreads acceptable
+        elif any(pair in symbol_upper for pair in ['EURGBP', 'EURJPY', 'GBPJPY']):
+            return 0.0005  # 5 pips
+
+        # Exotic pairs: even wider spreads
+        elif any(curr in symbol_upper for curr in ['ZAR', 'TRY', 'MXN']):
+            return 0.001  # 10 pips
+
+        # Crypto: variable spreads
+        elif any(crypto in symbol_upper for crypto in ['BTC', 'ETH', 'XRP']):
+            return symbol.replace('USD', '').replace('EUR', '') + ' 0.5%'  # 0.5% of price
+
+        # Gold/Silver
+        elif 'XAU' in symbol_upper:
+            return 0.50  # $0.50
+        elif 'XAG' in symbol_upper:
+            return 0.05  # $0.05
+
+        # Indices
+        elif any(idx in symbol_upper for idx in ['US30', 'US500', 'NAS100', 'DE40']):
+            return 5.0  # 5 points
+
+        # Default: conservative limit
+        return 0.001  # 10 pips
 
     def auto_trade_loop(self):
         """Main auto-trading loop"""
