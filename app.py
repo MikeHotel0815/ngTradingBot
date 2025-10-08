@@ -2044,7 +2044,7 @@ def update_trade(account, db):
         data = request.get_json()
         ticket = data.get('ticket')
 
-        logger.info(f"📥 EA trade update received: ticket={ticket}, profit={data.get('profit')}, swap={data.get('swap')}, commission={data.get('commission')}")
+        logger.info(f"📥 EA trade update received: ticket={ticket}, profit={data.get('profit')}, swap={data.get('swap')}, commission={data.get('commission')}, sl={data.get('sl')}, tp={data.get('tp')}")
 
         if not ticket:
             return jsonify({'status': 'error', 'message': 'Missing ticket'}), 400

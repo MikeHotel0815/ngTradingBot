@@ -574,7 +574,7 @@ class GlobalSettings(Base):
     
     # Signal Processing
     min_signal_confidence = Column(Numeric(5, 4), default=0.60, nullable=False)  # 60%
-    signal_max_age_minutes = Column(Integer, default=5, nullable=False)
+    signal_max_age_minutes = Column(Integer, default=60, nullable=False)  # Changed from 5 to 60 minutes - 2025-10-08
     
     # Cooldown Settings
     sl_cooldown_minutes = Column(Integer, default=60, nullable=False)  # 1 hour
