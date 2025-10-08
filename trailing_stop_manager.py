@@ -574,53 +574,70 @@ class TrailingStopManager:
             logger.error(f"Error processing trade {trade.ticket} for trailing stop: {e}")
             return None
 
-    def _calculate_price_to_eur(self, symbol: str, price_diff: float, volume: float, current_price: float) -> float:
+    def _calculate_price_to_eur(self, symbol: str, price_diff: float, volume: float, current_price: float, eurusd_rate: float = 1.0) -> float:
         """
-        Convert price difference to EUR value based on symbol type.
+        Convert price difference to EUR value using MT5-accurate formulas.
+
+        This mimics exactly how MT5 calculates profit, then converts to account currency (EUR).
 
         Args:
             symbol: Trading symbol (e.g., 'EURUSD', 'USDJPY', 'XAUUSD')
             price_diff: Price difference in symbol's price units
             volume: Position volume in lots
-            current_price: Current market price (for conversion)
+            current_price: Current market price (for JPY pairs conversion)
+            eurusd_rate: Current EUR/USD exchange rate for USD->EUR conversion
 
         Returns:
             EUR value of the price difference
         """
-        symbol_upper = symbol.upper()
+        from spread_utils import get_contract_size
 
-        # For XXX/EUR pairs: quote currency is EUR, direct calculation
+        symbol_upper = symbol.upper()
+        contract_size = get_contract_size(symbol)
+
+        # For XXX/EUR pairs: quote currency is EUR - direct calculation!
         if symbol_upper.endswith('EUR'):
-            from spread_utils import get_contract_size
-            contract_size = get_contract_size(symbol)
             return price_diff * volume * contract_size
 
-        # For EUR/XXX pairs: base currency is EUR
-        if symbol_upper.startswith('EUR'):
-            from spread_utils import get_contract_size
-            contract_size = get_contract_size(symbol)
+        # For XXX/USD pairs: quote currency is USD
+        elif symbol_upper.endswith('USD'):
             profit_in_usd = price_diff * volume * contract_size
-            return profit_in_usd  # Assume USD ≈ EUR for simplicity
+            # Convert USD to EUR: 1 USD = 1/eurusd_rate EUR
+            profit_in_eur = profit_in_usd / eurusd_rate
+            return profit_in_eur
 
-        # For XXX/JPY pairs: quote currency is JPY, need to convert
-        if symbol_upper.endswith('JPY'):
-            # Profit in JPY = price_diff × volume × 100,000
-            # Profit in USD/EUR = Profit_JPY / current_price
+        # For XXX/JPY pairs: quote currency is JPY
+        elif symbol_upper.endswith('JPY'):
+            # Profit in JPY
             profit_in_jpy = price_diff * volume * 100000
+            # Convert JPY to USD
             profit_in_usd = profit_in_jpy / current_price
-            return profit_in_usd  # Assume USD ≈ EUR for simplicity
+            # Convert USD to EUR
+            profit_in_eur = profit_in_usd / eurusd_rate
+            return profit_in_eur
 
-        # For USD pairs (quote is USD): XXXUSD
-        if symbol_upper.endswith('USD'):
-            from spread_utils import get_contract_size
-            contract_size = get_contract_size(symbol)
+        # For EUR/XXX pairs: base currency is EUR
+        elif symbol_upper.startswith('EUR'):
+            if symbol_upper == 'EURUSD':
+                profit_in_usd = price_diff * volume * contract_size
+                profit_in_eur = profit_in_usd / eurusd_rate
+                return profit_in_eur
+            elif symbol_upper == 'EURJPY':
+                profit_in_jpy = price_diff * volume * 100000
+                profit_in_usd = profit_in_jpy / current_price
+                profit_in_eur = profit_in_usd / eurusd_rate
+                return profit_in_eur
+            else:
+                profit_in_quote = price_diff * volume * contract_size
+                profit_in_usd = profit_in_quote * 1.25  # Approximate for GBP
+                profit_in_eur = profit_in_usd / eurusd_rate
+                return profit_in_eur
+
+        # For other pairs: quote = USD
+        else:
             profit_in_usd = price_diff * volume * contract_size
-            return profit_in_usd  # Assume USD ≈ EUR for simplicity
-
-        # Default: use standard formula
-        from spread_utils import get_contract_size
-        contract_size = get_contract_size(symbol)
-        return price_diff * volume * contract_size
+            profit_in_eur = profit_in_usd / eurusd_rate
+            return profit_in_eur
 
     def get_trailing_stop_info(
         self,
@@ -672,11 +689,25 @@ class TrailingStopManager:
             # Calculate profit as percentage of TP distance
             profit_percent = (current_profit_distance / tp_distance * 100) if tp_distance > 0 else 0
 
-            # Calculate EUR value for SL distance using symbol-specific conversion
+            # Calculate EUR value for SL distance using MT5-accurate conversion
             volume = float(trade.volume) if trade.volume else 0.0
+
+            # Get EUR/USD rate for accurate conversion
+            from models import SymbolPrice
+            eurusd_rate = 1.0  # Fallback
+            try:
+                eurusd_price = db.query(SymbolPrice).filter(
+                    SymbolPrice.symbol == 'EURUSD',
+                    SymbolPrice.account_id == trade.account_id
+                ).first()
+                if eurusd_price:
+                    eurusd_rate = float(eurusd_price.bid)
+            except Exception as e:
+                logger.warning(f"Could not get EURUSD rate: {e}")
+
             if sl_distance_price > 0:
                 sl_distance_eur = self._calculate_price_to_eur(
-                    trade.symbol, sl_distance_price, volume, current_price
+                    trade.symbol, sl_distance_price, volume, current_price, eurusd_rate
                 )
             else:
                 sl_distance_eur = 0

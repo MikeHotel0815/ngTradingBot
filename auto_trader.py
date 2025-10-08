@@ -554,6 +554,21 @@ class AutoTrader:
 
                     continue
 
+                # Check for existing open position for same symbol+timeframe
+                from models import Trade
+                existing_trade = db.query(Trade).filter(
+                    and_(
+                        Trade.account_id == signal.account_id,
+                        Trade.symbol == signal.symbol,
+                        Trade.timeframe == signal.timeframe,
+                        Trade.status == 'open'
+                    )
+                ).first()
+
+                if existing_trade:
+                    logger.info(f"⏭️  Skipping signal #{signal.id} ({signal.symbol} {signal.timeframe}): Already have open position (ticket #{existing_trade.ticket})")
+                    continue
+
                 # Check risk limits
                 risk_check = self.check_risk_limits(db, signal.account_id)
                 if not risk_check['allowed']:

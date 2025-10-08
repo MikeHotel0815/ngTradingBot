@@ -3939,12 +3939,8 @@
             }
         }
 
-        // Close all profitable trades
+        // Close all profitable trades (NO CONFIRMATION - immediate execution!)
         async function closeAllProfitable() {
-            if (!confirm('Close all currently profitable trades?')) {
-                return;
-            }
-
             try {
                 const response = await fetch('/api/close_all_profitable', {
                     method: 'POST',
@@ -3953,15 +3949,16 @@
                 const data = await response.json();
 
                 if (data.status === 'success') {
-                    alert(`✓ ${data.message}\n\nTickets: ${data.tickets.join(', ')}`);
-                    loadOpenTrades(); // Refresh
+                    // Show brief success notification (no alert blocking)
+                    console.log(`✓ ${data.message} - Tickets: ${data.tickets.join(', ')}`);
+                    loadOpenTrades(); // Refresh immediately
                 } else if (data.status === 'info') {
-                    alert(`ℹ ${data.message}`);
+                    console.log(`ℹ ${data.message}`);
                 } else {
-                    alert(`✗ Error: ${data.message}`);
+                    console.error(`✗ Error: ${data.message}`);
                 }
             } catch (error) {
-                alert(`✗ Error: ${error.message}`);
+                console.error(`✗ Error: ${error.message}`);
             }
         }
 

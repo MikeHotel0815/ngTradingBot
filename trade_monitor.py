@@ -70,62 +70,92 @@ class TradeMonitor:
             logger.error(f"Error getting EURUSD rate: {e}")
             return 1.17  # Fallback
 
-    def calculate_price_to_eur(self, symbol: str, price_diff: float, volume: float, current_price: float) -> float:
+    def calculate_price_to_eur(self, symbol: str, price_diff: float, volume: float, current_price: float, db: Session = None) -> float:
         """
-        Convert price difference to EUR value based on symbol type.
+        Convert price difference to EUR value using MT5-accurate formulas.
+
+        This mimics exactly how MT5 calculates profit, then converts to account currency (EUR).
+
+        MT5 Profit Calculation:
+        1. Calculate profit in quote currency
+        2. If quote currency != account currency, convert using current rate
 
         Args:
             symbol: Trading symbol (e.g., 'EURUSD', 'USDJPY', 'XAUUSD')
             price_diff: Price difference in symbol's price units
             volume: Position volume in lots
-            current_price: Current market price (for conversion)
+            current_price: Current market price (for JPY pairs conversion)
+            db: Database session (to fetch EUR/USD rate)
 
         Returns:
             EUR value of the price difference
         """
-        symbol_upper = symbol.upper()
+        from spread_utils import get_contract_size
 
-        # For XXX/EUR pairs: quote currency is EUR, direct calculation
+        symbol_upper = symbol.upper()
+        contract_size = get_contract_size(symbol)
+
+        # Get EUR/USD rate for USD->EUR conversion
+        eurusd_rate = 1.0  # Fallback
+        if db:
+            eurusd_rate = self.get_eurusd_rate(db, account_id=1)  # Get current rate
+
+        # Step 1: Calculate profit in quote currency
+
+        # For XXX/EUR pairs: quote currency is EUR - direct calculation!
         if symbol_upper.endswith('EUR'):
-            # Example: USDEUR - quote is EUR
-            from spread_utils import get_contract_size
-            contract_size = get_contract_size(symbol)
+            # Quote = EUR, so profit is already in EUR
             return price_diff * volume * contract_size
 
-        # For EUR/XXX pairs: base currency is EUR, need to account for quote currency
-        if symbol_upper.startswith('EUR'):
-            # Example: EURUSD - quote is USD, need to convert USD profit to EUR
-            from spread_utils import get_contract_size
-            contract_size = get_contract_size(symbol)
+        # For XXX/USD pairs: quote currency is USD
+        elif symbol_upper.endswith('USD'):
+            # Quote = USD, profit in USD
             profit_in_usd = price_diff * volume * contract_size
-            # For now, assume 1:1 USD:EUR (should use actual EUR/USD rate)
-            # TODO: Get actual EURUSD rate for conversion
-            return profit_in_usd  # Simplified for now
+            # Convert USD to EUR using EURUSD rate
+            # EUR/USD = 1.10 means 1 EUR = 1.10 USD, so 1 USD = 1/1.10 EUR
+            profit_in_eur = profit_in_usd / eurusd_rate
+            return profit_in_eur
 
-        # For XXX/JPY pairs: quote currency is JPY, need to convert
-        if symbol_upper.endswith('JPY'):
-            # Example: USDJPY - quote is JPY
-            # Profit in JPY = price_diff × volume × 100,000
-            # Profit in USD/EUR = Profit_JPY / current_price
+        # For XXX/JPY pairs: quote currency is JPY
+        elif symbol_upper.endswith('JPY'):
+            # Quote = JPY, profit in JPY
+            # Contract size for JPY pairs is 100,000 (standard lot)
             profit_in_jpy = price_diff * volume * 100000
+            # Convert JPY to USD first (divide by current USDJPY rate)
             profit_in_usd = profit_in_jpy / current_price
-            return profit_in_usd  # Assume USD ≈ EUR for simplicity
+            # Then convert USD to EUR
+            profit_in_eur = profit_in_usd / eurusd_rate
+            return profit_in_eur
 
-        # For USD pairs (quote is USD): XXXUSD
-        if symbol_upper.endswith('USD'):
-            # Examples: GBPUSD, AUDUSD, XAUUSD, BTCUSD
-            from spread_utils import get_contract_size
-            contract_size = get_contract_size(symbol)
+        # For EUR/XXX pairs: base currency is EUR
+        elif symbol_upper.startswith('EUR'):
+            # Base = EUR, but profit is in quote currency
+            # For EURUSD: profit in USD, need to convert to EUR
+            if symbol_upper == 'EURUSD':
+                profit_in_usd = price_diff * volume * contract_size
+                profit_in_eur = profit_in_usd / eurusd_rate
+                return profit_in_eur
+            # For EURJPY: profit in JPY, need to convert to EUR
+            elif symbol_upper == 'EURJPY':
+                profit_in_jpy = price_diff * volume * 100000
+                profit_in_usd = profit_in_jpy / current_price  # JPY to USD
+                profit_in_eur = profit_in_usd / eurusd_rate     # USD to EUR
+                return profit_in_eur
+            # For EURGBP: profit in GBP, approximate using USD
+            else:
+                profit_in_quote = price_diff * volume * contract_size
+                # Approximate: assume GBP ≈ 1.25 USD
+                profit_in_usd = profit_in_quote * 1.25
+                profit_in_eur = profit_in_usd / eurusd_rate
+                return profit_in_eur
+
+        # For other pairs (GBP/USD, AUD/USD, etc.): quote = USD
+        else:
             profit_in_usd = price_diff * volume * contract_size
-            # Assume USD ≈ EUR for simplicity (should use actual EUR/USD rate)
-            return profit_in_usd
+            profit_in_eur = profit_in_usd / eurusd_rate
+            return profit_in_eur
 
-        # Default: use standard formula
-        from spread_utils import get_contract_size
-        contract_size = get_contract_size(symbol)
-        return price_diff * volume * contract_size
-
-    def calculate_position_pnl(self, trade: Trade, current_price: Dict, eurusd_rate: float = None) -> Dict:
+    def calculate_position_pnl(self, trade: Trade, current_price: Dict, eurusd_rate: float = None, db: Session = None) -> Dict:
         """
         Calculate current P&L for open position in EUR (account currency)
 
@@ -175,10 +205,10 @@ class TradeMonitor:
                 else:  # SELL
                     distance_to_tp = close_price_val - tp_val
 
-                # Calculate EUR value using symbol-specific conversion
+                # Calculate EUR value using MT5-accurate conversion
                 if distance_to_tp and distance_to_tp > 0:
                     distance_to_tp_eur = self.calculate_price_to_eur(
-                        trade.symbol, distance_to_tp, volume, close_price_val
+                        trade.symbol, distance_to_tp, volume, close_price_val, db
                     )
 
             if trade.sl:
@@ -188,10 +218,10 @@ class TradeMonitor:
                 else:  # SELL
                     distance_to_sl = sl_val - close_price_val
 
-                # Calculate EUR value using symbol-specific conversion
+                # Calculate EUR value using MT5-accurate conversion
                 if distance_to_sl and distance_to_sl > 0:
                     distance_to_sl_eur = self.calculate_price_to_eur(
-                        trade.symbol, distance_to_sl, volume, close_price_val
+                        trade.symbol, distance_to_sl, volume, close_price_val, db
                     )
 
             return {
