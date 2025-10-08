@@ -476,20 +476,21 @@ class AutoTrader:
             db.commit()
 
             # Push to Redis command queue
+            # CRITICAL FIX: Use adjusted_sl (not signal.sl) to match payload!
             command_data = {
                 'id': command_id,
                 'type': 'OPEN_TRADE',
                 'symbol': signal.symbol,
                 'order_type': signal.signal_type,
                 'volume': volume,
-                'sl': signal.sl,
+                'sl': adjusted_sl,  # FIXED: Use adjusted SL (was: signal.sl)
                 'tp': signal.tp,
                 'comment': payload_data['comment']
             }
 
             self.redis.push_command(signal.account_id, command_data)
 
-            logger.info(f"✅ Trade command created: {command_id} - {signal.signal_type} {volume} {signal.symbol} @ {signal.entry_price}")
+            logger.info(f"✅ Trade command created: {command_id} - {signal.signal_type} {volume} {signal.symbol} @ {signal.entry_price} | SL: {adjusted_sl:.5f} | TP: {signal.tp:.5f}")
 
             # Store command ID for execution tracking
             if not hasattr(self, 'pending_commands'):
