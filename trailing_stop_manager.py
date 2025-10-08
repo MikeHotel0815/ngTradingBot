@@ -693,15 +693,15 @@ class TrailingStopManager:
             volume = float(trade.volume) if trade.volume else 0.0
 
             # Get EUR/USD rate for accurate conversion
-            from models import SymbolPrice
+            from models import BrokerSymbol
             eurusd_rate = 1.0  # Fallback
             try:
-                eurusd_price = db.query(SymbolPrice).filter(
-                    SymbolPrice.symbol == 'EURUSD',
-                    SymbolPrice.account_id == trade.account_id
+                eurusd_symbol = db.query(BrokerSymbol).filter(
+                    BrokerSymbol.symbol == 'EURUSD',
+                    BrokerSymbol.account_id == trade.account_id
                 ).first()
-                if eurusd_price:
-                    eurusd_rate = float(eurusd_price.bid)
+                if eurusd_symbol and eurusd_symbol.bid:
+                    eurusd_rate = float(eurusd_symbol.bid)
             except Exception as e:
                 logger.warning(f"Could not get EURUSD rate: {e}")
 
