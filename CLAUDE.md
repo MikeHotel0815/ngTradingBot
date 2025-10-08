@@ -9,15 +9,27 @@ Advanced Multi-Port Trading System combining:
 - **Redis Cache** - Real-time data caching
 - **Web Dashboard** - Real-time monitoring and control
 
-## Recent Major Updates (2025-10-04)
+## Recent Major Updates (2025-10-07)
 
-### ✅ Signal Market Hours Filtering
+### ✅ MT5 EA Core Fixes (v1.00 - Build 2025-10-07 15:30)
+- **Magic Number**: Added configurable `MagicNumber = 999888` input parameter ([ServerConnector.mq5:19](ServerConnector.mq5#L19))
+  - All trades now tagged with EA's magic number for identification
+  - Distinguishes EA trades from manual or other EA trades
+- **Volume Validation**: Enhanced volume normalization ([ServerConnector.mq5:997-1007](ServerConnector.mq5#L997-1007))
+  - Re-validates volume after rounding to step size
+  - Prevents edge cases where rounded volume exceeds min/max bounds
+- **Race Condition Protection**: Added mutex for profit calculations ([ServerConnector.mq5:56,823-839](ServerConnector.mq5#L56,823-839))
+  - `profitUpdateInProgress` flag prevents simultaneous updates
+  - Eliminates redundant `HistorySelect()` calls during rapid trade closures
+- **Code Quality**: Improved error handling and reduced duplicate code paths
+
+### ✅ Signal Market Hours Filtering (2025-10-04)
 - **Server-side validation** for trading hours ([app.py:44-78](app.py#L44-78))
 - Forex pairs (GBPUSD, EURUSD) hidden on weekends
 - Crypto pairs (BTCUSD) always tradeable (24/7)
 - Automatic signal filtering in dashboard
 
-### ✅ Comprehensive EA Logging System
+### ✅ Comprehensive EA Logging System (2025-10-04)
 - **Connection events**: Connected, reconnected, disconnected
 - **Trade events**: Opened, closed, modified with full details
 - **Command events**: Received, executed, failed
@@ -25,8 +37,8 @@ Advanced Multi-Port Trading System combining:
 - **Symbol events**: New symbols subscribed
 - All events stored in `logs` table with level, message, details, timestamp
 
-### ✅ Enhanced EA Features
-- **Trading hours detection** in EA ([ServerConnector.mq5:1883-1954](ServerConnector.mq5#L1883-1954))
+### ✅ Enhanced EA Features (2025-10-04)
+- **Trading hours detection** in EA ([ServerConnector.mq5:2047-2118](ServerConnector.mq5#L2047-2118))
 - Weekend detection for Forex pairs
 - Improved `IsSymbolTradeable()` function
 - OnTimer() based tick collection (100ms intervals)

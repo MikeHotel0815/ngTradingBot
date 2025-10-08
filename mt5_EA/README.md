@@ -123,6 +123,7 @@ input string ServerURL = "http://100.97.100.50:9900";  // Server address
 input int ConnectionTimeout = 5000;                     // HTTP timeout (ms)
 input int HeartbeatInterval = 30;                       // Heartbeat frequency (seconds)
 input int TickBatchInterval = 100;                      // Tick batch interval (ms)
+input int MagicNumber = 999888;                         // Magic number for trade identification
 ```
 
 **ServerURL**: Main server endpoint for command & control
@@ -141,6 +142,11 @@ input int TickBatchInterval = 100;                      // Tick batch interval (
 - Default: 100ms
 - Range: 50-1000ms
 - Lower = more frequent, higher server load
+
+**MagicNumber**: Unique identifier for EA trades
+- Default: 999888
+- Used to distinguish EA trades from manual or other EA trades
+- Change if running multiple EAs simultaneously
 
 ### API Key Storage
 
@@ -489,6 +495,18 @@ SendLog("INFO", "Price updated",
 5. Add logging
 
 ## Version History
+
+**v1.00 - Build 2025-10-07 15:30:00**
+- ✅ **Magic Number**: Added configurable `MagicNumber` input parameter (999888)
+  - All trades now tagged for identification
+  - Distinguishes EA trades from manual/other EA trades
+- ✅ **Volume Validation**: Enhanced normalization with post-rounding re-validation
+  - Prevents edge cases where rounded volume exceeds bounds
+  - Ensures compliance with symbol min/max/step specifications
+- ✅ **Race Condition Protection**: Added `profitUpdateInProgress` mutex
+  - Prevents simultaneous profit cache updates
+  - Eliminates redundant HistorySelect() calls during rapid trade closures
+- ✅ Code quality improvements and error handling enhancements
 
 **2025-10-04 09:20:00**
 - ✅ Comprehensive logging system

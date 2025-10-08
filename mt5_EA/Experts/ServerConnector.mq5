@@ -9,13 +9,14 @@
 #property strict
 
 // MANUAL: Update this date when code is modified!
-#define CODE_LAST_MODIFIED "2025-10-06 12:10:00"  // Added spread tracking to ticks, optimized to H1/H4 only (168/84 bars)
+#define CODE_LAST_MODIFIED "2025-01-07 17:51:00"  // Added MT5 profit values in tick batches
 
 // Input parameters
 input string ServerURL = "http://100.97.100.50:9900";  // Python server URL (Tailscale)
 input int    ConnectionTimeout = 5000;                  // Timeout in milliseconds
 input int    HeartbeatInterval = 30;                    // Heartbeat every N seconds
 input int    TickBatchInterval = 100;                   // Tick batch interval in milliseconds
+input int    MagicNumber = 999888;                      // Magic number to identify EA trades
 
 // Global variables
 datetime lastHeartbeat = 0;
@@ -52,6 +53,7 @@ double cachedProfitMonth = 0.0;
 double cachedProfitYear = 0.0;
 int lastDealsCount = 0;
 datetime lastProfitUpdate = 0;
+bool profitUpdateInProgress = false;  // Mutex to prevent race conditions
 
 // Transaction tracking
 datetime lastTransactionCheck = 0;
@@ -818,15 +820,23 @@ double GetProfitYear()
 //+------------------------------------------------------------------+
 void UpdateProfitCache()
 {
+   // Mutex to prevent race conditions
+   if(profitUpdateInProgress)
+      return;
+
    // Only update every 5 seconds to avoid performance issues
    if(TimeCurrent() - lastProfitUpdate < 5)
       return;
+
+   profitUpdateInProgress = true;
 
    cachedProfitToday = GetProfitToday();
    cachedProfitWeek = GetProfitWeek();
    cachedProfitMonth = GetProfitMonth();
    cachedProfitYear = GetProfitYear();
    lastProfitUpdate = TimeCurrent();
+
+   profitUpdateInProgress = false;
 }
 
 //+------------------------------------------------------------------+
@@ -997,6 +1007,12 @@ void ExecuteOpenTrade(string commandId, string cmdObj)
    if(volumeStep > 0)
    {
       volume = MathRound(volume / volumeStep) * volumeStep;
+
+      // Re-validate after rounding
+      if(volume < volumeMin)
+         volume = volumeMin;
+      if(volume > volumeMax)
+         volume = volumeMax;
    }
 
    // Parse SL (numeric) - REQUIRED
@@ -1082,7 +1098,7 @@ void ExecuteOpenTrade(string commandId, string cmdObj)
    request.sl = sl;
    request.tp = tp;
    request.deviation = 10;
-   request.magic = 0;
+   request.magic = MagicNumber;
    request.comment = comment;
 
    // Try different filling modes until one works
@@ -2190,13 +2206,38 @@ void SendTickBatch()
    }
    ticksJSON += "]";
 
+   // Build JSON array of open positions with MT5 profit values
+   string positionsJSON = "[";
+   int totalPositions = PositionsTotal();
+   for(int i = 0; i < totalPositions; i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket > 0)
+      {
+         if(i > 0)
+            positionsJSON += ",";
+
+         double profit = PositionGetDouble(POSITION_PROFIT);
+         double swap = PositionGetDouble(POSITION_SWAP);
+
+         positionsJSON += StringFormat(
+            "{\"ticket\":%llu,\"profit\":%.2f,\"swap\":%.2f}",
+            ticket,
+            profit,
+            swap
+         );
+      }
+   }
+   positionsJSON += "]";
+
    // Send ALL account values in tick batches for real-time updates
    // Cached profit values are updated every 5 seconds to avoid performance issues
    string jsonData = StringFormat(
-      "{\"account\":%d,\"api_key\":\"%s\",\"ticks\":%s,\"balance\":%.2f,\"equity\":%.2f,\"margin\":%.2f,\"free_margin\":%.2f,\"profit_today\":%.2f,\"profit_week\":%.2f,\"profit_month\":%.2f,\"profit_year\":%.2f}",
+      "{\"account\":%d,\"api_key\":\"%s\",\"ticks\":%s,\"positions\":%s,\"balance\":%.2f,\"equity\":%.2f,\"margin\":%.2f,\"free_margin\":%.2f,\"profit_today\":%.2f,\"profit_week\":%.2f,\"profit_month\":%.2f,\"profit_year\":%.2f}",
       AccountInfoInteger(ACCOUNT_LOGIN),
       apiKey,
       ticksJSON,
+      positionsJSON,
       AccountInfoDouble(ACCOUNT_BALANCE),
       AccountInfoDouble(ACCOUNT_EQUITY),
       AccountInfoDouble(ACCOUNT_MARGIN),

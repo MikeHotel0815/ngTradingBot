@@ -18,10 +18,13 @@ Advanced Multi-Port Trading System with MetaTrader 5 Integration, Real-time Sign
 - **Confidence Scoring**: Weighted multi-indicator signals
 - **Market Hours Detection**: Automatic filtering of non-tradeable symbols
 
-### 🤖 MT5 Expert Advisor (EA)
+### 🤖 MT5 Expert Advisor (EA) - v1.00 (Build 2025-10-07 15:30)
 - **WebSocket-based Communication**: Reliable binary protocol
 - **Tick Streaming**: Real-time market data with 100ms batches
 - **Trade Execution**: Open, modify, close positions via REST API
+- **Magic Number Tagging**: All trades tagged with `MagicNumber = 999888` for identification
+- **Enhanced Volume Validation**: Re-validates after rounding to prevent edge cases
+- **Race Condition Protection**: Mutex prevents simultaneous profit calculations
 - **Close Reason Detection**: SL_HIT, TP_HIT, TRAILING_STOP, MANUAL
 - **Comprehensive Logging**: All EA events logged to server
 - **Auto-reconnection**: Automatic recovery from disconnections

@@ -692,18 +692,19 @@ class TrailingStopManager:
             # Calculate EUR value for SL distance using MT5-accurate conversion
             volume = float(trade.volume) if trade.volume else 0.0
 
-            # Get EUR/USD rate for accurate conversion
-            from models import BrokerSymbol
+            # Get EUR/USD rate for accurate conversion from latest tick data
+            from models import Tick
+            from sqlalchemy import desc
             eurusd_rate = 1.0  # Fallback
             try:
-                eurusd_symbol = db.query(BrokerSymbol).filter(
-                    BrokerSymbol.symbol == 'EURUSD',
-                    BrokerSymbol.account_id == trade.account_id
-                ).first()
-                if eurusd_symbol and eurusd_symbol.bid:
-                    eurusd_rate = float(eurusd_symbol.bid)
+                eurusd_tick_bid = db.query(Tick.bid).filter(
+                    Tick.symbol == 'EURUSD',
+                    Tick.account_id == trade.account_id
+                ).order_by(desc(Tick.timestamp)).first()
+                if eurusd_tick_bid and eurusd_tick_bid[0]:
+                    eurusd_rate = float(eurusd_tick_bid[0])
             except Exception as e:
-                logger.warning(f"Could not get EURUSD rate: {e}")
+                logger.debug(f"Could not get EURUSD rate from ticks: {e}")
 
             if sl_distance_price > 0:
                 sl_distance_eur = self._calculate_price_to_eur(

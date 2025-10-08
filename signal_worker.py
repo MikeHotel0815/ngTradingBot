@@ -80,6 +80,10 @@ class SignalWorker:
                 # Expire old signals
                 SignalGenerator.expire_old_signals()
 
+                # Cleanup old signals every 5 minutes (every ~30 iterations at 10s interval)
+                if self.total_iterations % 30 == 0:
+                    self._cleanup_old_signals(minutes_to_keep=10)
+
                 # Calculate market volatility and adjust interval
                 volatility_level = self._calculate_market_volatility()
                 self._adjust_interval(volatility_level)
@@ -123,6 +127,22 @@ class SignalWorker:
             # Extract account ID immediately to avoid detached instance issues
             account_id = account.id
 
+            # Check drawdown protection - pause signals if drawdown too high
+            account_equity = float(account.equity) if account.equity else 0
+            account_balance = float(account.balance) if account.balance else 0
+
+            if account_balance > 0:
+                drawdown_pct = ((account_balance - account_equity) / account_balance) * 100
+
+                MAX_DRAWDOWN_FOR_NEW_SIGNALS = 15.0  # 15% max drawdown
+
+                if drawdown_pct > MAX_DRAWDOWN_FOR_NEW_SIGNALS:
+                    logger.warning(
+                        f"⚠️ Drawdown protection activated: {drawdown_pct:.1f}% "
+                        f"(max: {MAX_DRAWDOWN_FOR_NEW_SIGNALS}%) - pausing new signals"
+                    )
+                    return 0  # No new signals
+
             # Get subscribed symbols and extract data immediately to avoid detached instance issues
             subscribed = db.query(SubscribedSymbol).filter_by(
                 account_id=account_id,
@@ -158,18 +178,28 @@ class SignalWorker:
                     logger.debug(f"Skipping signal generation for {symbol_name} (no tick data)")
                     continue
 
-                # Skip if tick data is stale (older than 5 minutes)
-                tick_age = datetime.utcnow() - latest_tick.timestamp
-                if tick_age > timedelta(minutes=5):
-                    logger.debug(f"Skipping signal generation for {symbol_name} (stale data: {tick_age.seconds}s old)")
-                    continue
-
                 # Skip signal generation for non-tradeable symbols
                 if not latest_tick.tradeable:
                     logger.debug(f"Skipping signal generation for {symbol_name} (outside trading hours)")
                     continue
 
                 for timeframe in timeframes:
+                    # Timeframe-dependent stale data tolerance
+                    # Higher timeframes need longer windows since candles close less frequently
+                    STALE_TOLERANCE = {
+                        'M5': timedelta(minutes=10),
+                        'M15': timedelta(minutes=30),
+                        'H1': timedelta(hours=2),
+                        'H4': timedelta(hours=6),   # 1.5x timeframe duration
+                        'D1': timedelta(days=2)
+                    }
+
+                    max_tick_age = STALE_TOLERANCE.get(timeframe, timedelta(minutes=5))
+                    tick_age = datetime.utcnow() - latest_tick.timestamp
+
+                    if tick_age > max_tick_age:
+                        logger.debug(f"Skipping {symbol_name} {timeframe} (stale data: {tick_age.total_seconds():.0f}s > {max_tick_age.total_seconds():.0f}s)")
+                        continue
                     try:
                         cache_key = f"{symbol_name}_{timeframe}"
 
@@ -438,6 +468,38 @@ class SignalWorker:
         except Exception as e:
             logger.error(f"Error cleaning duplicates: {e}")
             db.rollback()
+        finally:
+            db.close()
+
+    def _cleanup_old_signals(self, minutes_to_keep: int = 10):
+        """
+        Remove old trading signals to prevent database bloat
+
+        Args:
+            minutes_to_keep: Keep signals from last N minutes (default: 10)
+        """
+        from models import TradingSignal
+        from datetime import datetime, timedelta
+
+        db = ScopedSession()
+        try:
+            cutoff_time = datetime.utcnow() - timedelta(minutes=minutes_to_keep)
+
+            # Delete old signals
+            deleted = db.query(TradingSignal).filter(
+                TradingSignal.created_at < cutoff_time
+            ).delete(synchronize_session=False)
+
+            if deleted > 0:
+                db.commit()
+                logger.info(f"🗑️  Cleaned up {deleted} old signals (older than {minutes_to_keep} min)")
+
+            return deleted
+
+        except Exception as e:
+            logger.error(f"Error cleaning old signals: {e}")
+            db.rollback()
+            return 0
         finally:
             db.close()
 

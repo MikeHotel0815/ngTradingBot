@@ -355,10 +355,26 @@ class PatternRecognizer:
         Get trading signals from detected patterns
 
         Returns:
-            List of signal dictionaries
+            List of signal dictionaries with strategy_type
         """
         patterns = self.detect_patterns()
         signals = []
+
+        # Pattern categorization by strategy type
+        # Mean-Reversion: Reversal patterns that work in ranging markets
+        MEAN_REVERSION_PATTERNS = [
+            'HAMMER', 'INVERTED_HAMMER', 'SHOOTING_STAR', 'HANGING_MAN',
+            'ENGULFING', 'HARAMI', 'PIERCING_LINE', 'DARK_CLOUD_COVER',
+            'MORNING_STAR', 'EVENING_STAR', 'DOJI', 'DRAGONFLY_DOJI',
+            'GRAVESTONE_DOJI'
+        ]
+
+        # Trend-Following: Continuation patterns that work in trending markets
+        TREND_FOLLOWING_PATTERNS = [
+            'THREE_WHITE_SOLDIERS', 'THREE_BLACK_CROWS',
+            'RISING_THREE_METHODS', 'FALLING_THREE_METHODS',
+            'MARUBOZU'
+        ]
 
         for pattern in patterns:
             # Only consider patterns with reliability > 50%
@@ -373,12 +389,22 @@ class PatternRecognizer:
                 else:
                     strength = 'weak'
 
+                # Determine strategy type based on pattern name
+                pattern_name_upper = pattern['name'].upper().replace(' ', '_')
+                if any(mrp in pattern_name_upper for mrp in MEAN_REVERSION_PATTERNS):
+                    strategy_type = 'mean_reversion'
+                elif any(tfp in pattern_name_upper for tfp in TREND_FOLLOWING_PATTERNS):
+                    strategy_type = 'trend_following'
+                else:
+                    strategy_type = 'neutral'  # Default for uncategorized patterns
+
                 signals.append({
                     'pattern': pattern['name'],
                     'type': signal_type,
                     'reason': f"{pattern['name']} Pattern",
                     'strength': strength,
-                    'reliability': pattern['reliability']
+                    'reliability': pattern['reliability'],
+                    'strategy_type': strategy_type
                 })
 
                 # Save high-reliability patterns to database

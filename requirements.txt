@@ -18,5 +18,6 @@ alembic
 python-dateutil
 pytz
 APScheduler
+requests
 
 # Note: MetaTrader5 is Windows-only and not needed for the server

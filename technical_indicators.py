@@ -134,17 +134,37 @@ class TechnicalIndicators:
 
         current_rsi = float(rsi[-1])
 
-        # Determine signal
+        # Get market regime for adaptive thresholds
+        regime_info = self.detect_market_regime()
+        market_regime = regime_info.get('regime', 'UNKNOWN')
+
+        # Regime-dependent RSI thresholds
+        # RANGING: Stricter thresholds (wait for extremes)
+        # TRENDING: Relaxed thresholds (enter earlier in pullbacks)
+        if market_regime == 'RANGING':
+            oversold_threshold = 30
+            overbought_threshold = 70
+        elif market_regime == 'TRENDING':
+            oversold_threshold = 40
+            overbought_threshold = 60
+        else:  # UNKNOWN or TOO_WEAK
+            oversold_threshold = 35  # Middle ground
+            overbought_threshold = 65
+
+        # Determine signal with adaptive thresholds
         signal = 'neutral'
-        if current_rsi > 70:
+        if current_rsi > overbought_threshold:
             signal = 'overbought'
-        elif current_rsi < 30:
+        elif current_rsi < oversold_threshold:
             signal = 'oversold'
 
         result = {
             'value': round(current_rsi, 2),
             'signal': signal,
             'period': period,
+            'threshold_oversold': oversold_threshold,
+            'threshold_overbought': overbought_threshold,
+            'market_regime': market_regime,
             'calculated_at': datetime.utcnow().isoformat()
         }
 
@@ -404,17 +424,35 @@ class TechnicalIndicators:
         current_k = float(k[-1])
         current_d = float(d[-1])
 
-        # Determine signal
+        # Get market regime for adaptive thresholds
+        regime_info = self.detect_market_regime()
+        market_regime = regime_info.get('regime', 'UNKNOWN')
+
+        # Regime-dependent Stochastic thresholds
+        if market_regime == 'RANGING':
+            oversold_threshold = 20
+            overbought_threshold = 80
+        elif market_regime == 'TRENDING':
+            oversold_threshold = 30
+            overbought_threshold = 70
+        else:  # UNKNOWN or TOO_WEAK
+            oversold_threshold = 25
+            overbought_threshold = 75
+
+        # Determine signal with adaptive thresholds
         signal = 'neutral'
-        if current_k > 80 and current_d > 80:
+        if current_k > overbought_threshold and current_d > overbought_threshold:
             signal = 'overbought'
-        elif current_k < 20 and current_d < 20:
+        elif current_k < oversold_threshold and current_d < oversold_threshold:
             signal = 'oversold'
 
         result = {
             'k': round(current_k, 2),
             'd': round(current_d, 2),
             'signal': signal,
+            'threshold_oversold': oversold_threshold,
+            'threshold_overbought': overbought_threshold,
+            'market_regime': market_regime,
             'calculated_at': datetime.utcnow().isoformat()
         }
 
@@ -639,6 +677,366 @@ class TechnicalIndicators:
             logger.error(f"OBV calculation error: {e}")
             return None
 
+    def calculate_ichimoku(self) -> Optional[Dict]:
+        """
+        Calculate Ichimoku Cloud (Ichimoku Kinko Hyo)
+
+        Components:
+        - Tenkan-sen (Conversion Line): (9-period high + 9-period low) / 2
+        - Kijun-sen (Base Line): (26-period high + 26-period low) / 2
+        - Senkou Span A (Leading Span A): (Tenkan-sen + Kijun-sen) / 2, plotted 26 periods ahead
+        - Senkou Span B (Leading Span B): (52-period high + 52-period low) / 2, plotted 26 periods ahead
+        - Chikou Span (Lagging Span): Current close, plotted 26 periods back
+
+        Returns:
+            Dict with Ichimoku components and signals
+        """
+        indicator_name = 'ICHIMOKU'
+
+        # Check cache
+        cached = self._get_cached(indicator_name)
+        if cached:
+            return cached
+
+        # Get OHLC data (need at least 52 + 26 = 78 candles)
+        df = self._get_ohlc_data(limit=100)
+        if df is None or len(df) < 78:
+            return None
+
+        try:
+            high = df['high'].values
+            low = df['low'].values
+            close = df['close'].values
+
+            # Tenkan-sen (Conversion Line): (9-period high + 9-period low) / 2
+            period9_high = pd.Series(high).rolling(window=9).max()
+            period9_low = pd.Series(low).rolling(window=9).min()
+            tenkan_sen = (period9_high + period9_low) / 2
+
+            # Kijun-sen (Base Line): (26-period high + 26-period low) / 2
+            period26_high = pd.Series(high).rolling(window=26).max()
+            period26_low = pd.Series(low).rolling(window=26).min()
+            kijun_sen = (period26_high + period26_low) / 2
+
+            # Senkou Span A (Leading Span A): (Tenkan + Kijun) / 2
+            senkou_span_a = ((tenkan_sen + kijun_sen) / 2).shift(26)
+
+            # Senkou Span B (Leading Span B): (52-period high + 52-period low) / 2
+            period52_high = pd.Series(high).rolling(window=52).max()
+            period52_low = pd.Series(low).rolling(window=52).min()
+            senkou_span_b = ((period52_high + period52_low) / 2).shift(26)
+
+            # Chikou Span (Lagging Span): Current close plotted 26 periods back
+            chikou_span = pd.Series(close).shift(-26)
+
+            # Current values
+            current_price = float(close[-1])
+            current_tenkan = float(tenkan_sen.iloc[-1]) if not pd.isna(tenkan_sen.iloc[-1]) else None
+            current_kijun = float(kijun_sen.iloc[-1]) if not pd.isna(kijun_sen.iloc[-1]) else None
+            current_span_a = float(senkou_span_a.iloc[-1]) if not pd.isna(senkou_span_a.iloc[-1]) else None
+            current_span_b = float(senkou_span_b.iloc[-1]) if not pd.isna(senkou_span_b.iloc[-1]) else None
+
+            # Determine cloud color and position
+            cloud_color = None
+            price_vs_cloud = None
+
+            if current_span_a and current_span_b:
+                # Cloud color
+                if current_span_a > current_span_b:
+                    cloud_color = 'bullish'  # Green cloud
+                else:
+                    cloud_color = 'bearish'  # Red cloud
+
+                # Price position relative to cloud
+                cloud_top = max(current_span_a, current_span_b)
+                cloud_bottom = min(current_span_a, current_span_b)
+
+                if current_price > cloud_top:
+                    price_vs_cloud = 'above'  # Bullish
+                elif current_price < cloud_bottom:
+                    price_vs_cloud = 'below'  # Bearish
+                else:
+                    price_vs_cloud = 'inside'  # Neutral/Uncertain
+
+            # Determine signals
+            signal = 'neutral'
+            tk_cross = None
+
+            # TK Cross (Tenkan-Kijun crossover)
+            if current_tenkan and current_kijun:
+                prev_tenkan = float(tenkan_sen.iloc[-2]) if not pd.isna(tenkan_sen.iloc[-2]) else None
+                prev_kijun = float(kijun_sen.iloc[-2]) if not pd.isna(kijun_sen.iloc[-2]) else None
+
+                if prev_tenkan and prev_kijun:
+                    # Bullish TK cross
+                    if prev_tenkan <= prev_kijun and current_tenkan > current_kijun:
+                        tk_cross = 'bullish'
+                        if price_vs_cloud == 'above':
+                            signal = 'strong_buy'
+                        else:
+                            signal = 'buy'
+                    # Bearish TK cross
+                    elif prev_tenkan >= prev_kijun and current_tenkan < current_kijun:
+                        tk_cross = 'bearish'
+                        if price_vs_cloud == 'below':
+                            signal = 'strong_sell'
+                        else:
+                            signal = 'sell'
+
+            # Strong trend signals based on all components alignment
+            if price_vs_cloud == 'above' and cloud_color == 'bullish' and current_tenkan and current_kijun and current_tenkan > current_kijun:
+                signal = 'strong_buy'
+            elif price_vs_cloud == 'below' and cloud_color == 'bearish' and current_tenkan and current_kijun and current_tenkan < current_kijun:
+                signal = 'strong_sell'
+
+            result = {
+                'tenkan_sen': round(current_tenkan, 5) if current_tenkan else None,
+                'kijun_sen': round(current_kijun, 5) if current_kijun else None,
+                'senkou_span_a': round(current_span_a, 5) if current_span_a else None,
+                'senkou_span_b': round(current_span_b, 5) if current_span_b else None,
+                'cloud_color': cloud_color,
+                'price_vs_cloud': price_vs_cloud,
+                'tk_cross': tk_cross,
+                'signal': signal,
+                'current_price': round(current_price, 5),
+                'calculated_at': datetime.utcnow().isoformat()
+            }
+
+            # Cache result
+            self._set_cache(indicator_name, result)
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Ichimoku calculation error: {e}")
+            return None
+
+    def calculate_vwap(self) -> Optional[Dict]:
+        """
+        Calculate VWAP (Volume Weighted Average Price)
+
+        VWAP = Sum(Price * Volume) / Sum(Volume)
+        where Price = (High + Low + Close) / 3 (Typical Price)
+
+        Returns:
+            Dict with VWAP value and price position signal
+        """
+        indicator_name = 'VWAP'
+
+        # Check cache
+        cached = self._get_cached(indicator_name)
+        if cached:
+            return cached
+
+        # Get OHLC data for current trading session
+        df = self._get_ohlc_data(limit=50)
+        if df is None or len(df) < 10:
+            return None
+
+        try:
+            high = df['high'].values
+            low = df['low'].values
+            close = df['close'].values
+            volume = df['volume'].values
+
+            # Calculate Typical Price
+            typical_price = (high + low + close) / 3
+
+            # Calculate VWAP
+            # For intraday: cumulative from session start
+            # For our case: rolling VWAP over available data
+            pv = typical_price * volume  # Price * Volume
+            cumulative_pv = np.cumsum(pv)
+            cumulative_volume = np.cumsum(volume)
+
+            vwap = cumulative_pv / cumulative_volume
+
+            current_vwap = float(vwap[-1])
+            current_price = float(close[-1])
+
+            # Calculate distance from VWAP (as percentage)
+            distance_pct = ((current_price - current_vwap) / current_vwap) * 100
+
+            # Determine signal based on price position relative to VWAP
+            signal = 'neutral'
+            position = 'at'
+
+            if distance_pct > 0.5:
+                signal = 'overbought'
+                position = 'above'
+            elif distance_pct < -0.5:
+                signal = 'oversold'
+                position = 'below'
+            elif current_price > current_vwap:
+                signal = 'bullish'
+                position = 'above'
+            elif current_price < current_vwap:
+                signal = 'bearish'
+                position = 'below'
+
+            # Calculate VWAP bands (standard deviation)
+            # Rolling standard deviation of typical price
+            typical_price_series = pd.Series(typical_price)
+            vwap_std = typical_price_series.rolling(window=20).std().iloc[-1]
+
+            upper_band = current_vwap + (vwap_std * 2) if not pd.isna(vwap_std) else None
+            lower_band = current_vwap - (vwap_std * 2) if not pd.isna(vwap_std) else None
+
+            result = {
+                'value': round(current_vwap, 5),
+                'current_price': round(current_price, 5),
+                'distance_pct': round(distance_pct, 2),
+                'position': position,
+                'signal': signal,
+                'upper_band': round(upper_band, 5) if upper_band else None,
+                'lower_band': round(lower_band, 5) if lower_band else None,
+                'calculated_at': datetime.utcnow().isoformat()
+            }
+
+            # Cache result
+            self._set_cache(indicator_name, result)
+
+            return result
+
+        except Exception as e:
+            logger.error(f"VWAP calculation error: {e}")
+            return None
+
+    def calculate_supertrend(self, period: int = 10, multiplier: float = 3.0) -> Optional[Dict]:
+        """
+        Calculate SuperTrend indicator
+
+        SuperTrend uses ATR to calculate dynamic support/resistance levels
+        - Green (Bullish): Price above SuperTrend line
+        - Red (Bearish): Price below SuperTrend line
+
+        Args:
+            period: ATR period (default: 10)
+            multiplier: ATR multiplier (default: 3.0)
+
+        Returns:
+            Dict with SuperTrend value, direction, and signal
+        """
+        indicator_name = f'SUPERTREND_{period}_{multiplier}'
+
+        # Check cache
+        cached = self._get_cached(indicator_name)
+        if cached:
+            return cached
+
+        # Get OHLC data
+        df = self._get_ohlc_data(limit=100)
+        if df is None or len(df) < period + 1:
+            return None
+
+        try:
+            high = df['high'].values
+            low = df['low'].values
+            close = df['close'].values
+
+            # Calculate ATR
+            atr = talib.ATR(high, low, close, timeperiod=period)
+
+            # Calculate basic upper and lower bands
+            hl_avg = (high + low) / 2
+
+            # Initialize arrays
+            supertrend = np.zeros(len(close))
+            direction = np.zeros(len(close))  # 1 = bullish, -1 = bearish
+
+            basic_upper = hl_avg + (multiplier * atr)
+            basic_lower = hl_avg - (multiplier * atr)
+
+            final_upper = np.zeros(len(close))
+            final_lower = np.zeros(len(close))
+
+            # Calculate SuperTrend
+            for i in range(period, len(close)):
+                # Final upper band
+                if i == period:
+                    final_upper[i] = basic_upper[i]
+                else:
+                    if basic_upper[i] < final_upper[i-1] or close[i-1] > final_upper[i-1]:
+                        final_upper[i] = basic_upper[i]
+                    else:
+                        final_upper[i] = final_upper[i-1]
+
+                # Final lower band
+                if i == period:
+                    final_lower[i] = basic_lower[i]
+                else:
+                    if basic_lower[i] > final_lower[i-1] or close[i-1] < final_lower[i-1]:
+                        final_lower[i] = basic_lower[i]
+                    else:
+                        final_lower[i] = final_lower[i-1]
+
+                # Determine direction and SuperTrend value
+                if i == period:
+                    if close[i] <= final_upper[i]:
+                        supertrend[i] = final_upper[i]
+                        direction[i] = -1
+                    else:
+                        supertrend[i] = final_lower[i]
+                        direction[i] = 1
+                else:
+                    if supertrend[i-1] == final_upper[i-1] and close[i] <= final_upper[i]:
+                        supertrend[i] = final_upper[i]
+                        direction[i] = -1
+                    elif supertrend[i-1] == final_upper[i-1] and close[i] > final_upper[i]:
+                        supertrend[i] = final_lower[i]
+                        direction[i] = 1
+                    elif supertrend[i-1] == final_lower[i-1] and close[i] >= final_lower[i]:
+                        supertrend[i] = final_lower[i]
+                        direction[i] = 1
+                    elif supertrend[i-1] == final_lower[i-1] and close[i] < final_lower[i]:
+                        supertrend[i] = final_upper[i]
+                        direction[i] = -1
+
+            # Current values
+            current_supertrend = float(supertrend[-1])
+            current_direction = int(direction[-1])
+            current_price = float(close[-1])
+            prev_direction = int(direction[-2]) if len(direction) > 1 else current_direction
+
+            # Determine signal
+            signal = 'neutral'
+            trend = 'bullish' if current_direction == 1 else 'bearish'
+
+            # Trend change signals
+            if prev_direction == -1 and current_direction == 1:
+                signal = 'buy'  # Trend changed to bullish
+            elif prev_direction == 1 and current_direction == -1:
+                signal = 'sell'  # Trend changed to bearish
+            elif current_direction == 1:
+                signal = 'hold_long'
+            elif current_direction == -1:
+                signal = 'hold_short'
+
+            # Calculate distance to SuperTrend (for dynamic SL)
+            distance = abs(current_price - current_supertrend)
+            distance_pct = (distance / current_price) * 100
+
+            result = {
+                'value': round(current_supertrend, 5),
+                'direction': trend,
+                'signal': signal,
+                'current_price': round(current_price, 5),
+                'distance': round(distance, 5),
+                'distance_pct': round(distance_pct, 2),
+                'period': period,
+                'multiplier': multiplier,
+                'calculated_at': datetime.utcnow().isoformat()
+            }
+
+            # Cache result
+            self._set_cache(indicator_name, result)
+
+            return result
+
+        except Exception as e:
+            logger.error(f"SuperTrend calculation error: {e}")
+            return None
+
     def calculate_all(self) -> Dict[str, any]:
         """
         Calculate all indicators
@@ -658,6 +1056,8 @@ class TechnicalIndicators:
         indicators['SMA_50'] = self.calculate_sma(50)
         indicators['SMA_200'] = self.calculate_sma(200)
         indicators['ADX'] = self.calculate_adx()
+        indicators['ICHIMOKU'] = self.calculate_ichimoku()
+        indicators['SUPERTREND'] = self.calculate_supertrend()
 
         # Volatility indicators
         indicators['BB'] = self.calculate_bollinger_bands()
@@ -668,20 +1068,97 @@ class TechnicalIndicators:
 
         # Volume indicators
         indicators['OBV'] = self.calculate_obv()
+        indicators['VWAP'] = self.calculate_vwap()
 
         return indicators
 
-    def get_indicator_signals(self) -> List[Dict]:
+    def detect_market_regime(self) -> Dict:
         """
-        Extract trading signals from indicators
+        Detect market regime: TRENDING or RANGING
+
+        Uses ADX and Bollinger Band width to determine market state
 
         Returns:
-            List of signal dictionaries
+            Dict with regime, strength, and details
+        """
+        try:
+            # Get required data
+            df = self._get_ohlc_data(limit=50)
+            if df is None or len(df) < 30:
+                return {'regime': 'UNKNOWN', 'strength': 0, 'adx': None, 'bb_width': None}
+
+            close = df['close'].values
+            high = df['high'].values
+            low = df['low'].values
+
+            # Calculate ADX (Average Directional Index) - measures trend strength
+            adx = talib.ADX(high, low, close, timeperiod=14)
+            current_adx = adx[-1] if len(adx) > 0 and not np.isnan(adx[-1]) else None
+
+            # Calculate Bollinger Band Width (normalized) - measures volatility
+            bb_upper, bb_middle, bb_lower = talib.BBANDS(close, timeperiod=20, nbdevup=2, nbdevdn=2)
+            bb_width = ((bb_upper[-1] - bb_lower[-1]) / bb_middle[-1]) * 100 if len(bb_upper) > 0 else None
+
+            # Determine regime
+            regime = 'UNKNOWN'
+            strength = 0
+
+            if current_adx is not None and bb_width is not None:
+                # ADX minimum threshold - market too weak for any strategy
+                MIN_ADX_FOR_TRADING = 12
+
+                if current_adx < MIN_ADX_FOR_TRADING:
+                    regime = 'TOO_WEAK'
+                    strength = 0
+                    logger.info(f"{self.symbol} {self.timeframe} Market too weak for trading (ADX: {current_adx:.1f} < {MIN_ADX_FOR_TRADING})")
+                # ADX > 25 = Strong trend
+                elif current_adx > 25:
+                    regime = 'TRENDING'
+                    strength = min(100, int((current_adx - 25) / 50 * 100))  # Scale 25-75 ADX to 0-100%
+                # ADX 12-20 = Weak/no trend (ranging)
+                elif current_adx < 20:
+                    regime = 'RANGING'
+                    strength = min(100, int((current_adx - MIN_ADX_FOR_TRADING) / (20 - MIN_ADX_FOR_TRADING) * 100))  # Scale 12-20 ADX to 0-100%
+                else:
+                    # Borderline case (ADX 20-25) - use BB width as tie-breaker
+                    if bb_width < 2.0:  # Narrow bands = ranging
+                        regime = 'RANGING'
+                        strength = 50
+                    else:
+                        regime = 'TRENDING'
+                        strength = 50
+
+            logger.debug(f"{self.symbol} {self.timeframe} Market Regime: {regime} (ADX: {current_adx:.1f}, BB Width: {bb_width:.2f}%, Strength: {strength}%)")
+
+            return {
+                'regime': regime,
+                'strength': strength,
+                'adx': float(current_adx) if current_adx else None,
+                'bb_width': float(bb_width) if bb_width else None
+            }
+
+        except Exception as e:
+            logger.error(f"Error detecting market regime: {e}")
+            return {'regime': 'UNKNOWN', 'strength': 0, 'adx': None, 'bb_width': None}
+
+    def get_indicator_signals(self) -> List[Dict]:
+        """
+        Extract trading signals from indicators with market regime awareness
+
+        Returns:
+            List of signal dictionaries with strategy_type field
         """
         indicators = self.calculate_all()
         signals = []
 
-        # RSI signals
+        # Detect market regime first
+        regime = self.detect_market_regime()
+        market_regime = regime['regime']
+
+        # MEAN-REVERSION Indicators (best for RANGING markets)
+        # These indicators work when price bounces between support/resistance
+
+        # RSI signals (Mean-Reversion)
         if indicators['RSI']:
             rsi = indicators['RSI']
             if rsi['signal'] == 'oversold':
@@ -689,53 +1166,19 @@ class TechnicalIndicators:
                     'indicator': 'RSI',
                     'type': 'BUY',
                     'reason': f"RSI Oversold ({rsi['value']})",
-                    'strength': 'medium'
+                    'strength': 'medium',
+                    'strategy_type': 'mean_reversion'
                 })
             elif rsi['signal'] == 'overbought':
                 signals.append({
                     'indicator': 'RSI',
                     'type': 'SELL',
                     'reason': f"RSI Overbought ({rsi['value']})",
-                    'strength': 'medium'
+                    'strength': 'medium',
+                    'strategy_type': 'mean_reversion'
                 })
 
-        # MACD signals
-        if indicators['MACD']:
-            macd = indicators['MACD']
-            if macd['crossover'] == 'bullish':
-                signals.append({
-                    'indicator': 'MACD',
-                    'type': 'BUY',
-                    'reason': 'MACD Bullish Crossover',
-                    'strength': 'strong'
-                })
-            elif macd['crossover'] == 'bearish':
-                signals.append({
-                    'indicator': 'MACD',
-                    'type': 'SELL',
-                    'reason': 'MACD Bearish Crossover',
-                    'strength': 'strong'
-                })
-
-        # EMA trend signals
-        if indicators['EMA_200']:
-            ema = indicators['EMA_200']
-            if ema['trend'] == 'above':
-                signals.append({
-                    'indicator': 'EMA_200',
-                    'type': 'BUY',
-                    'reason': 'Price Above 200 EMA',
-                    'strength': 'weak'
-                })
-            elif ema['trend'] == 'below':
-                signals.append({
-                    'indicator': 'EMA_200',
-                    'type': 'SELL',
-                    'reason': 'Price Below 200 EMA',
-                    'strength': 'weak'
-                })
-
-        # Bollinger Bands signals
+        # Bollinger Bands signals (Mean-Reversion)
         if indicators['BB']:
             bb = indicators['BB']
             if bb['position'] == 'oversold':
@@ -743,17 +1186,19 @@ class TechnicalIndicators:
                     'indicator': 'BB',
                     'type': 'BUY',
                     'reason': 'Price at Lower Bollinger Band',
-                    'strength': 'medium'
+                    'strength': 'medium',
+                    'strategy_type': 'mean_reversion'
                 })
             elif bb['position'] == 'overbought':
                 signals.append({
                     'indicator': 'BB',
                     'type': 'SELL',
                     'reason': 'Price at Upper Bollinger Band',
-                    'strength': 'medium'
+                    'strength': 'medium',
+                    'strategy_type': 'mean_reversion'
                 })
 
-        # Stochastic signals
+        # Stochastic signals (Mean-Reversion)
         if indicators['STOCH']:
             stoch = indicators['STOCH']
             if stoch['signal'] == 'oversold':
@@ -761,14 +1206,59 @@ class TechnicalIndicators:
                     'indicator': 'STOCH',
                     'type': 'BUY',
                     'reason': f"Stochastic Oversold (K:{stoch['k']}, D:{stoch['d']})",
-                    'strength': 'medium'
+                    'strength': 'medium',
+                    'strategy_type': 'mean_reversion'
                 })
             elif stoch['signal'] == 'overbought':
                 signals.append({
                     'indicator': 'STOCH',
                     'type': 'SELL',
                     'reason': f"Stochastic Overbought (K:{stoch['k']}, D:{stoch['d']})",
-                    'strength': 'medium'
+                    'strength': 'medium',
+                    'strategy_type': 'mean_reversion'
+                })
+
+        # TREND-FOLLOWING Indicators (best for TRENDING markets)
+        # These indicators work when price makes sustained directional moves
+
+        # MACD signals (Trend-Following)
+        if indicators['MACD']:
+            macd = indicators['MACD']
+            if macd['crossover'] == 'bullish':
+                signals.append({
+                    'indicator': 'MACD',
+                    'type': 'BUY',
+                    'reason': 'MACD Bullish Crossover',
+                    'strength': 'strong',
+                    'strategy_type': 'trend_following'
+                })
+            elif macd['crossover'] == 'bearish':
+                signals.append({
+                    'indicator': 'MACD',
+                    'type': 'SELL',
+                    'reason': 'MACD Bearish Crossover',
+                    'strength': 'strong',
+                    'strategy_type': 'trend_following'
+                })
+
+        # EMA trend signals (Trend-Following)
+        if indicators['EMA_200']:
+            ema = indicators['EMA_200']
+            if ema['trend'] == 'above':
+                signals.append({
+                    'indicator': 'EMA_200',
+                    'type': 'BUY',
+                    'reason': 'Price Above 200 EMA',
+                    'strength': 'weak',
+                    'strategy_type': 'trend_following'
+                })
+            elif ema['trend'] == 'below':
+                signals.append({
+                    'indicator': 'EMA_200',
+                    'type': 'SELL',
+                    'reason': 'Price Below 200 EMA',
+                    'strength': 'weak',
+                    'strategy_type': 'trend_following'
                 })
 
         # ADX signals (trend strength confirmation)
@@ -791,7 +1281,7 @@ class TechnicalIndicators:
                     'strength': 'weak'
                 })
 
-        # SMA crossover signals
+        # SMA crossover signals (Trend-Following)
         if indicators['SMA_50'] and indicators['SMA_200']:
             sma50 = indicators['SMA_50']
             sma200 = indicators['SMA_200']
@@ -801,17 +1291,24 @@ class TechnicalIndicators:
                     'indicator': 'SMA',
                     'type': 'BUY',
                     'reason': 'Golden Cross (50 SMA > 200 SMA)',
-                    'strength': 'strong'
+                    'strength': 'strong',
+                    'strategy_type': 'trend_following'
                 })
             elif sma50['crossover'] == 'death_cross':
                 signals.append({
                     'indicator': 'SMA',
                     'type': 'SELL',
                     'reason': 'Death Cross (50 SMA < 200 SMA)',
-                    'strength': 'strong'
+                    'strength': 'strong',
+                    'strategy_type': 'trend_following'
                 })
 
-        # OBV signals (volume confirmation)
+        # ADX: Mark as trend_following for regime filtering
+        for sig in signals:
+            if sig.get('indicator') == 'ADX':
+                sig['strategy_type'] = 'trend_following'
+
+        # OBV signals (volume confirmation - works in both regimes)
         if indicators['OBV']:
             obv = indicators['OBV']
             if obv['divergence'] == 'bullish':
@@ -819,28 +1316,192 @@ class TechnicalIndicators:
                     'indicator': 'OBV',
                     'type': 'BUY',
                     'reason': 'Bullish Volume Divergence',
-                    'strength': 'medium'
+                    'strength': 'medium',
+                    'strategy_type': 'neutral'  # Volume works in both regimes
                 })
             elif obv['divergence'] == 'bearish':
                 signals.append({
                     'indicator': 'OBV',
                     'type': 'SELL',
                     'reason': 'Bearish Volume Divergence',
-                    'strength': 'medium'
+                    'strength': 'medium',
+                    'strategy_type': 'neutral'
                 })
             elif obv['signal'] == 'bullish' and obv['trend'] == 'rising':
                 signals.append({
                     'indicator': 'OBV',
                     'type': 'BUY',
                     'reason': 'Volume Trending Up',
-                    'strength': 'weak'
+                    'strength': 'weak',
+                    'strategy_type': 'neutral'
                 })
             elif obv['signal'] == 'bearish' and obv['trend'] == 'falling':
                 signals.append({
                     'indicator': 'OBV',
                     'type': 'SELL',
                     'reason': 'Volume Trending Down',
-                    'strength': 'weak'
+                    'strength': 'weak',
+                    'strategy_type': 'neutral'
                 })
 
-        return signals
+        # Ichimoku Cloud signals (Trend-Following - very strong)
+        if indicators['ICHIMOKU']:
+            ichi = indicators['ICHIMOKU']
+            if ichi['signal'] == 'strong_buy':
+                signals.append({
+                    'indicator': 'ICHIMOKU',
+                    'type': 'BUY',
+                    'reason': f"Strong Bullish Ichimoku (Price above {ichi['cloud_color']} cloud, TK bullish)",
+                    'strength': 'very_strong',
+                    'strategy_type': 'trend_following'
+                })
+            elif ichi['signal'] == 'buy':
+                signals.append({
+                    'indicator': 'ICHIMOKU',
+                    'type': 'BUY',
+                    'reason': f"Ichimoku TK Cross (Tenkan > Kijun)",
+                    'strength': 'strong',
+                    'strategy_type': 'trend_following'
+                })
+            elif ichi['signal'] == 'strong_sell':
+                signals.append({
+                    'indicator': 'ICHIMOKU',
+                    'type': 'SELL',
+                    'reason': f"Strong Bearish Ichimoku (Price below {ichi['cloud_color']} cloud, TK bearish)",
+                    'strength': 'very_strong',
+                    'strategy_type': 'trend_following'
+                })
+            elif ichi['signal'] == 'sell':
+                signals.append({
+                    'indicator': 'ICHIMOKU',
+                    'type': 'SELL',
+                    'reason': f"Ichimoku TK Cross (Tenkan < Kijun)",
+                    'strength': 'strong',
+                    'strategy_type': 'trend_following'
+                })
+
+        # VWAP signals (Support/Resistance - works in both regimes)
+        if indicators['VWAP']:
+            vwap = indicators['VWAP']
+            if vwap['signal'] == 'oversold':
+                signals.append({
+                    'indicator': 'VWAP',
+                    'type': 'BUY',
+                    'reason': f"Price far below VWAP ({vwap['distance_pct']}%)",
+                    'strength': 'strong',
+                    'strategy_type': 'mean_reversion'
+                })
+            elif vwap['signal'] == 'overbought':
+                signals.append({
+                    'indicator': 'VWAP',
+                    'type': 'SELL',
+                    'reason': f"Price far above VWAP ({vwap['distance_pct']}%)",
+                    'strength': 'strong',
+                    'strategy_type': 'mean_reversion'
+                })
+            elif vwap['position'] == 'above' and vwap['signal'] == 'bullish':
+                signals.append({
+                    'indicator': 'VWAP',
+                    'type': 'BUY',
+                    'reason': 'Price above VWAP (institutional support)',
+                    'strength': 'weak',
+                    'strategy_type': 'neutral'
+                })
+            elif vwap['position'] == 'below' and vwap['signal'] == 'bearish':
+                signals.append({
+                    'indicator': 'VWAP',
+                    'type': 'SELL',
+                    'reason': 'Price below VWAP (institutional resistance)',
+                    'strength': 'weak',
+                    'strategy_type': 'neutral'
+                })
+
+        # SuperTrend signals (Trend-Following with dynamic SL)
+        if indicators['SUPERTREND']:
+            st = indicators['SUPERTREND']
+            if st['signal'] == 'buy':
+                signals.append({
+                    'indicator': 'SUPERTREND',
+                    'type': 'BUY',
+                    'reason': 'SuperTrend Bullish Reversal',
+                    'strength': 'very_strong',
+                    'strategy_type': 'trend_following'
+                })
+            elif st['signal'] == 'sell':
+                signals.append({
+                    'indicator': 'SUPERTREND',
+                    'type': 'SELL',
+                    'reason': 'SuperTrend Bearish Reversal',
+                    'strength': 'very_strong',
+                    'strategy_type': 'trend_following'
+                })
+            elif st['signal'] == 'hold_long' and st['direction'] == 'bullish':
+                signals.append({
+                    'indicator': 'SUPERTREND',
+                    'type': 'BUY',
+                    'reason': 'SuperTrend Bullish Trend',
+                    'strength': 'strong',
+                    'strategy_type': 'trend_following'
+                })
+            elif st['signal'] == 'hold_short' and st['direction'] == 'bearish':
+                signals.append({
+                    'indicator': 'SUPERTREND',
+                    'type': 'SELL',
+                    'reason': 'SuperTrend Bearish Trend',
+                    'strength': 'strong',
+                    'strategy_type': 'trend_following'
+                })
+
+        # Filter signals based on market regime
+        filtered_signals = self._filter_by_regime(signals, market_regime)
+
+        # Add regime info to each signal
+        for sig in filtered_signals:
+            sig['market_regime'] = market_regime
+            sig['regime_strength'] = regime['strength']
+
+        logger.info(f"{self.symbol} {self.timeframe} Market: {market_regime} ({regime['strength']}%) - Signals: {len(signals)} total, {len(filtered_signals)} after regime filter")
+
+        return filtered_signals
+
+    def _filter_by_regime(self, signals: List[Dict], regime: str) -> List[Dict]:
+        """
+        Filter signals based on market regime to avoid conflicting strategies
+
+        Args:
+            signals: List of all signals
+            regime: Market regime (TRENDING, RANGING, TOO_WEAK, or UNKNOWN)
+
+        Returns:
+            Filtered signals appropriate for the regime
+        """
+        if regime == 'TOO_WEAK':
+            # Market too weak - no signals should be generated
+            logger.info(f"{self.symbol} {self.timeframe} Market too weak - all signals filtered")
+            return []
+
+        if regime == 'UNKNOWN':
+            # If regime unclear, keep all signals but log warning
+            logger.warning(f"{self.symbol} {self.timeframe} Market regime unknown - using all signals")
+            return signals
+
+        filtered = []
+
+        for sig in signals:
+            strategy_type = sig.get('strategy_type', 'neutral')
+
+            if regime == 'TRENDING':
+                # In trending markets: prioritize trend-following, exclude mean-reversion
+                if strategy_type in ['trend_following', 'neutral']:
+                    filtered.append(sig)
+                else:
+                    logger.debug(f"{self.symbol} Excluded {sig['indicator']} (mean-reversion in trending market)")
+
+            elif regime == 'RANGING':
+                # In ranging markets: prioritize mean-reversion, exclude trend-following
+                if strategy_type in ['mean_reversion', 'neutral']:
+                    filtered.append(sig)
+                else:
+                    logger.debug(f"{self.symbol} Excluded {sig['indicator']} (trend-following in ranging market)")
+
+        return filtered

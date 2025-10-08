@@ -285,39 +285,107 @@ class SignalGenerator:
 
                 entry = float(latest_ohlc.close)
             else:
+                # Check spread before calculating entry
+                spread = abs(float(latest_tick.ask) - float(latest_tick.bid))
+
+                # Calculate average spread from recent ticks (last 100 ticks)
+                avg_spread = self._get_average_spread(db)
+
+                # Reject signal if spread is abnormally high (> 3x normal)
+                MAX_SPREAD_MULTIPLIER = 3.0
+                if avg_spread > 0 and spread > avg_spread * MAX_SPREAD_MULTIPLIER:
+                    logger.warning(
+                        f"Spread too high for {self.symbol}: {spread:.5f} "
+                        f"(avg: {avg_spread:.5f}, max allowed: {avg_spread * MAX_SPREAD_MULTIPLIER:.5f}) - rejecting signal"
+                    )
+                    return (0, 0, 0)  # Reject signal
+
                 # Use BID for SELL, ASK for BUY (realistic entry price)
                 if signal['signal_type'] == 'BUY':
                     entry = float(latest_tick.ask)
                 else:  # SELL
                     entry = float(latest_tick.bid)
 
-            # Get ATR for volatility-based SL/TP
-            atr_data = self.indicators.calculate_atr()
-            atr = atr_data['value'] if atr_data else (entry * 0.002)  # 0.2% fallback
+            # Use Smart TP/SL Calculator (hybrid approach: ATR + BB + S/R + Psych)
+            from smart_tp_sl import get_smart_tp_sl
 
-            # Calculate SL and TP based on signal type
-            if signal['signal_type'] == 'BUY':
-                # Stop Loss: 1.5 * ATR below entry
-                sl = entry - (1.5 * atr)
-                # Take Profit: 2.5 * ATR above entry (Risk/Reward = 1:1.67)
-                tp = entry + (2.5 * atr)
-            else:  # SELL
-                # Stop Loss: 1.5 * ATR above entry
-                sl = entry + (1.5 * atr)
-                # Take Profit: 2.5 * ATR below entry
-                tp = entry - (2.5 * atr)
+            smart_calculator = get_smart_tp_sl(
+                self.account_id,
+                self.symbol,
+                self.timeframe
+            )
+
+            tp_sl_result = smart_calculator.calculate(signal['signal_type'], entry)
+
+            # Extract TP/SL from smart calculator result
+            tp = tp_sl_result['tp']
+            sl = tp_sl_result['sl']
+
+            # Log the reasoning for transparency
+            logger.info(
+                f"🎯 Smart TP/SL: Entry={entry:.5f} | "
+                f"TP={tp:.5f} ({tp_sl_result['tp_reason']}) | "
+                f"SL={sl:.5f} ({tp_sl_result['sl_reason']}) | "
+                f"R:R={tp_sl_result['risk_reward']}"
+            )
 
             return (
                 round(entry, 5),
-                round(sl, 5),
-                round(tp, 5)
+                sl,  # Already rounded in smart calculator
+                tp   # Already rounded in smart calculator
             )
 
         except Exception as e:
-            logger.error(f"Error calculating entry/SL/TP: {e}")
-            return (0, 0, 0)
+            logger.error(f"Error calculating entry/SL/TP with smart calculator: {e}", exc_info=True)
+            # Fallback to simple ATR-based calculation
+            try:
+                atr_data = self.indicators.calculate_atr()
+                atr = atr_data['value'] if atr_data else (entry * 0.002)
+
+                if signal['signal_type'] == 'BUY':
+                    sl = entry - (1.5 * atr)
+                    tp = entry + (2.5 * atr)
+                else:
+                    sl = entry + (1.5 * atr)
+                    tp = entry - (2.5 * atr)
+
+                logger.warning(f"Using ATR fallback for {self.symbol}")
+                return (round(entry, 5), round(sl, 5), round(tp, 5))
+            except:
+                return (0, 0, 0)
         finally:
             db.close()
+
+    def _get_average_spread(self, db) -> float:
+        """
+        Calculate average spread from recent ticks
+
+        Args:
+            db: Database session
+
+        Returns:
+            Average spread (float)
+        """
+        from models import Tick
+        try:
+            # Get last 100 ticks for this symbol
+            recent_ticks = db.query(Tick).filter_by(
+                account_id=self.account_id,
+                symbol=self.symbol
+            ).order_by(Tick.timestamp.desc()).limit(100).all()
+
+            if not recent_ticks:
+                return 0
+
+            # Calculate spreads
+            spreads = [abs(float(tick.ask) - float(tick.bid)) for tick in recent_ticks]
+
+            # Return average
+            return sum(spreads) / len(spreads)
+
+        except Exception as e:
+            logger.error(f"Error calculating average spread: {e}")
+            return 0
 
     def _save_signal(self, signal: Dict):
         """
@@ -344,8 +412,8 @@ class SignalGenerator:
                      patterns_detected, reasons, status, created_at, expires_at)
                 VALUES
                     (:account_id, :symbol, :timeframe, :signal_type, :confidence,
-                     :entry_price, :sl_price, :tp_price, :indicators::jsonb,
-                     :patterns::jsonb, :reasons::jsonb, 'active', NOW(), NOW() + INTERVAL '24 hours')
+                     :entry_price, :sl_price, :tp_price, CAST(:indicators AS jsonb),
+                     CAST(:patterns AS jsonb), CAST(:reasons AS jsonb), 'active', NOW(), NOW() + INTERVAL '24 hours')
                 ON CONFLICT (account_id, symbol, timeframe)
                     WHERE status = 'active'
                 DO UPDATE SET

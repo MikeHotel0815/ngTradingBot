@@ -69,6 +69,39 @@ services:
       - tradingbot_network
     restart: unless-stopped
 
+  decision_cleanup:
+    build: .
+    container_name: ngtradingbot_decision_cleanup
+    command: python decision_cleanup_worker.py
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql://trader:${DB_PASSWORD:-tradingbot_secret_2025}@postgres:5432/ngtradingbot
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=ngtradingbot
+      - DB_USER=trader
+      - DB_PASSWORD=${DB_PASSWORD:-tradingbot_secret_2025}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - tradingbot_network
+    restart: unless-stopped
+
+  news_fetch:
+    build: .
+    container_name: ngtradingbot_news_fetch
+    command: python news_fetch_worker.py
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql://trader:${DB_PASSWORD:-tradingbot_secret_2025}@postgres:5432/ngtradingbot
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - tradingbot_network
+    restart: unless-stopped
+
 volumes:
   pgdata:
   redisdata:

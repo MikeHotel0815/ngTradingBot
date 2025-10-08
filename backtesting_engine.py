@@ -842,6 +842,9 @@ class BacktestingEngine:
             if len(historical_bars) < 50:
                 return None
 
+            # Detect market regime first
+            regime_info = self._detect_regime_on_bars(historical_bars)
+
             # Calculate indicators on historical bars
             indicator_signals = self._calculate_indicators_on_bars(historical_bars)
 
@@ -856,8 +859,8 @@ class BacktestingEngine:
             if not pattern_signals and not indicator_signals:
                 return None
 
-            # Aggregate signals (EXACT same logic as SignalGenerator)
-            signal = self._aggregate_signals(pattern_signals, indicator_signals, symbol, timeframe)
+            # Aggregate signals with regime filtering (EXACT same logic as SignalGenerator)
+            signal = self._aggregate_signals(pattern_signals, indicator_signals, symbol, timeframe, regime_info)
 
             if signal:
                 logger.info(f"Aggregated signal: {signal['signal_type']} with confidence {signal['confidence']}%")
@@ -878,9 +881,69 @@ class BacktestingEngine:
             logger.error(f"Error in full signal generation for {symbol} {timeframe}: {e}", exc_info=True)
             return None
 
+    def _detect_regime_on_bars(self, bars: List[OHLCData]) -> Dict:
+        """
+        Detect market regime (TRENDING or RANGING) on historical bars
+        Same logic as TechnicalIndicators.detect_market_regime()
+        """
+        import numpy as np
+        import talib
+
+        try:
+            if len(bars) < 30:
+                return {'regime': 'UNKNOWN', 'strength': 0, 'adx': None, 'bb_width': None}
+
+            # Reverse to chronological order
+            bars_sorted = list(reversed(bars))
+            closes = np.array([float(bar.close) for bar in bars_sorted])
+            highs = np.array([float(bar.high) for bar in bars_sorted])
+            lows = np.array([float(bar.low) for bar in bars_sorted])
+
+            # Calculate ADX (Average Directional Index) - measures trend strength
+            adx = talib.ADX(highs, lows, closes, timeperiod=14)
+            current_adx = adx[-1] if len(adx) > 0 and not np.isnan(adx[-1]) else None
+
+            # Calculate Bollinger Band Width (normalized) - measures volatility
+            bb_upper, bb_middle, bb_lower = talib.BBANDS(closes, timeperiod=20, nbdevup=2, nbdevdn=2)
+            bb_width = ((bb_upper[-1] - bb_lower[-1]) / bb_middle[-1]) * 100 if len(bb_upper) > 0 else None
+
+            # Determine regime
+            regime = 'UNKNOWN'
+            strength = 0
+
+            if current_adx is not None and bb_width is not None:
+                # ADX > 25 = Strong trend
+                # ADX < 20 = Weak/no trend (ranging)
+                if current_adx > 25:
+                    regime = 'TRENDING'
+                    strength = min(100, int((current_adx - 25) / 50 * 100))
+                elif current_adx < 20:
+                    regime = 'RANGING'
+                    strength = min(100, int((20 - current_adx) / 20 * 100))
+                else:
+                    # Borderline case (ADX 20-25) - use BB width as tie-breaker
+                    if bb_width < 2.0:  # Narrow bands = ranging
+                        regime = 'RANGING'
+                        strength = 50
+                    else:
+                        regime = 'TRENDING'
+                        strength = 50
+
+            return {
+                'regime': regime,
+                'strength': strength,
+                'adx': float(current_adx) if current_adx else None,
+                'bb_width': float(bb_width) if bb_width else None
+            }
+
+        except Exception as e:
+            logger.error(f"Error detecting regime on bars: {e}")
+            return {'regime': 'UNKNOWN', 'strength': 0, 'adx': None, 'bb_width': None}
+
     def _calculate_indicators_on_bars(self, bars: List[OHLCData]) -> List[Dict]:
         """Calculate technical indicators on historical bars"""
         import numpy as np
+        import talib
 
         if len(bars) < 20:
             return []
@@ -893,7 +956,7 @@ class BacktestingEngine:
 
         signals = []
 
-        # RSI (14) - Relaxed thresholds for backtesting
+        # RSI (14) - Relaxed thresholds for backtesting - MEAN-REVERSION
         if len(closes) >= 14:
             deltas = np.diff(closes)
             gains = np.where(deltas > 0, deltas, 0)
@@ -906,28 +969,28 @@ class BacktestingEngine:
 
                 # Relaxed thresholds: 40/60 instead of 30/70
                 if rsi < 40:
-                    signals.append({'type': 'BUY', 'indicator': 'RSI', 'value': rsi, 'reason': f'RSI oversold ({rsi:.1f})', 'strength': 'medium'})
+                    signals.append({'type': 'BUY', 'indicator': 'RSI', 'value': rsi, 'reason': f'RSI oversold ({rsi:.1f})', 'strength': 'medium', 'strategy_type': 'mean_reversion'})
                 elif rsi > 60:
-                    signals.append({'type': 'SELL', 'indicator': 'RSI', 'value': rsi, 'reason': f'RSI overbought ({rsi:.1f})', 'strength': 'medium'})
+                    signals.append({'type': 'SELL', 'indicator': 'RSI', 'value': rsi, 'reason': f'RSI overbought ({rsi:.1f})', 'strength': 'medium', 'strategy_type': 'mean_reversion'})
 
-        # EMA 20/50 crossover AND trend alignment
+        # EMA 20/50 crossover AND trend alignment - TREND-FOLLOWING
         if len(closes) >= 50:
             ema20 = self._calculate_ema(closes, 20)
             ema50 = self._calculate_ema(closes, 50)
 
             # Crossover signals
             if ema20[-1] > ema50[-1] and ema20[-2] <= ema50[-2]:
-                signals.append({'type': 'BUY', 'indicator': 'EMA_CROSS', 'reason': 'EMA 20/50 bullish crossover', 'strength': 'medium'})
+                signals.append({'type': 'BUY', 'indicator': 'EMA_CROSS', 'reason': 'EMA 20/50 bullish crossover', 'strength': 'medium', 'strategy_type': 'trend_following'})
             elif ema20[-1] < ema50[-1] and ema20[-2] >= ema50[-2]:
-                signals.append({'type': 'SELL', 'indicator': 'EMA_CROSS', 'reason': 'EMA 20/50 bearish crossover', 'strength': 'medium'})
+                signals.append({'type': 'SELL', 'indicator': 'EMA_CROSS', 'reason': 'EMA 20/50 bearish crossover', 'strength': 'medium', 'strategy_type': 'trend_following'})
 
             # Trend alignment (price above/below both EMAs)
             elif closes[-1] > ema20[-1] and closes[-1] > ema50[-1]:
-                signals.append({'type': 'BUY', 'indicator': 'EMA_TREND', 'reason': 'Price above EMAs (uptrend)', 'strength': 'weak'})
+                signals.append({'type': 'BUY', 'indicator': 'EMA_TREND', 'reason': 'Price above EMAs (uptrend)', 'strength': 'weak', 'strategy_type': 'trend_following'})
             elif closes[-1] < ema20[-1] and closes[-1] < ema50[-1]:
-                signals.append({'type': 'SELL', 'indicator': 'EMA_TREND', 'reason': 'Price below EMAs (downtrend)', 'strength': 'weak'})
+                signals.append({'type': 'SELL', 'indicator': 'EMA_TREND', 'reason': 'Price below EMAs (downtrend)', 'strength': 'weak', 'strategy_type': 'trend_following'})
 
-        # MACD
+        # MACD - TREND-FOLLOWING
         if len(closes) >= 26:
             ema12 = self._calculate_ema(closes, 12)
             ema26 = self._calculate_ema(closes, 26)
@@ -935,9 +998,9 @@ class BacktestingEngine:
             signal_line = self._calculate_ema(macd_line, 9)
 
             if macd_line[-1] > signal_line[-1] and macd_line[-2] <= signal_line[-2]:
-                signals.append({'type': 'BUY', 'indicator': 'MACD', 'reason': 'MACD bullish crossover', 'strength': 'medium'})
+                signals.append({'type': 'BUY', 'indicator': 'MACD', 'reason': 'MACD bullish crossover', 'strength': 'medium', 'strategy_type': 'trend_following'})
             elif macd_line[-1] < signal_line[-1] and macd_line[-2] >= signal_line[-2]:
-                signals.append({'type': 'SELL', 'indicator': 'MACD', 'reason': 'MACD bearish crossover', 'strength': 'medium'})
+                signals.append({'type': 'SELL', 'indicator': 'MACD', 'reason': 'MACD bearish crossover', 'strength': 'medium', 'strategy_type': 'trend_following'})
 
         return signals
 
@@ -993,17 +1056,54 @@ class BacktestingEngine:
 
         return signals
 
+    def _filter_signals_by_regime(self, signals: List[Dict], regime: str) -> List[Dict]:
+        """
+        Filter signals based on market regime to avoid conflicting strategies
+        Same logic as TechnicalIndicators._filter_by_regime()
+        """
+        if regime == 'UNKNOWN':
+            # If regime unclear, keep all signals
+            return signals
+
+        filtered = []
+
+        for sig in signals:
+            strategy_type = sig.get('strategy_type', 'neutral')
+
+            if regime == 'TRENDING':
+                # In trending markets: prioritize trend-following, exclude mean-reversion
+                if strategy_type in ['trend_following', 'neutral']:
+                    filtered.append(sig)
+            elif regime == 'RANGING':
+                # In ranging markets: prioritize mean-reversion, exclude trend-following
+                if strategy_type in ['mean_reversion', 'neutral']:
+                    filtered.append(sig)
+
+        return filtered
+
     def _aggregate_signals(
         self,
         pattern_signals: List[Dict],
         indicator_signals: List[Dict],
         symbol: str,
-        timeframe: str
+        timeframe: str,
+        regime_info: Dict
     ) -> Optional[Dict]:
         """
-        Aggregate pattern and indicator signals
-        EXACT same logic as SignalGenerator._aggregate_signals()
+        Aggregate pattern and indicator signals with regime filtering
+        EXACT same logic as SignalGenerator._aggregate_signals() + TechnicalIndicators regime filtering
         """
+        # Filter signals by market regime
+        regime = regime_info.get('regime', 'UNKNOWN')
+        strength = regime_info.get('strength', 0)
+
+        # Filter indicator signals based on regime
+        filtered_indicator_signals = self._filter_signals_by_regime(indicator_signals, regime)
+
+        # Log regime filtering
+        if len(indicator_signals) != len(filtered_indicator_signals):
+            logger.info(f"{symbol} {timeframe} Market: {regime} ({strength}%) - Signals: {len(indicator_signals)} total, {len(filtered_indicator_signals)} after regime filter")
+
         # Count BUY and SELL signals
         buy_signals = []
         sell_signals = []
@@ -1014,7 +1114,7 @@ class BacktestingEngine:
             elif sig['type'] == 'SELL':
                 sell_signals.append(sig)
 
-        for sig in indicator_signals:
+        for sig in filtered_indicator_signals:
             if sig['type'] == 'BUY':
                 buy_signals.append(sig)
             elif sig['type'] == 'SELL':

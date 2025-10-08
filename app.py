@@ -14,7 +14,7 @@ import pytz
 
 # Import database and models
 from database import init_db, ScopedSession, cleanup_old_ticks
-from models import Account, SubscribedSymbol, Log, Tick, OHLCData, BrokerSymbol, Command, AccountTransaction, TradingSignal
+from models import Account, SubscribedSymbol, Log, Tick, OHLCData, BrokerSymbol, Command, AccountTransaction, TradingSignal, Trade
 from auth import require_api_key, get_or_create_account
 from backup_scheduler import start_backup_scheduler, get_scheduler
 from redis_client import init_redis, get_redis
@@ -906,9 +906,12 @@ def auto_trade_status():
     trader = get_auto_trader()
     return jsonify({
         'enabled': trader.enabled,
-        'max_positions': trader.max_positions,
-        'min_confidence': trader.min_signal_confidence,
-        'max_drawdown': trader.max_drawdown_percent,
+        'min_confidence': trader.min_autotrade_confidence,
+        'circuit_breaker_enabled': trader.circuit_breaker_enabled,
+        'circuit_breaker_tripped': trader.circuit_breaker_tripped,
+        'circuit_breaker_reason': trader.circuit_breaker_reason,
+        'max_daily_loss_percent': trader.max_daily_loss_percent,
+        'max_total_drawdown_percent': trader.max_total_drawdown_percent,
         'processed_signals': len(trader.processed_signals)
     }), 200
 
@@ -1193,9 +1196,9 @@ def get_backtest_trades(backtest_id):
 
 @app_command.route('/api/backtest/<int:backtest_id>', methods=['DELETE'])
 def delete_backtest(backtest_id):
-    """Delete a backtest run and all associated trades"""
+    """Delete a backtest run and all associated data"""
     try:
-        from models import BacktestRun, BacktestTrade
+        from models import BacktestRun, BacktestTrade, SymbolPerformanceTracking
         db = ScopedSession()
         try:
             backtest = db.query(BacktestRun).filter_by(id=backtest_id).first()
@@ -1203,14 +1206,19 @@ def delete_backtest(backtest_id):
             if not backtest:
                 return jsonify({'error': 'Backtest not found'}), 404
 
-            # Delete associated trades first
-            db.query(BacktestTrade).filter_by(backtest_run_id=backtest_id).delete()
+            # Delete all associated data in correct order (child tables first)
 
-            # Delete backtest run
+            # 1. Delete symbol performance tracking (references backtest_run_id)
+            deleted_perf = db.query(SymbolPerformanceTracking).filter_by(backtest_run_id=backtest_id).delete()
+
+            # 2. Delete associated trades
+            deleted_trades = db.query(BacktestTrade).filter_by(backtest_run_id=backtest_id).delete()
+
+            # 3. Delete backtest run
             db.delete(backtest)
             db.commit()
 
-            logger.info(f"Deleted backtest {backtest_id}: {backtest.name}")
+            logger.info(f"Deleted backtest {backtest_id}: {backtest.name} ({deleted_trades} trades, {deleted_perf} performance records)")
             return jsonify({'status': 'success', 'message': 'Backtest deleted'}), 200
 
         finally:
@@ -1319,12 +1327,22 @@ def get_best_pairs():
 def receive_ticks(account, db):
     """
     Receive batched tick data from EA
+
+    IMPORTANT: Account from decorator may be detached - reload from db session
     """
     try:
-        from models import Tick
+        from models import Tick, Account
+
+        # CRITICAL FIX: Reload account from db session to prevent detachment errors
+        account_id = account.id  # Get ID before any session operations
+        account = db.query(Account).filter_by(id=account_id).first()
+
+        if not account:
+            return jsonify({'status': 'error', 'message': 'Account not found'}), 404
 
         data = request.get_json()
         ticks = data.get('ticks', [])
+        positions_from_ea = data.get('positions', [])  # Get MT5 profit values from EA
 
         if not ticks:
             return jsonify({'status': 'error', 'message': 'No ticks provided'}), 400
@@ -1338,6 +1356,20 @@ def receive_ticks(account, db):
         profit_week = data.get('profit_week')
         profit_month = data.get('profit_month')
         profit_year = data.get('profit_year')
+
+        # Create a map of ticket -> EA profit values for quick lookup
+        ea_profit_map = {}
+        if positions_from_ea:
+            for pos in positions_from_ea:
+                ticket = pos.get('ticket')
+                if ticket:
+                    ea_profit_map[ticket] = {
+                        'profit': pos.get('profit', 0.0),
+                        'swap': pos.get('swap', 0.0)
+                    }
+
+        # Store account_id before commit (to prevent session detachment issues)
+        account_id = account.id
 
         # Update account data if provided
         if balance is not None:
@@ -1363,7 +1395,7 @@ def receive_ticks(account, db):
         # Cache account state in Redis for fast access
         try:
             redis = get_redis()
-            redis.cache_account_state(account.id, {
+            redis.cache_account_state(account_id, {
                 'balance': float(balance) if balance is not None else None,
                 'equity': float(equity) if equity is not None else None,
                 'margin': float(margin) if margin is not None else None,
@@ -1393,7 +1425,7 @@ def receive_ticks(account, db):
 
                 # Add account_id to tick data
                 tick_with_account = {
-                    'account_id': account.id,
+                    'account_id': account_id,
                     'symbol': tick_data.get('symbol'),
                     'bid': bid,
                     'ask': ask,
@@ -1414,9 +1446,9 @@ def receive_ticks(account, db):
                 }
 
             # Buffer all ticks in Redis at once (fast!)
-            redis.buffer_ticks_batch(account.id, buffered_ticks)
+            redis.buffer_ticks_batch(account_id, buffered_ticks)
 
-            logger.debug(f"Buffered {len(buffered_ticks)} ticks in Redis for account {account.id}")
+            logger.debug(f"Buffered {len(buffered_ticks)} ticks in Redis for account {account_id}")
 
         except Exception as e:
             logger.error(f"Failed to buffer ticks in Redis: {e}")
@@ -1424,7 +1456,7 @@ def receive_ticks(account, db):
             tick_objects = []
             for tick_data in ticks:
                 tick = Tick(
-                    account_id=account.id,
+                    account_id=account_id,
                     symbol=tick_data.get('symbol'),
                     bid=tick_data.get('bid'),
                     ask=tick_data.get('ask'),
@@ -1460,7 +1492,166 @@ def receive_ticks(account, db):
                 'year': float(profit_year) if profit_year is not None else 0.0
             })
 
-        logger.debug(f"Received {len(ticks)} ticks from account {account.mt5_account_number}")
+        # Update shadow trades with current prices
+        try:
+            from shadow_trading_engine import update_shadow_trades_for_tick
+            for tick_data in ticks:
+                symbol = tick_data.get('symbol')
+                bid = tick_data.get('bid')
+                if symbol and bid:
+                    update_shadow_trades_for_tick(symbol, bid)
+        except Exception as e:
+            logger.error(f"Error updating shadow trades: {e}")
+
+        # REAL-TIME POSITION UPDATES: Emit directly here like price_update (works!)
+        try:
+            from models import Trade, Tick as TickModel
+            from trade_monitor import get_trade_monitor
+
+            # Get symbols from received ticks
+            tick_symbols = set(tick_data.get('symbol') for tick_data in ticks)
+
+            # Check ALL open trades (not just from tick_symbols) to ensure all positions update in real-time
+            open_trades = db.query(Trade).filter(
+                Trade.account_id == account_id,
+                Trade.status == 'open'
+            ).all()
+
+            # If we have open trades affected by these price updates, calculate and emit P&L
+            if open_trades:
+                trade_monitor = get_trade_monitor()
+
+                # Calculate positions with EUR conversion
+                positions_data = []
+                total_pnl = 0
+
+                # Get EUR/USD rate
+                eurusd_rate = trade_monitor.get_eurusd_rate(db, account_id)
+
+                for trade in open_trades:
+                    # Get current price dict from latest_prices (from current tick batch) or database (last known price)
+                    if trade.symbol in latest_prices:
+                        current_price_dict = latest_prices[trade.symbol]
+                    else:
+                        # Symbol not in current tick batch - get last known price from database
+                        current_price_dict = trade_monitor.get_current_price(db, account_id, trade.symbol)
+
+                    if current_price_dict:
+                        # Check if we have EA profit values for this trade
+                        ea_profit_data = ea_profit_map.get(trade.ticket)
+
+                        if ea_profit_data:
+                            # USE EA-PROVIDED PROFIT VALUES (100% accurate from MT5!)
+                            mt5_profit = ea_profit_data['profit']
+                            mt5_swap = ea_profit_data['swap']
+                            total_pnl_mt5 = mt5_profit + mt5_swap
+                            total_pnl += total_pnl_mt5
+
+                            # Calculate TP/SL distances for display (pass price DICT)
+                            pnl_data = trade_monitor.calculate_position_pnl(trade, current_price_dict, eurusd_rate)
+
+                            # Get trailing stop info (extract float price for TS)
+                            trailing_stop_info = None
+                            try:
+                                from trailing_stop_manager import get_trailing_stop_manager
+                                ts_manager = get_trailing_stop_manager()
+                                # Extract float price: BID for BUY (close at BID), ASK for SELL (close at ASK)
+                                close_price_float = float(current_price_dict['bid']) if trade.direction == 'buy' else float(current_price_dict['ask'])
+                                trailing_stop_info = ts_manager.get_trailing_stop_info(trade, close_price_float, db)
+                            except Exception as e:
+                                logger.debug(f"Failed to get trailing stop info: {e}")
+
+                            # Format opening reason
+                            opening_reason = "Manual (MT5)"
+                            if trade.source == "autotrade" and trade.signal_id:
+                                opening_reason = f"Signal #{trade.signal_id}"
+                                if trade.timeframe:
+                                    opening_reason += f" ({trade.timeframe})"
+                            elif trade.source == "ea_command":
+                                opening_reason = "EA Command"
+
+                            position_info = {
+                                'ticket': trade.ticket,
+                                'symbol': trade.symbol,
+                                'direction': trade.direction.upper() if isinstance(trade.direction, str) else ('BUY' if trade.direction == 0 else 'SELL'),
+                                'volume': float(trade.volume),
+                                'open_price': float(trade.open_price),
+                                'current_price': pnl_data['current_price'] if pnl_data else current_price,
+                                'pnl': total_pnl_mt5,  # USE MT5 PROFIT - 100% ACCURATE!
+                                'tp': float(trade.tp) if trade.tp else None,
+                                'sl': float(trade.sl) if trade.sl else None,
+                                'distance_to_tp_eur': pnl_data.get('distance_to_tp_eur') if pnl_data else None,
+                                'distance_to_sl_eur': pnl_data.get('distance_to_sl_eur') if pnl_data else None,
+                                'open_time': trade.open_time.isoformat() if trade.open_time else None,
+                                'opening_reason': opening_reason,
+                                'trailing_stop_info': trailing_stop_info,
+                            }
+                            positions_data.append(position_info)
+                        else:
+                            # Fallback: Calculate P&L if EA didn't send profit data (shouldn't happen normally)
+                            pnl_data = trade_monitor.calculate_position_pnl(trade, current_price_dict, eurusd_rate)
+
+                            if pnl_data:
+                                calculated_pnl = pnl_data.get('pnl', 0.0)
+                                total_pnl += calculated_pnl
+
+                                # Get trailing stop info (extract float price for TS)
+                                trailing_stop_info = None
+                                try:
+                                    from trailing_stop_manager import get_trailing_stop_manager
+                                    ts_manager = get_trailing_stop_manager()
+                                    # Extract float price: BID for BUY, ASK for SELL
+                                    close_price_float = float(current_price_dict['bid']) if trade.direction == 'buy' else float(current_price_dict['ask'])
+                                    trailing_stop_info = ts_manager.get_trailing_stop_info(trade, close_price_float, db)
+                                except Exception as e:
+                                    logger.debug(f"Failed to get trailing stop info: {e}")
+
+                                # Format opening reason
+                                opening_reason = "Manual (MT5)"
+                                if trade.source == "autotrade" and trade.signal_id:
+                                    opening_reason = f"Signal #{trade.signal_id}"
+                                    if trade.timeframe:
+                                        opening_reason += f" ({trade.timeframe})"
+                                elif trade.source == "ea_command":
+                                    opening_reason = "EA Command"
+
+                                position_info = {
+                                    'ticket': trade.ticket,
+                                    'symbol': trade.symbol,
+                                    'direction': trade.direction.upper() if isinstance(trade.direction, str) else ('BUY' if trade.direction == 0 else 'SELL'),
+                                    'volume': float(trade.volume),
+                                    'open_price': float(trade.open_price),
+                                    'current_price': pnl_data['current_price'],
+                                    'pnl': calculated_pnl,
+                                    'tp': float(trade.tp) if trade.tp else None,
+                                    'sl': float(trade.sl) if trade.sl else None,
+                                    'distance_to_tp_eur': pnl_data.get('distance_to_tp_eur'),
+                                    'distance_to_sl_eur': pnl_data.get('distance_to_sl_eur'),
+                                    'open_time': trade.open_time.isoformat() if trade.open_time else None,
+                                    'opening_reason': opening_reason,
+                                    'trailing_stop_info': trailing_stop_info,
+                                }
+                                positions_data.append(position_info)
+
+                # Emit directly like price_update (same context!)
+                if positions_data:
+                    # DEBUG: Log first 3 positions to verify correct P/L values
+                    for pos in positions_data[:3]:
+                        logger.info(f"📤 WebSocket sending: {pos['symbol']} #{pos['ticket']} - P/L: €{pos['pnl']}")
+
+                    socketio.emit('positions_update', {
+                        'account_id': account_id,
+                        'position_count': len(positions_data),
+                        'positions': positions_data,
+                        'total_pnl': round(total_pnl, 2),
+                        'timestamp': datetime.utcnow().isoformat()
+                    })
+                    logger.debug(f"✨ Real-time position update emitted for {len(positions_data)} trades (same as price_update)")
+
+        except Exception as pos_error:
+            logger.warning(f"Real-time position update failed (non-critical): {pos_error}")
+
+        logger.debug(f"Received {len(ticks)} ticks from account {account_id}")
 
         return jsonify({
             'status': 'success',
@@ -1505,7 +1696,7 @@ def receive_historical_ohlc(account, db):
 
             # Check if candle already exists
             existing = db.query(OHLCData).filter_by(
-                account_id=account.id,
+                account_id=account_id,
                 symbol=symbol,
                 timeframe=timeframe,
                 timestamp=timestamp
@@ -1517,7 +1708,7 @@ def receive_historical_ohlc(account, db):
 
             # Create new OHLC entry
             ohlc = OHLCData(
-                account_id=account.id,
+                account_id=account_id,
                 symbol=symbol,
                 timeframe=timeframe,
                 timestamp=timestamp,
@@ -1603,7 +1794,7 @@ def request_historical_data():
         # Create command for EA
         command = create_command(
             db=db,
-            account_id=account.id,
+            account_id=account_id,
             command_type='REQUEST_HISTORICAL_DATA',
             payload={
                 'symbol': symbol,
@@ -1670,6 +1861,7 @@ def sync_trades(account, db):
                 existing_trade.swap = trade_data.get('swap')
                 existing_trade.updated_at = datetime.utcnow()
                 updated_count += 1
+                logger.info(f"🔄 Trade sync update: {existing_trade.symbol} #{ticket} profit={existing_trade.profit}")
             else:
                 # Create new trade record
                 new_trade = Trade(
@@ -1725,6 +1917,8 @@ def update_trade(account, db):
         data = request.get_json()
         ticket = data.get('ticket')
 
+        logger.info(f"📥 EA trade update received: ticket={ticket}, profit={data.get('profit')}, swap={data.get('swap')}, commission={data.get('commission')}")
+
         if not ticket:
             return jsonify({'status': 'error', 'message': 'Missing ticket'}), 400
 
@@ -1756,7 +1950,7 @@ def update_trade(account, db):
             trade.updated_at = datetime.utcnow()
 
             db.commit()
-            logger.info(f"Trade #{ticket} updated: status={trade.status}, profit={trade.profit}, close_reason={trade.close_reason}")
+            logger.info(f"🔄 Trade #{ticket} updated from EA: profit={trade.profit}, swap={trade.swap}, commission={trade.commission}, total={float(trade.profit or 0) + float(trade.swap or 0) + float(trade.commission or 0):.2f}")
 
             # Update indicator scores if trade was closed
             if trade.status == 'closed' and trade.signal_id:
@@ -1787,6 +1981,15 @@ def update_trade(account, db):
 
                 except Exception as e:
                     logger.error(f"Error updating indicator scores for trade #{ticket}: {e}")
+
+            # Update live performance tracking when trade closes
+            if trade.status == 'closed':
+                try:
+                    from live_performance_tracker import get_live_tracker
+                    tracker = get_live_tracker()
+                    tracker.update_after_trade_close(trade, db)
+                except Exception as e:
+                    logger.error(f"Error updating live performance tracking for trade #{ticket}: {e}")
 
             # Set cooldown after SL hit to prevent revenge trading
             if trade.close_reason == 'SL_HIT' and trade.symbol:
@@ -1822,6 +2025,24 @@ def update_trade(account, db):
             else:
                 close_time = None
 
+            # Extract signal_id and timeframe from command if available
+            command_id = data.get('command_id')
+            signal_id = None
+            timeframe = None
+            source = data.get('source', 'mt5_manual')
+
+            if command_id:
+                # Get command to extract signal_id and timeframe
+                command = db.query(Command).filter_by(id=command_id).first()
+                if command and command.payload:
+                    signal_id = command.payload.get('signal_id')
+                    timeframe = command.payload.get('timeframe')
+                    # If command has signal_id, this is an autotrade
+                    if signal_id:
+                        source = 'autotrade'
+                    else:
+                        source = 'ea_command'
+
             new_trade = Trade(
                 account_id=account.id,
                 ticket=ticket,
@@ -1838,8 +2059,10 @@ def update_trade(account, db):
                 profit=data.get('profit'),
                 commission=data.get('commission'),
                 swap=data.get('swap'),
-                source=data.get('source', 'MT5'),
-                command_id=data.get('command_id'),
+                source=source,  # autotrade, ea_command, or mt5_manual
+                command_id=command_id,
+                signal_id=signal_id,  # Link to signal for autotrades
+                timeframe=timeframe,  # Timeframe for symbol+timeframe limiting
                 close_reason=data.get('close_reason'),
                 status=data.get('status', 'open'),
                 created_at=datetime.utcnow(),
@@ -1847,7 +2070,7 @@ def update_trade(account, db):
             )
             db.add(new_trade)
             db.commit()
-            logger.info(f"Trade #{ticket} created from MT5 update")
+            logger.info(f"✅ Trade #{ticket} created from MT5: source={source}, signal_id={signal_id}, timeframe={timeframe}")
 
         return jsonify({'status': 'success'}), 200
 
@@ -3226,6 +3449,11 @@ def get_trade_history():
                     duration_seconds = (trade.close_time - trade.open_time).total_seconds()
                     duration_hours = round(duration_seconds / 3600, 2)
 
+                # Get confidence from linked signal if available
+                confidence = None
+                if trade.signal_id and trade.signal:
+                    confidence = float(trade.signal.confidence) if trade.signal.confidence else None
+
                 trades_data.append({
                     'id': trade.id,
                     'ticket': trade.ticket,
@@ -3244,6 +3472,7 @@ def get_trade_history():
                     'swap': float(trade.swap) if trade.swap else None,
                     'source': trade.source,
                     'timeframe': trade.timeframe,
+                    'confidence': confidence,
                     'close_reason': trade.close_reason,
                     'signal_id': trade.signal_id,
                     'status': trade.status,
@@ -3290,6 +3519,7 @@ def get_settings():
             logger.info(f"⚙️ Settings loaded: max_positions={settings.max_positions}")
             result = jsonify({
                 'max_positions': settings.max_positions,
+                'max_positions_per_symbol_timeframe': settings.max_positions_per_symbol_timeframe,
                 'risk_per_trade_percent': float(settings.risk_per_trade_percent),
                 'position_size_percent': float(settings.position_size_percent),
                 'max_drawdown_percent': float(settings.max_drawdown_percent),
@@ -3324,6 +3554,8 @@ def update_settings():
             # Update fields if provided
             if 'max_positions' in data:
                 settings.max_positions = int(data['max_positions'])
+            if 'max_positions_per_symbol_timeframe' in data:
+                settings.max_positions_per_symbol_timeframe = int(data['max_positions_per_symbol_timeframe'])
             if 'risk_per_trade_percent' in data:
                 settings.risk_per_trade_percent = float(data['risk_per_trade_percent'])
             # VALIDATION: Validate all numeric inputs
@@ -3666,6 +3898,36 @@ def get_all_indicator_scores(account):
         return jsonify({'error': str(e)}), 500
 
 
+@app_command.route('/api/performance/symbols', methods=['GET'])
+@require_api_key
+def get_symbol_performance(account):
+    """
+    Get live performance metrics for all symbols
+
+    Returns real-time performance data for each symbol
+    """
+    try:
+        from live_performance_tracker import get_live_tracker
+        from database import ScopedSession
+
+        db = ScopedSession()
+        try:
+            tracker = get_live_tracker()
+            performance = tracker.get_all_symbol_performance(account.id, db)
+
+            return jsonify({
+                'status': 'success',
+                'symbols': performance
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Error getting symbol performance: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app_webui.route('/api/spread/stats', methods=['GET'])
 def get_spread_stats():
     """Get spread statistics for all symbols or a specific symbol"""
@@ -3735,6 +3997,207 @@ def run_server(app, port, name):
     """Run Flask app on specific port"""
     logger.info(f"Starting {name} server on port {port}")
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+
+
+@app_webui.route('/api/ai-decisions', methods=['GET'])
+def get_ai_decisions():
+    """Get recent AI decisions for transparency"""
+    try:
+        from ai_decision_log import get_decision_logger
+
+        # Use account ID 1 (default account for dashboard)
+        account_id = 1
+        limit = request.args.get('limit', 50, type=int)
+        decision_type = request.args.get('type')
+        minutes = request.args.get('minutes', type=int)
+
+        decision_logger = get_decision_logger()
+        decisions = decision_logger.get_recent_decisions(
+            account_id,
+            limit=limit,
+            decision_type=decision_type,
+            minutes=minutes
+        )
+
+        decisions_data = []
+        for d in decisions:
+            decisions_data.append({
+                'id': d.id,
+                'timestamp': d.timestamp.isoformat() if d.timestamp else None,
+                'decision_type': d.decision_type,
+                'decision': d.decision,
+                'symbol': d.symbol,
+                'timeframe': d.timeframe,
+                'primary_reason': d.primary_reason,
+                'detailed_reasoning': d.detailed_reasoning,
+                'impact_level': d.impact_level,
+                'user_action_required': d.user_action_required,
+                'confidence_score': float(d.confidence_score) if d.confidence_score else None,
+                'risk_score': float(d.risk_score) if d.risk_score else None,
+                'account_balance': float(d.account_balance) if d.account_balance else None,
+                'open_positions': d.open_positions
+            })
+
+        return jsonify({
+            'status': 'success',
+            'decisions': decisions_data
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error getting AI decisions: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app_webui.route('/api/ai-decisions/stats', methods=['GET'])
+def get_ai_decision_stats():
+    """Get AI decision statistics"""
+    try:
+        from ai_decision_log import get_decision_logger
+
+        # Use account ID 1 (default account for dashboard)
+        account_id = 1
+        hours = request.args.get('hours', 24, type=int)
+
+        decision_logger = get_decision_logger()
+        stats = decision_logger.get_decision_stats(account_id, hours=hours)
+
+        return jsonify({
+            'status': 'success',
+            'stats': stats
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error getting AI decision stats: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app_webui.route('/api/ai-decisions/action-required', methods=['GET'])
+def get_action_required_decisions():
+    """Get decisions requiring user action"""
+    try:
+        from ai_decision_log import get_decision_logger
+
+        # Use account ID 1 (default account for dashboard)
+        account_id = 1
+
+        decision_logger = get_decision_logger()
+        decisions = decision_logger.get_decisions_requiring_action(account_id)
+
+        decisions_data = []
+        for d in decisions:
+            decisions_data.append({
+                'id': d.id,
+                'timestamp': d.timestamp.isoformat() if d.timestamp else None,
+                'decision_type': d.decision_type,
+                'decision': d.decision,
+                'symbol': d.symbol,
+                'primary_reason': d.primary_reason,
+                'impact_level': d.impact_level
+            })
+
+        return jsonify({
+            'status': 'success',
+            'decisions': decisions_data,
+            'count': len(decisions_data)
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error getting action-required decisions: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================================
+# DAILY DRAWDOWN PROTECTION
+# ============================================================================
+
+@app_webui.route('/api/daily-drawdown/status', methods=['GET'])
+def get_daily_drawdown_status():
+    """Get daily drawdown protection status"""
+    try:
+        from daily_drawdown_protection import get_drawdown_protection
+
+        # Use account ID 1 (default account for dashboard)
+        account_id = 1
+
+        dd_protection = get_drawdown_protection(account_id)
+        status = dd_protection.get_status()
+
+        return jsonify({'status': 'success', 'drawdown': status}), 200
+
+    except Exception as e:
+        logger.error(f"Error getting daily drawdown status: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app_webui.route('/api/daily-drawdown/config', methods=['POST'])
+def update_daily_drawdown_config():
+    """Update daily drawdown protection configuration"""
+    try:
+        from daily_drawdown_protection import get_drawdown_protection
+
+        data = request.get_json()
+        account_id = 1  # Default account
+
+        max_daily_loss_percent = data.get('max_daily_loss_percent')
+        max_daily_loss_eur = data.get('max_daily_loss_eur')
+
+        dd_protection = get_drawdown_protection(account_id)
+        dd_protection.update_config(
+            max_daily_loss_percent=max_daily_loss_percent,
+            max_daily_loss_eur=max_daily_loss_eur
+        )
+
+        return jsonify({
+            'status': 'success',
+            'message': 'Daily drawdown config updated'
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error updating daily drawdown config: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================================
+# NEWS FILTER
+# ============================================================================
+
+@app_webui.route('/api/news/upcoming', methods=['GET'])
+def get_upcoming_news():
+    """Get upcoming high-impact news events"""
+    try:
+        from news_filter import get_news_filter
+
+        account_id = 1
+        hours = request.args.get('hours', 24, type=int)
+
+        news_filter = get_news_filter(account_id)
+        events = news_filter.get_upcoming_events(hours=hours)
+
+        return jsonify({'status': 'success', 'events': events}), 200
+
+    except Exception as e:
+        logger.error(f"Error getting upcoming news: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app_webui.route('/api/news/fetch', methods=['POST'])
+def fetch_news_now():
+    """Manually trigger news fetch"""
+    try:
+        from news_filter import get_news_filter
+
+        account_id = 1
+        news_filter = get_news_filter(account_id)
+        count = news_filter.fetch_and_store_events()
+
+        return jsonify({
+            'status': 'success',
+            'message': f'Fetched {count} news events'
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error fetching news: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 if __name__ == '__main__':

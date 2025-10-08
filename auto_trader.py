@@ -393,6 +393,78 @@ class AutoTrader:
             logger.error(f"Error evaluating signal: {e}")
             return {'execute': False, 'reason': str(e)}
 
+    def _validate_tp_sl(self, signal: TradingSignal, adjusted_sl: float) -> bool:
+        """
+        Validate TP/SL values before creating trade command
+
+        Ensures:
+        - TP and SL are not zero (MT5 requirement)
+        - TP/SL are in correct direction
+        - SL is not too close to entry (minimum distance)
+        - Risk/Reward ratio is reasonable
+
+        Returns:
+            True if valid, False otherwise
+        """
+        try:
+            entry = signal.entry_price
+            tp = signal.tp
+            sl = adjusted_sl
+
+            # Check 1: TP and SL must not be zero (MT5 EA rejects these)
+            if tp == 0 or sl == 0 or tp is None or sl is None:
+                logger.warning(f"TP/SL validation failed: TP={tp}, SL={sl} (must not be 0 or None)")
+                return False
+
+            # Check 2: Verify direction is correct
+            if signal.signal_type == 'BUY':
+                if tp <= entry:
+                    logger.warning(f"BUY TP validation failed: TP ({tp}) must be > entry ({entry})")
+                    return False
+                if sl >= entry:
+                    logger.warning(f"BUY SL validation failed: SL ({sl}) must be < entry ({entry})")
+                    return False
+            else:  # SELL
+                if tp >= entry:
+                    logger.warning(f"SELL TP validation failed: TP ({tp}) must be < entry ({entry})")
+                    return False
+                if sl <= entry:
+                    logger.warning(f"SELL SL validation failed: SL ({sl}) must be > entry ({entry})")
+                    return False
+
+            # Check 3: Minimum SL distance (0.05% for forex, 0.2% for volatile assets)
+            min_sl_distance_pct = 0.2 if signal.symbol in ['BTCUSD', 'ETHUSD', 'XAUUSD'] else 0.05
+            sl_distance_pct = abs(entry - sl) / entry * 100
+
+            if sl_distance_pct < min_sl_distance_pct:
+                logger.warning(f"SL too tight: {sl_distance_pct:.2f}% (min: {min_sl_distance_pct}%)")
+                return False
+
+            # Check 4: Maximum TP distance (5% for most, 3% for volatile)
+            max_tp_distance_pct = 3.0 if signal.symbol in ['BTCUSD', 'ETHUSD', 'XAUUSD'] else 5.0
+            tp_distance_pct = abs(tp - entry) / entry * 100
+
+            if tp_distance_pct > max_tp_distance_pct:
+                logger.warning(f"TP too far: {tp_distance_pct:.2f}% (max: {max_tp_distance_pct}%)")
+                return False
+
+            # Check 5: Risk/Reward ratio (minimum 1:1.2)
+            risk = abs(entry - sl)
+            reward = abs(tp - entry)
+            risk_reward = reward / risk if risk > 0 else 0
+
+            if risk_reward < 1.2:
+                logger.warning(f"Risk/Reward too low: {risk_reward:.2f} (min: 1.2)")
+                return False
+
+            # All checks passed
+            logger.debug(f"✅ TP/SL validation passed: R:R={risk_reward:.2f}, SL_dist={sl_distance_pct:.2f}%, TP_dist={tp_distance_pct:.2f}%")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error in TP/SL validation: {e}")
+            return False
+
     def create_trade_command(self, db: Session, signal: TradingSignal, volume: float) -> Optional[Command]:
         """
         Create trade command from signal with pre-execution spread validation
@@ -450,6 +522,11 @@ class AutoTrader:
                         adjusted_sl = signal.entry_price + adjusted_sl_distance
 
                     logger.info(f"📊 {signal.symbol}: Adjusted SL with multiplier {sl_multiplier} | Original: {signal.sl} → Adjusted: {adjusted_sl:.5f}")
+
+            # ✅ CRITICAL VALIDATION: Ensure TP/SL are valid before sending to MT5
+            if not self._validate_tp_sl(signal, adjusted_sl):
+                logger.error(f"❌ TP/SL validation failed for {signal.symbol}: Invalid TP/SL values")
+                return None
 
             # Store signal_id and timeframe in payload for trade linking
             payload_data = {
