@@ -293,6 +293,17 @@ class TradingSignal(Base):
     # Relationships
     account = relationship("Account", foreign_keys=[account_id])
 
+    # Backward compatibility properties
+    @property
+    def sl(self):
+        """Alias for sl_price for backward compatibility"""
+        return self.sl_price
+
+    @property
+    def tp(self):
+        """Alias for tp_price for backward compatibility"""
+        return self.tp_price
+
     def __repr__(self):
         return f"<Signal({self.symbol} {self.timeframe} {self.signal_type} {self.confidence}%)>"
 
