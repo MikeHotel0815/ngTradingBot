@@ -1238,7 +1238,7 @@ def get_backtest_trades(backtest_id):
                     'entry_reason': t.entry_reason,
                     'exit_time': t.exit_time.isoformat() if t.exit_time else None,
                     'exit_price': float(t.exit_price) if t.exit_price else None,
-                    'exit_reason': t.exit_reason,
+                    'exit_reason': t.close_reason,  # Fixed: use close_reason column
                     'profit': float(t.profit) if t.profit else None,
                     'profit_percent': float(t.profit_percent) if t.profit_percent else None,
                     'duration_minutes': t.duration_minutes,
@@ -2157,6 +2157,7 @@ def update_trade(account, db):
             signal_id = None
             timeframe = None
             source = data.get('source', 'mt5_manual')
+            entry_reason = None
 
             if command_id:
                 # Get command to extract signal_id and timeframe
@@ -2167,8 +2168,32 @@ def update_trade(account, db):
                     # If command has signal_id, this is an autotrade
                     if signal_id:
                         source = 'autotrade'
+                        # Try to get signal details for entry_reason
+                        from models import TradingSignal
+                        signal = db.query(TradingSignal).filter_by(id=signal_id).first()
+                        if signal:
+                            reason_parts = []
+                            if signal.confidence:
+                                reason_parts.append(f"{float(signal.confidence)*100:.1f}% confidence")
+                            if signal.signal_type:
+                                reason_parts.append(signal.signal_type)
+                            if signal.timeframe:
+                                reason_parts.append(signal.timeframe)
+                            entry_reason = " | ".join(reason_parts) if reason_parts else "Auto-traded signal"
+                        else:
+                            entry_reason = "Auto-trade (signal not found)"
                     else:
                         source = 'ea_command'
+                        entry_reason = "EA command"
+            
+            # Fallback entry reasons
+            if not entry_reason:
+                if source == 'autotrade':
+                    entry_reason = "Auto-trade (signal details unavailable)"
+                elif source == 'mt5_manual' or source == 'MT5':
+                    entry_reason = "Manual trade (MT5)"
+                else:
+                    entry_reason = f"Trade from {source}"
 
             new_trade = Trade(
                 account_id=account.id,
@@ -2189,6 +2214,7 @@ def update_trade(account, db):
                 source=source,  # autotrade, ea_command, or mt5_manual
                 command_id=command_id,
                 signal_id=signal_id,  # Link to signal for autotrades
+                entry_reason=entry_reason,  # ✅ NEW: Set entry reason for new trades
                 timeframe=timeframe,  # Timeframe for symbol+timeframe limiting
                 close_reason=data.get('close_reason'),
                 status=data.get('status', 'open'),
