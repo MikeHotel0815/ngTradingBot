@@ -72,6 +72,9 @@ class SignalGenerator:
                 signal['sl_price'] = sl
                 signal['tp_price'] = tp
 
+                # Check if signal direction changed from existing active signal
+                self._check_signal_direction_change(signal['signal_type'])
+
                 # Save signal to database
                 self._save_signal(signal)
 
@@ -351,7 +354,8 @@ class SignalGenerator:
 
                 logger.warning(f"Using ATR fallback for {self.symbol}")
                 return (round(entry, 5), round(sl, 5), round(tp, 5))
-            except:
+            except Exception as e:
+                logger.error(f"ATR fallback calculation failed for {self.symbol}: {e}", exc_info=True)
                 return (0, 0, 0)
         finally:
             db.close()
@@ -482,6 +486,39 @@ class SignalGenerator:
                 analysis[tf] = None
 
         return analysis
+
+    def _check_signal_direction_change(self, new_signal_type: str):
+        """
+        Check if the signal direction changed (BUY → SELL or SELL → BUY).
+        If yes, expire the old signal since conditions have reversed.
+
+        Args:
+            new_signal_type: New signal type (BUY or SELL)
+        """
+        db = ScopedSession()
+        try:
+            # Find active signal for this symbol/timeframe
+            active_signal = db.query(TradingSignal).filter(
+                TradingSignal.account_id == self.account_id,
+                TradingSignal.symbol == self.symbol,
+                TradingSignal.timeframe == self.timeframe,
+                TradingSignal.status == 'active'
+            ).first()
+
+            # If signal exists and direction changed, expire it
+            if active_signal and active_signal.signal_type != new_signal_type:
+                active_signal.status = 'expired'
+                logger.info(
+                    f"✅ Signal #{active_signal.id} ({active_signal.symbol} {active_signal.timeframe}) "
+                    f"expired: direction changed from {active_signal.signal_type} to {new_signal_type}"
+                )
+                db.commit()
+
+        except Exception as e:
+            logger.error(f"Error checking signal direction change: {e}")
+            db.rollback()
+        finally:
+            db.close()
 
     def _expire_active_signals(self, reason: str):
         """

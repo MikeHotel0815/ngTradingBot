@@ -265,8 +265,9 @@ class PatternRecognizer:
                 score += 10
             elif current_volume < avg_volume * 0.5:
                 score -= 10
-        except:
-            pass
+        except (KeyError, IndexError, ValueError) as e:
+            logger.debug(f"Volume confirmation failed for pattern {pattern_name}: {e}")
+            # Continue without volume bonus
 
         # Trend context (±15 points)
         try:
@@ -278,8 +279,9 @@ class PatternRecognizer:
                     score += 15  # Bullish reversal in downtrend
                 elif pattern_type == 'bearish' and recent_trend > 0:
                     score += 15  # Bearish reversal in uptrend
-        except:
-            pass
+        except (IndexError, ValueError) as e:
+            logger.debug(f"Trend context analysis failed for pattern {pattern_name}: {e}")
+            # Continue without trend bonus
 
         # Pattern-specific adjustments
         high_reliability_patterns = [

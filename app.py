@@ -162,6 +162,47 @@ def validate_numeric_range(value, param_name, min_val=None, max_val=None):
     return num
 
 
+def get_trade_opening_reason(trade):
+    """
+    Helper function to determine how a trade was opened
+    Uses multiple fallback strategies to provide accurate information
+    
+    Args:
+        trade: Trade model instance
+    
+    Returns:
+        str: Human-readable opening reason
+    """
+    # Priority 1: Check if from autotrade with signal_id
+    if trade.source == "autotrade" and trade.signal_id:
+        reason = f"Signal #{trade.signal_id}"
+        if trade.timeframe:
+            reason += f" ({trade.timeframe})"
+        return reason
+    
+    # Priority 2: Check if autotrade without signal_id (shouldn't happen but handle it)
+    if trade.source == "autotrade":
+        reason = "Auto-Trade Signal"
+        if trade.timeframe:
+            reason += f" ({trade.timeframe})"
+        return reason
+    
+    # Priority 3: Check for entry_reason field (may contain signal info)
+    if trade.entry_reason and "signal" in trade.entry_reason.lower():
+        return f"Signal: {trade.entry_reason[:50]}"  # Truncate if long
+    
+    # Priority 4: Check source
+    if trade.source == "ea_command":
+        return "EA Command"
+    
+    # Priority 5: Check command_id (means it came from server command)
+    if trade.command_id:
+        return "Server Command"
+    
+    # Default: Manual MT5 trade
+    return "Manual (MT5)"
+
+
 # ============================================================================
 # PORT 9900 - COMMAND & CONTROL
 # ============================================================================
@@ -254,6 +295,12 @@ def heartbeat(account, db):
         profit_month = data.get('profit_month')
         profit_year = data.get('profit_year')
 
+        # Correct profits by removing deposits/withdrawals
+        from profit_calculator import calculate_corrected_profits
+        corrected_today, corrected_week, corrected_month, corrected_year = calculate_corrected_profits(
+            db, account.id, profit_today, profit_week, profit_month, profit_year
+        )
+
         # Update last heartbeat and account data
         account.last_heartbeat = datetime.utcnow()
         if balance is not None:
@@ -264,17 +311,16 @@ def heartbeat(account, db):
             account.margin = margin
         if free_margin is not None:
             account.free_margin = free_margin
-        if profit_today is not None:
-            account.profit_today = profit_today
-        if profit_week is not None:
-            account.profit_week = profit_week
-        if profit_month is not None:
-            account.profit_month = profit_month
-        if profit_year is not None:
-            account.profit_year = profit_year
+        
+        # Use corrected profits instead of raw EA values
+        account.profit_today = corrected_today
+        account.profit_week = corrected_week
+        account.profit_month = corrected_month
+        account.profit_year = corrected_year
+        
         db.commit()
 
-        logger.info(f"Heartbeat from {account.mt5_account_number} - Balance: {balance}, Equity: {equity}, Profit Today: {profit_today}")
+        logger.info(f"Heartbeat from {account.mt5_account_number} - Balance: {balance}, Equity: {equity}, Profit Today (corrected): {corrected_today}")
 
         # Broadcast account update via WebSocket
         socketio.emit('account_update', {
@@ -285,56 +331,15 @@ def heartbeat(account, db):
             'free_margin': float(free_margin) if free_margin else 0.0
         })
 
-        # Broadcast profit update via WebSocket
+        # Broadcast profit update via WebSocket (with corrected values)
         socketio.emit('profit_update', {
-            'today': float(profit_today) if profit_today is not None else 0.0,
-            'week': float(profit_week) if profit_week is not None else 0.0,
-            'month': float(profit_month) if profit_month is not None else 0.0,
-            'year': float(profit_year) if profit_year is not None else 0.0
+            'today': float(corrected_today),
+            'week': float(corrected_week),
+            'month': float(corrected_month),
+            'year': float(corrected_year)
         })
 
-        # Get current subscribed symbols to return in response
-        subscribed = db.query(SubscribedSymbol).filter_by(
-            account_id=account.id,
-            active=True
-        ).all()
-
-        # Get available broker symbols for filtering
-        broker_symbols = db.query(BrokerSymbol).filter_by(account_id=account.id).all()
-        valid_symbols = {bs.symbol for bs in broker_symbols}
-
-        # Filter to only valid symbols
-        if valid_symbols:
-            symbols = [s.symbol for s in subscribed if s.symbol in valid_symbols]
-        else:
-            symbols = [s.symbol for s in subscribed]
-
-        # Get pending commands for this account
-        pending_commands = db.query(Command).filter_by(
-            account_id=account.id,
-            status='pending'
-        ).all()
-
-        commands_data = []
-        for cmd in pending_commands:
-            # Flatten the command structure for easier EA parsing
-            # Merge payload fields directly into command object
-            cmd_dict = {
-                'id': cmd.id,
-                'type': cmd.command_type
-            }
-            # Add payload fields directly (not nested)
-            if cmd.payload:
-                for key, value in cmd.payload.items():
-                    cmd_dict[key] = value
-            commands_data.append(cmd_dict)
-
-        return jsonify({
-            'status': 'success',
-            'message': 'Heartbeat received',
-            'symbols': symbols,
-            'commands': commands_data
-        }), 200
+        return jsonify({'status': 'success'}), 200
 
     except Exception as e:
         logger.error(f"Heartbeat error: {str(e)}")
@@ -357,22 +362,27 @@ def profit_update(account, db):
         profit_month = data.get('profit_month')
         profit_year = data.get('profit_year')
 
+        # Correct profits by removing deposits/withdrawals
+        from profit_calculator import calculate_corrected_profits
+        corrected_today, corrected_week, corrected_month, corrected_year = calculate_corrected_profits(
+            db, account.id, profit_today, profit_week, profit_month, profit_year
+        )
+
         # Update account data
         if balance is not None:
             account.balance = balance
         if equity is not None:
             account.equity = equity
-        if profit_today is not None:
-            account.profit_today = profit_today
-        if profit_week is not None:
-            account.profit_week = profit_week
-        if profit_month is not None:
-            account.profit_month = profit_month
-        if profit_year is not None:
-            account.profit_year = profit_year
+        
+        # Use corrected profits
+        account.profit_today = corrected_today
+        account.profit_week = corrected_week
+        account.profit_month = corrected_month
+        account.profit_year = corrected_year
+        
         db.commit()
 
-        logger.info(f"Instant profit update from {account.mt5_account_number} - Profit Today: {profit_today}")
+        logger.info(f"Instant profit update from {account.mt5_account_number} - Profit Today (corrected): {corrected_today}")
 
         # Broadcast account update via WebSocket
         socketio.emit('account_update', {
@@ -383,12 +393,12 @@ def profit_update(account, db):
             'free_margin': float(account.free_margin) if account.free_margin else 0.0
         })
 
-        # Broadcast profit update via WebSocket
+        # Broadcast profit update via WebSocket (with corrected values)
         socketio.emit('profit_update', {
-            'today': float(profit_today) if profit_today is not None else 0.0,
-            'week': float(profit_week) if profit_week is not None else 0.0,
-            'month': float(profit_month) if profit_month is not None else 0.0,
-            'year': float(profit_year) if profit_year is not None else 0.0
+            'today': float(corrected_today),
+            'week': float(corrected_week),
+            'month': float(corrected_month),
+            'year': float(corrected_year)
         })
 
         return jsonify({'status': 'success'}), 200
@@ -878,6 +888,12 @@ def enable_auto_trade():
         from auto_trader import get_auto_trader
         trader = get_auto_trader()
         trader.set_min_confidence(min_confidence)
+        
+        # Reset circuit breaker when manually enabling
+        if trader.circuit_breaker_tripped:
+            trader.reset_circuit_breaker()
+            logger.info("Circuit breaker was tripped - resetting it")
+        
         trader.enable()
 
         logger.info(f"Auto-Trading ENABLED with min_confidence={min_confidence}%")
@@ -912,7 +928,7 @@ def auto_trade_status():
         'circuit_breaker_reason': trader.circuit_breaker_reason,
         'max_daily_loss_percent': trader.max_daily_loss_percent,
         'max_total_drawdown_percent': trader.max_total_drawdown_percent,
-        'processed_signals': len(trader.processed_signals)
+        'processed_signals': len(trader.processed_signal_hashes)
     }), 200
 
 
@@ -947,6 +963,9 @@ def get_monitoring_data(account_id):
 def create_backtest():
     """Create a new backtest run"""
     try:
+        # ✅ FIX BUG-003: Input validation to prevent SQL injection
+        from input_validator import InputValidator, validate_timeframe
+        
         data = request.get_json()
         from models import BacktestRun
 
@@ -956,12 +975,54 @@ def create_backtest():
             if field not in data:
                 return jsonify({'error': f'Missing required field: {field}'}), 400
 
-        # Parse dates
-        start_date = datetime.fromisoformat(data['start_date'].replace('Z', '+00:00'))
-        end_date = datetime.fromisoformat(data['end_date'].replace('Z', '+00:00'))
+        # Validate inputs
+        account_id = InputValidator.validate_integer(data['account_id'], min_value=1)
+        name = InputValidator.check_sql_injection(data['name'])  # Name can be free text but no SQL
+        description = InputValidator.check_sql_injection(data.get('description', '')) if data.get('description') else None
+        
+        # Validate symbols (comma-separated list)
+        symbols_raw = data.get('symbols', 'BTCUSD')
+        symbols_list = [s.strip() for s in symbols_raw.split(',')]
+        for sym in symbols_list:
+            InputValidator.validate_symbol(sym)  # Validate each symbol
+        symbols = ','.join(symbols_list)
+        
+        # Validate timeframes (comma-separated list)
+        timeframes_raw = data.get('timeframes', 'H1')
+        timeframes_list = [validate_timeframe(tf.strip()) for tf in timeframes_raw.split(',')]
+        timeframes = ','.join(timeframes_list)
+        
+        # Validate and parse dates
+        start_date = InputValidator.validate_iso_date(data['start_date'])
+        end_date = InputValidator.validate_iso_date(data['end_date'])
+        
+        # Validate numeric parameters
+        initial_balance = InputValidator.validate_float(
+            data.get('initial_balance', 10000.0),
+            min_value=100,
+            max_value=1000000,
+            default=10000.0
+        )
+        min_confidence = InputValidator.validate_float(
+            data.get('min_confidence', 0.50),
+            min_value=0,
+            max_value=1,
+            default=0.50
+        )
+        position_size_percent = InputValidator.validate_float(
+            data.get('position_size_percent', 0.01),
+            min_value=0.001,
+            max_value=0.1,
+            default=0.01
+        )
+        max_positions = InputValidator.validate_integer(
+            data.get('max_positions', 5),
+            min_value=1,
+            max_value=50,
+            default=5
+        )
 
         # Validate timeframe requirements based on period length
-        timeframes = data.get('timeframes', 'H1').split(',')
         days = (end_date - start_date).days
 
         # Minimum days required for each timeframe to get enough bars
@@ -975,17 +1036,17 @@ def create_backtest():
         db = ScopedSession()
         try:
             backtest = BacktestRun(
-                account_id=data['account_id'],
-                name=data['name'],
-                description=data.get('description'),
-                symbols=data.get('symbols', 'BTCUSD'),
-                timeframes=data.get('timeframes', 'H1'),
+                account_id=account_id,
+                name=name,
+                description=description,
+                symbols=symbols,
+                timeframes=timeframes,
                 start_date=start_date,
                 end_date=end_date,
-                initial_balance=data.get('initial_balance', 10000.0),
-                min_confidence=data.get('min_confidence', 0.50),
-                position_size_percent=data.get('position_size_percent', 0.01),
-                max_positions=data.get('max_positions', 5)
+                initial_balance=initial_balance,
+                min_confidence=min_confidence,
+                position_size_percent=position_size_percent,
+                max_positions=max_positions
             )
 
             db.add(backtest)
@@ -1561,14 +1622,8 @@ def receive_ticks(account, db):
                             except Exception as e:
                                 logger.debug(f"Failed to get trailing stop info: {e}")
 
-                            # Format opening reason
-                            opening_reason = "Manual (MT5)"
-                            if trade.source == "autotrade" and trade.signal_id:
-                                opening_reason = f"Signal #{trade.signal_id}"
-                                if trade.timeframe:
-                                    opening_reason += f" ({trade.timeframe})"
-                            elif trade.source == "ea_command":
-                                opening_reason = "EA Command"
+                            # Format opening reason using helper function
+                            opening_reason = get_trade_opening_reason(trade)
 
                             position_info = {
                                 'ticket': trade.ticket,
@@ -1606,14 +1661,8 @@ def receive_ticks(account, db):
                                 except Exception as e:
                                     logger.debug(f"Failed to get trailing stop info: {e}")
 
-                                # Format opening reason
-                                opening_reason = "Manual (MT5)"
-                                if trade.source == "autotrade" and trade.signal_id:
-                                    opening_reason = f"Signal #{trade.signal_id}"
-                                    if trade.timeframe:
-                                        opening_reason += f" ({trade.timeframe})"
-                                elif trade.source == "ea_command":
-                                    opening_reason = "EA Command"
+                                # Format opening reason using helper function
+                                opening_reason = get_trade_opening_reason(trade)
 
                                 position_info = {
                                     'ticket': trade.ticket,
@@ -1696,7 +1745,7 @@ def receive_historical_ohlc(account, db):
 
             # Check if candle already exists
             existing = db.query(OHLCData).filter_by(
-                account_id=account_id,
+                account_id=account.id,
                 symbol=symbol,
                 timeframe=timeframe,
                 timestamp=timestamp
@@ -1708,7 +1757,7 @@ def receive_historical_ohlc(account, db):
 
             # Create new OHLC entry
             ohlc = OHLCData(
-                account_id=account_id,
+                account_id=account.id,
                 symbol=symbol,
                 timeframe=timeframe,
                 timestamp=timestamp,
@@ -1753,26 +1802,47 @@ def request_historical_data():
     """
     db = ScopedSession()
     try:
+        # ✅ FIX BUG-003: Input validation to prevent SQL injection
         from datetime import datetime
         from command_helper import create_command
+        from input_validator import InputValidator, validate_timeframe
 
         data = request.get_json()
-        symbol = data.get('symbol')
-        timeframe = data.get('timeframe')
+        
+        # Get and validate inputs
+        symbol_raw = data.get('symbol')
+        timeframe_raw = data.get('timeframe')
         start_date_str = data.get('start_date')
         end_date_str = data.get('end_date')
 
         # Validation
-        if not symbol or not timeframe or not start_date_str or not end_date_str:
+        if not symbol_raw or not timeframe_raw or not start_date_str or not end_date_str:
             return jsonify({
                 'status': 'error',
                 'message': 'Missing required fields: symbol, timeframe, start_date, end_date'
             }), 400
 
-        # Parse dates
+        # Validate inputs
+        symbol = InputValidator.validate_symbol(symbol_raw)
+        timeframe = validate_timeframe(timeframe_raw)
+
+        # Parse and validate dates (expecting YYYY-MM-DD format)
         try:
             start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
             end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
+            
+            # Additional validation: date range should be reasonable
+            days_diff = (end_date - start_date).days
+            if days_diff < 0:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'end_date must be after start_date'
+                }), 400
+            if days_diff > 365 * 2:  # Max 2 years
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Date range too large. Maximum 2 years allowed.'
+                }), 400
         except ValueError:
             return jsonify({
                 'status': 'error',
@@ -1784,7 +1854,7 @@ def request_historical_data():
         end_timestamp = int(end_date.timestamp())
 
         # Get first account (assume single account for now)
-        account = db.query(Account).first()
+        account = db.query(Account).order_by(Account.last_heartbeat.desc()).first()  # Use active account
         if not account:
             return jsonify({
                 'status': 'error',
@@ -1864,37 +1934,54 @@ def sync_trades(account, db):
                 logger.info(f"🔄 Trade sync update: {existing_trade.symbol} #{ticket} profit={existing_trade.profit}")
             else:
                 # Create new trade record
-                # Try to find linked signal to generate entry_reason
+                # ✅ FIX: Find command_id by matching ticket in command responses
                 entry_reason = None
-                command_id = trade_data.get('command_id')
-                if command_id:
-                    # Find the command that created this trade
+                command_id = trade_data.get('command_id')  # MT5 might send it
+                signal_id_from_command = None
+                source = 'MT5'  # Default to MT5
+                
+                # If no command_id from MT5, try to find it via ticket match
+                if not command_id:
                     from models import Command, TradingSignal
-                    command = db.query(Command).filter_by(id=command_id).first()
-                    if command and command.payload:
-                        signal_id = command.payload.get('signal_id')
-                        if signal_id:
-                            signal = db.query(TradingSignal).filter_by(id=signal_id).first()
-                            if signal:
-                                # Build entry reason from signal data
-                                patterns = []
-                                if signal.pattern_data:
-                                    patterns = [p.get('name', 'Pattern') for p in signal.pattern_data if isinstance(signal.pattern_data, list)]
-                                    patterns = patterns[:2]  # Limit to 2 patterns
+                    # Search for command with matching ticket in response
+                    recent_commands = db.query(Command).filter(
+                        Command.account_id == account.id,
+                        Command.command_type == 'OPEN_TRADE',
+                        Command.status == 'completed',
+                        Command.response.isnot(None)
+                    ).order_by(Command.created_at.desc()).limit(100).all()
+                    
+                    for cmd in recent_commands:
+                        if cmd.response and cmd.response.get('ticket') == ticket:
+                            command_id = cmd.id
+                            signal_id_from_command = cmd.payload.get('signal_id') if cmd.payload else None
+                            source = 'autotrade' if signal_id_from_command else 'ea_command'
+                            logger.info(f"🔗 Linked trade #{ticket} to command {cmd.id[:12]}... (signal #{signal_id_from_command})")
+                            break
+                
+                # Try to find linked signal to generate entry_reason
+                if signal_id_from_command:
+                    from models import TradingSignal
+                    signal = db.query(TradingSignal).filter_by(id=signal_id_from_command).first()
+                    if signal:
+                        # Build entry reason from signal data
+                        patterns = []
+                        if signal.pattern_data:
+                            patterns = [p.get('name', 'Pattern') for p in signal.pattern_data if isinstance(signal.pattern_data, list)]
+                            patterns = patterns[:2]  # Limit to 2 patterns
 
-                                reason_parts = []
-                                if patterns:
-                                    reason_parts.append(f"Patterns: {', '.join(patterns)}")
-                                if signal.confidence:
-                                    reason_parts.append(f"{signal.confidence:.1f}% confidence")
-                                if signal.timeframe:
-                                    reason_parts.append(f"{signal.timeframe} timeframe")
+                        reason_parts = []
+                        if patterns:
+                            reason_parts.append(f"Patterns: {', '.join(patterns)}")
+                        if signal.confidence:
+                            reason_parts.append(f"{float(signal.confidence)*100:.0f}% confidence")
+                        if signal.timeframe:
+                            reason_parts.append(f"{signal.timeframe} timeframe")
 
-                                entry_reason = " | ".join(reason_parts) if reason_parts else "Auto-traded signal"
+                        entry_reason = " | ".join(reason_parts) if reason_parts else "Auto-traded signal"
 
                 # Fallback entry reasons based on source
                 if not entry_reason:
-                    source = trade_data.get('source', 'MT5')
                     if source == 'autotrade':
                         entry_reason = "Auto-trade (signal details unavailable)"
                     elif source == 'MT5':
@@ -1918,8 +2005,9 @@ def sync_trades(account, db):
                     profit=trade_data.get('profit'),
                     commission=trade_data.get('commission'),
                     swap=trade_data.get('swap'),
-                    source=trade_data.get('source', 'MT5'),  # MT5, Dashboard, AutoTrade
+                    source=source,  # Now correctly set based on command lookup
                     command_id=command_id,
+                    signal_id=signal_id_from_command,  # ✅ FIX: Store signal_id!
                     entry_reason=entry_reason,
                     response_data=trade_data.get('response_data'),
                     status=trade_data.get('status', 'open'),
@@ -2111,6 +2199,55 @@ def update_trade(account, db):
             db.commit()
             logger.info(f"✅ Trade #{ticket} created from MT5: source={source}, signal_id={signal_id}, timeframe={timeframe}")
 
+        # EMIT WEBSOCKET UPDATE: Send position update after trade change
+        # This ensures dashboard updates even without tick streaming
+        if trade or new_trade:
+            actual_trade = trade if trade else new_trade
+            if actual_trade.status == 'open':
+                try:
+                    # Get current price for the trade (fallback to open_price if no tick data)
+                    from trade_monitor import get_trade_monitor
+                    trade_monitor = get_trade_monitor()
+                    current_price = trade_monitor.get_current_price(db, account.id, actual_trade.symbol)
+                    
+                    if not current_price:
+                        current_price = {'bid': float(actual_trade.open_price), 'ask': float(actual_trade.open_price)}
+                    
+                    # Calculate P&L
+                    eurusd_rate = trade_monitor.get_eurusd_rate(db, account.id)
+                    pnl_data = trade_monitor.calculate_position_pnl(actual_trade, current_price, eurusd_rate)
+                    
+                    # Get opening reason using helper function
+                    opening_reason = get_trade_opening_reason(actual_trade)
+                    
+                    position_info = {
+                        'ticket': actual_trade.ticket,
+                        'symbol': actual_trade.symbol,
+                        'direction': actual_trade.direction.upper() if isinstance(actual_trade.direction, str) else ('BUY' if actual_trade.direction == 0 else 'SELL'),
+                        'volume': float(actual_trade.volume),
+                        'open_price': float(actual_trade.open_price),
+                        'current_price': pnl_data['current_price'] if pnl_data else float(current_price['bid']),
+                        'pnl': float(actual_trade.profit) if actual_trade.profit else 0.0,
+                        'tp': float(actual_trade.tp) if actual_trade.tp else None,
+                        'sl': float(actual_trade.sl) if actual_trade.sl else None,
+                        'distance_to_tp_eur': pnl_data.get('distance_to_tp_eur') if pnl_data else None,
+                        'distance_to_sl_eur': pnl_data.get('distance_to_sl_eur') if pnl_data else None,
+                        'open_time': actual_trade.open_time.isoformat() if actual_trade.open_time else None,
+                        'opening_reason': opening_reason,
+                        'trailing_stop_info': None,
+                    }
+                    
+                    socketio.emit('positions_update', {
+                        'account_id': account.id,
+                        'position_count': 1,
+                        'positions': [position_info],
+                        'total_pnl': float(actual_trade.profit) if actual_trade.profit else 0.0,
+                        'timestamp': datetime.utcnow().isoformat()
+                    })
+                    logger.debug(f"📡 WebSocket: Position update emitted for trade #{ticket}")
+                except Exception as ws_error:
+                    logger.warning(f"WebSocket emission failed (non-critical): {ws_error}")
+
         return jsonify({'status': 'success'}), 200
 
     except Exception as e:
@@ -2259,7 +2396,8 @@ def dashboard_status():
     try:
         db = ScopedSession()
         try:
-            account = db.query(Account).first()
+            # Get the most recently active account (latest heartbeat)
+            account = db.query(Account).order_by(Account.last_heartbeat.desc()).first()
 
             if not account:
                 return jsonify({'status': 'error', 'message': 'No account found'}), 404
@@ -2268,6 +2406,7 @@ def dashboard_status():
             return jsonify({
                 'status': 'success',
                 'account': {
+                    'id': account.id,  # Add account ID for monitoring endpoint
                     'number': account.mt5_account_number,
                     'broker': account.broker,
                     'balance': float(account.balance) if account.balance else 0.0,
@@ -2338,7 +2477,7 @@ def dashboard_symbols():
     try:
         db = ScopedSession()
         try:
-            account = db.query(Account).first()
+            account = db.query(Account).order_by(Account.last_heartbeat.desc()).first()  # Use active account
 
             if not account:
                 return jsonify({'status': 'error', 'message': 'No account found'}), 404
@@ -2428,7 +2567,7 @@ def dashboard_ohlc():
 
         db = ScopedSession()
         try:
-            account = db.query(Account).first()
+            account = db.query(Account).order_by(Account.last_heartbeat.desc()).first()  # Use active account
 
             if not account:
                 return jsonify({'status': 'error', 'message': 'No account found'}), 404
@@ -2457,6 +2596,59 @@ def dashboard_ohlc():
 
     except Exception as e:
         logger.error(f"Dashboard OHLC error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_webui.route('/api/performance/symbols', methods=['GET'])
+def dashboard_performance():
+    """Get live symbol performance metrics (24h) for dashboard"""
+    try:
+        db = ScopedSession()
+        try:
+            from models import SymbolPerformanceTracking
+            from datetime import datetime
+            
+            account = db.query(Account).order_by(Account.last_heartbeat.desc()).first()  # Use active account
+
+            if not account:
+                return jsonify({'status': 'error', 'message': 'No account found'}), 404
+
+            # Get today's performance tracking directly from DB
+            today = datetime.utcnow().date()
+            perfs = db.query(SymbolPerformanceTracking).filter(
+                SymbolPerformanceTracking.account_id == account.id,
+                SymbolPerformanceTracking.evaluation_date == today
+            ).all()
+
+            results = []
+            for perf in perfs:
+                results.append({
+                    'symbol': perf.symbol,
+                    'status': perf.status,
+                    'live_trades': perf.live_trades or 0,
+                    'live_win_rate': float(perf.live_win_rate or 0),
+                    'live_profit': float(perf.live_profit or 0),
+                    'backtest_win_rate': float(perf.backtest_win_rate or 0),
+                    'backtest_profit': float(perf.backtest_profit or 0),
+                    'auto_disabled_reason': perf.auto_disabled_reason,
+                    'updated_at': perf.updated_at.isoformat() if perf.updated_at else None
+                })
+
+            # Sort by profit descending
+            results = sorted(results, key=lambda x: x['live_profit'], reverse=True)
+
+            logger.info(f"📊 Returning symbol performance for {len(results)} symbols")
+
+            return jsonify({
+                'status': 'success',
+                'symbols': results
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Dashboard performance error: {e}", exc_info=True)
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
@@ -2526,7 +2718,7 @@ def dashboard_transactions():
     try:
         db = ScopedSession()
         try:
-            account = db.query(Account).first()
+            account = db.query(Account).order_by(Account.last_heartbeat.desc()).first()  # Use active account
 
             if not account:
                 return jsonify({'status': 'error', 'message': 'No account found'}), 404
@@ -2569,7 +2761,7 @@ def dashboard_statistics():
         from models import Trade
         db = ScopedSession()
         try:
-            account = db.query(Account).first()
+            account = db.query(Account).order_by(Account.last_heartbeat.desc()).first()  # Use active account
             if not account:
                 return jsonify({'status': 'error', 'message': 'No account found'}), 404
 
@@ -2674,7 +2866,7 @@ def get_traded_symbols():
         from models import Trade
         db = ScopedSession()
         try:
-            account = db.query(Account).first()
+            account = db.query(Account).order_by(Account.last_heartbeat.desc()).first()  # Use active account
             if not account:
                 return jsonify({'status': 'error', 'message': 'No account found'}), 404
 
@@ -2741,7 +2933,8 @@ def tick_writer_stats():
             # Get buffer sizes for all accounts (simplified - just check account 1)
             buffer_size = redis.get_total_buffer_size(1)
             stats['redis_buffer_size'] = buffer_size
-        except:
+        except Exception as e:
+            logger.debug(f"Redis buffer size check failed: {e}")
             stats['redis_buffer_size'] = 0
 
         return jsonify({'status': 'success', 'writer': stats}), 200
@@ -2781,15 +2974,24 @@ def broadcast_tick_update(symbol, bid, ask):
 def get_signals():
     """Get active trading signals with filters"""
     try:
-        # Get query parameters
-        symbol = request.args.get('symbol')
-        timeframe = request.args.get('timeframe')
-        min_confidence = request.args.get('confidence', type=float, default=0)
-        signal_type = request.args.get('type')  # BUY or SELL
+        # ✅ FIX BUG-003: Input validation to prevent SQL injection
+        from input_validator import InputValidator, validate_signal_type, validate_timeframe
+        
+        # Get and validate query parameters
+        symbol_raw = request.args.get('symbol')
+        timeframe_raw = request.args.get('timeframe')
+        min_confidence_raw = request.args.get('confidence', type=float, default=0)
+        signal_type_raw = request.args.get('type')  # BUY or SELL
+        
+        # Validate inputs
+        symbol = InputValidator.validate_symbol(symbol_raw) if symbol_raw else None
+        timeframe = validate_timeframe(timeframe_raw) if timeframe_raw else None
+        min_confidence = InputValidator.validate_float(min_confidence_raw, min_value=0, max_value=100, default=0)
+        signal_type = validate_signal_type(signal_type_raw) if signal_type_raw else None
 
         db = ScopedSession()
         try:
-            account = db.query(Account).first()
+            account = db.query(Account).order_by(Account.last_heartbeat.desc()).first()  # Use active account
             if not account:
                 return jsonify({'status': 'error', 'message': 'No account found'}), 404
 
@@ -2973,7 +3175,7 @@ def open_trade_from_dashboard():
         db = ScopedSession()
         try:
             # Get first account (assuming single account setup)
-            account = db.query(Account).first()
+            account = db.query(Account).order_by(Account.last_heartbeat.desc()).first()  # Use active account
             if not account:
                 return jsonify({'status': 'error', 'message': 'No account found'}), 404
 
@@ -3043,7 +3245,7 @@ def close_trade(ticket):
         db = ScopedSession()
         try:
             # Get first account
-            account = db.query(Account).first()
+            account = db.query(Account).order_by(Account.last_heartbeat.desc()).first()  # Use active account
             if not account:
                 return jsonify({'status': 'error', 'message': 'No account found'}), 404
 
@@ -3088,7 +3290,7 @@ def close_all_profitable():
 
         db = ScopedSession()
         try:
-            account = db.query(Account).first()
+            account = db.query(Account).order_by(Account.last_heartbeat.desc()).first()  # Use active account
             if not account:
                 return jsonify({'status': 'error', 'message': 'No account found'}), 404
 
@@ -3156,7 +3358,7 @@ def close_all_trades():
 
         db = ScopedSession()
         try:
-            account = db.query(Account).first()
+            account = db.query(Account).order_by(Account.last_heartbeat.desc()).first()  # Use active account
             if not account:
                 return jsonify({'status': 'error', 'message': 'No account found'}), 404
 
@@ -3211,7 +3413,7 @@ def set_trailing_stop(ticket):
 
         db = ScopedSession()
         try:
-            account = db.query(Account).first()
+            account = db.query(Account).order_by(Account.last_heartbeat.desc()).first()  # Use active account
             if not account:
                 return jsonify({'status': 'error', 'message': 'No account found'}), 404
 
@@ -3255,7 +3457,7 @@ def get_signal_stats():
     try:
         db = ScopedSession()
         try:
-            account = db.query(Account).first()
+            account = db.query(Account).order_by(Account.last_heartbeat.desc()).first()  # Use active account
             if not account:
                 return jsonify({'status': 'error', 'message': 'No account found'}), 404
 
@@ -3312,7 +3514,7 @@ def get_trade_analytics():
         from models import Trade
         db = ScopedSession()
         try:
-            account = db.query(Account).first()
+            account = db.query(Account).order_by(Account.last_heartbeat.desc()).first()  # Use active account
             if not account:
                 return jsonify({'status': 'error', 'message': 'No account found'}), 404
 
@@ -3409,27 +3611,54 @@ def get_trade_analytics():
 def get_trade_history():
     """Get trade history with advanced filters and pagination"""
     try:
+        # ✅ FIX BUG-003: Input validation to prevent SQL injection
+        from input_validator import InputValidator, validate_trade_status
         from models import Trade
+        
         db = ScopedSession()
         try:
-            account = db.query(Account).first()
+            account = db.query(Account).order_by(Account.last_heartbeat.desc()).first()  # Use active account
             if not account:
                 return jsonify({'status': 'error', 'message': 'No account found'}), 404
 
-            # Get query parameters
-            status = request.args.get('status', 'closed')  # open, closed (default: closed)
-            symbol = request.args.get('symbol')  # Optional symbol filter
-            direction = request.args.get('direction')  # BUY, SELL
-            profit_status = request.args.get('profit_status')  # profit, loss
+            # Get and validate query parameters
+            status_raw = request.args.get('status', 'closed')
+            symbol_raw = request.args.get('symbol')
+            direction_raw = request.args.get('direction')
+            profit_status_raw = request.args.get('profit_status')
+            
+            # Validate inputs
+            status = validate_trade_status(status_raw, default='closed')
+            symbol = InputValidator.validate_symbol(symbol_raw) if symbol_raw else None
+            direction = InputValidator.validate_enum(
+                direction_raw, 
+                ['BUY', 'SELL'], 
+                default=None
+            ) if direction_raw else None
+            profit_status = InputValidator.validate_enum(
+                profit_status_raw,
+                ['profit', 'loss'],
+                default=None
+            ) if profit_status_raw else None
 
             # Period filters: all, year, month, week, today, custom
-            period = request.args.get('period', 'all')
-            start_date = request.args.get('start_date')  # For custom range (ISO format)
-            end_date = request.args.get('end_date')  # For custom range (ISO format)
+            period_raw = request.args.get('period', 'all')
+            period = InputValidator.validate_enum(
+                period_raw,
+                ['all', 'today', 'week', 'month', 'year', 'custom'],
+                default='all'
+            )
+            
+            start_date_raw = request.args.get('start_date')
+            end_date_raw = request.args.get('end_date')
+            start_date = InputValidator.validate_iso_date(start_date_raw) if start_date_raw else None
+            end_date = InputValidator.validate_iso_date(end_date_raw) if end_date_raw else None
 
             # Pagination
-            page = request.args.get('page', type=int, default=1)
-            per_page = request.args.get('per_page', type=int, default=20)
+            page_raw = request.args.get('page', type=int, default=1)
+            per_page_raw = request.args.get('per_page', type=int, default=20)
+            page = InputValidator.validate_integer(page_raw, min_value=1, default=1)
+            per_page = InputValidator.validate_integer(per_page_raw, min_value=1, max_value=100, default=20)
 
             # Build base query
             query = db.query(Trade).filter(Trade.account_id == account.id)
@@ -3453,19 +3682,16 @@ def get_trade_history():
                 year_start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
                 query = query.filter(Trade.close_time >= year_start)
             elif period == 'custom' and start_date and end_date:
-                try:
-                    start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
-                    end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
-                    query = query.filter(Trade.close_time >= start_dt, Trade.close_time <= end_dt)
-                except ValueError as ve:
-                    return jsonify({'status': 'error', 'message': f'Invalid date format: {ve}'}), 400
+                # Dates already validated by InputValidator.validate_iso_date()
+                query = query.filter(Trade.close_time >= start_date, Trade.close_time <= end_date)
 
             # Apply optional filters
             if symbol:
                 query = query.filter(Trade.symbol == symbol)
 
             if direction:
-                query = query.filter(Trade.direction == direction.upper())
+                # Direction already validated and converted to uppercase by validate_enum
+                query = query.filter(Trade.direction == direction)
 
             if profit_status == 'profit':
                 query = query.filter(Trade.profit > 0)
@@ -3938,36 +4164,6 @@ def get_all_indicator_scores(account):
         return jsonify({'error': str(e)}), 500
 
 
-@app_command.route('/api/performance/symbols', methods=['GET'])
-@require_api_key
-def get_symbol_performance(account):
-    """
-    Get live performance metrics for all symbols
-
-    Returns real-time performance data for each symbol
-    """
-    try:
-        from live_performance_tracker import get_live_tracker
-        from database import ScopedSession
-
-        db = ScopedSession()
-        try:
-            tracker = get_live_tracker()
-            performance = tracker.get_all_symbol_performance(account.id, db)
-
-            return jsonify({
-                'status': 'success',
-                'symbols': performance
-            }), 200
-
-        finally:
-            db.close()
-
-    except Exception as e:
-        logger.error(f"Error getting symbol performance: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
 @app_webui.route('/api/spread/stats', methods=['GET'])
 def get_spread_stats():
     """Get spread statistics for all symbols or a specific symbol"""
@@ -4304,15 +4500,30 @@ if __name__ == '__main__':
 
     # Start auto-trader (signal → trade automation) - DISABLED by default
     from auto_trader import start_auto_trader
-    auto_trader = start_auto_trader(enabled=False)  # Set enabled=True to activate
-    logger.info("🤖 Auto-Trader initialized (DISABLED - enable via /api/auto-trade/enable)")
+    auto_trader = start_auto_trader(enabled=True)  # ✅ ENABLED BY DEFAULT
+    logger.info("🤖 Auto-Trader initialized (ENABLED)")
 
     # Start daily backtest scheduler for auto-optimization
     from daily_backtest_scheduler import start_scheduler as start_backtest_scheduler
     start_backtest_scheduler()
     logger.info("📊 Daily Backtest Scheduler started (runs at 00:00 UTC daily)")
 
-    logger.info("Background tasks started (tick aggregation + retention cleanup + backup + tick batch writer + signal worker + trade monitor + auto-trader + daily backtest scheduler)")
+    # Request fresh account data from EA on startup
+    from account_refresh import request_account_data_refresh, schedule_periodic_refresh
+    startup_db2 = ScopedSession()
+    try:
+        count = request_account_data_refresh(startup_db2)
+        if count > 0:
+            logger.info(f"🔄 Requested account data refresh for {count} accounts on startup")
+    except Exception as e:
+        logger.error(f"Error requesting account data refresh: {e}")
+    finally:
+        startup_db2.close()
+    
+    # Schedule periodic refresh every 5 minutes
+    schedule_periodic_refresh(interval=300)
+
+    logger.info("Background tasks started (tick aggregation + retention cleanup + backup + tick batch writer + signal worker + trade monitor + auto-trader + daily backtest scheduler + account refresh)")
 
     # Start all servers in separate threads
     ports = [

@@ -83,6 +83,25 @@ class ShadowTradingEngine:
             self.db.commit()
 
             logger.info(f"🌑 Shadow trade created: {signal.symbol} {signal.direction} @ {signal.entry_price} (conf={signal.confidence}%)")
+            
+            # Log to AI Decision Log
+            from ai_decision_log import log_shadow_trade
+            log_shadow_trade(
+                account_id=signal.account_id,
+                symbol=signal.symbol,
+                signal_id=signal.id,
+                details={
+                    'direction': signal.direction,
+                    'entry_price': float(signal.entry_price),
+                    'stop_loss': float(signal.stop_loss),
+                    'take_profit': float(signal.take_profit),
+                    'lot_size': float(lot_size),
+                    'confidence': float(signal.confidence) if signal.confidence else None,
+                    'timeframe': signal.timeframe,
+                    'reason': 'Symbol disabled - monitoring recovery via shadow trade',
+                    'performance_tracking_id': perf.id
+                }
+            )
 
             return shadow_trade
 

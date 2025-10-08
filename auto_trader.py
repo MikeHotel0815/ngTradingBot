@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from threading import Thread
 from typing import Dict, List, Optional
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
+from sqlalchemy import and_, or_
 from database import ScopedSession
 from models import TradingSignal, Trade, Account, Command
 from redis_client import get_redis
@@ -31,15 +31,23 @@ class AutoTrader:
         self.enabled = True  # ✅ ENABLED BY DEFAULT as requested
         self.check_interval = 10  # Check for new signals every 10 seconds
 
-        # Track processed signals
-        self.processed_signals = set()
+        # Track processed signals by hash (symbol+timeframe+type+entry_price)
+        # This allows detecting when signals are updated with new values
+        self.processed_signal_hashes = {}
 
         # Cooldown tracking after SL hits: symbol -> cooldown_until_time
         self.symbol_cooldowns = {}
+        
+        # Track pending commands and failure count
+        self.pending_commands = {}
+        self.failed_command_count = 0
 
         # ✅ Auto-trade minimum confidence: 60% DEFAULT (as requested by user)
         # This is the threshold for automatic trade execution
         self.min_autotrade_confidence = 60.0  # Default 60%
+        
+        # ✅ NEW: Max open positions limit
+        self.max_open_positions = 10  # Global limit to prevent overexposure
 
         # Circuit breaker settings
         self.circuit_breaker_enabled = True
@@ -90,7 +98,8 @@ class AutoTrader:
         """Reset circuit breaker manually"""
         self.circuit_breaker_tripped = False
         self.circuit_breaker_reason = None
-        logger.info("Circuit breaker reset manually")
+        self.failed_command_count = 0
+        logger.info("Circuit breaker reset manually (failed_command_count reset to 0)")
 
     def check_circuit_breaker(self, db: Session, account_id: int) -> bool:
         """
@@ -126,6 +135,21 @@ class AutoTrader:
 
                     logger.critical(f"🚨 CIRCUIT BREAKER TRIPPED: {self.circuit_breaker_reason}")
                     logger.critical(f"🛑 Auto-trading STOPPED for safety")
+                    
+                    # Log to AI Decision Log
+                    from ai_decision_log import log_circuit_breaker
+                    log_circuit_breaker(
+                        account_id=account_id,
+                        failed_count=0,  # Daily loss trigger
+                        reason=self.circuit_breaker_reason,
+                        details={
+                            'trigger_type': 'daily_loss',
+                            'daily_loss_percent': daily_loss_percent,
+                            'profit_today': float(account.profit_today),
+                            'balance': float(account.balance),
+                            'max_daily_loss_percent': self.max_daily_loss_percent
+                        }
+                    )
 
                     return False
 
@@ -140,6 +164,21 @@ class AutoTrader:
 
                     logger.critical(f"🚨 CIRCUIT BREAKER TRIPPED: {self.circuit_breaker_reason}")
                     logger.critical(f"🛑 Auto-trading STOPPED for safety")
+                    
+                    # Log to AI Decision Log
+                    from ai_decision_log import log_circuit_breaker
+                    log_circuit_breaker(
+                        account_id=account_id,
+                        failed_count=0,  # Total drawdown trigger
+                        reason=self.circuit_breaker_reason,
+                        details={
+                            'trigger_type': 'total_drawdown',
+                            'total_drawdown_percent': total_drawdown_percent,
+                            'initial_balance': float(account.initial_balance),
+                            'current_balance': float(account.balance),
+                            'max_total_drawdown_percent': self.max_total_drawdown_percent
+                        }
+                    )
 
                     return False
 
@@ -227,18 +266,58 @@ class AutoTrader:
             # Fail-safe: block trade on error
             return {'allowed': False, 'reason': f'Correlation check error: {str(e)}'}
 
+    def check_position_limits(self, db: Session, account_id: int) -> Dict:
+        """
+        ✅ NEW: Check if max open positions limit is reached
+        
+        Prevents overexposure by limiting total number of open positions.
+        
+        Args:
+            db: Database session
+            account_id: Account ID
+            
+        Returns:
+            Dict with 'allowed' (bool) and 'reason' (str)
+        """
+        try:
+            # Count current open positions
+            open_count = db.query(Trade).filter(
+                Trade.account_id == account_id,
+                Trade.status == 'open'
+            ).count()
+            
+            if open_count >= self.max_open_positions:
+                logger.warning(
+                    f"⚠️ Max positions limit reached: {open_count}/{self.max_open_positions}"
+                )
+                return {
+                    'allowed': False,
+                    'reason': f'Max open positions limit ({self.max_open_positions}) reached'
+                }
+            
+            return {'allowed': True}
+            
+        except Exception as e:
+            logger.error(f"Error checking position limits: {e}", exc_info=True)
+            # Fail-safe: block trade on error
+            return {'allowed': False, 'reason': f'Position limit check error: {str(e)}'}
+
     def calculate_position_size(self, db: Session, account_id: int, signal: TradingSignal) -> float:
         """Calculate position size based on risk management"""
         try:
             settings = self._load_settings(db)
             balance = self.get_account_balance(db, account_id)
 
-            # Calculate risk amount
-            risk_amount = balance * float(settings.risk_per_trade_percent)
+            # Calculate risk amount - convert to float to avoid Decimal/float type errors
+            risk_amount = float(balance) * float(settings.risk_per_trade_percent)
 
             # Calculate position size based on SL distance
-            if signal.sl and signal.entry_price:
-                sl_distance = abs(signal.entry_price - signal.sl)
+            # Use sl_price directly (DB column name) instead of property
+            sl_price = getattr(signal, 'sl_price', None) or getattr(signal, 'sl', None)
+            
+            if sl_price and signal.entry_price:
+                # Convert to float to avoid Decimal/float type errors
+                sl_distance = abs(float(signal.entry_price) - float(sl_price))
                 if sl_distance > 0:
                     # Position size = Risk Amount / SL Distance
                     volume = risk_amount / sl_distance
@@ -246,7 +325,7 @@ class AutoTrader:
                     return max(0.01, min(volume, 1.0))  # Min 0.01, Max 1.0
 
             # Fallback: use percentage of balance
-            return round(balance * float(settings.position_size_percent) / signal.entry_price, 2)
+            return round(float(balance) * float(settings.position_size_percent) / float(signal.entry_price), 2)
 
         except Exception as e:
             logger.error(f"Error calculating position size: {e}")
@@ -321,7 +400,15 @@ class AutoTrader:
                     'reason': f'Circuit breaker tripped: {self.circuit_breaker_reason}'
                 }
 
-            # Check correlation exposure SECOND (prevent over-exposure)
+            # ✅ NEW: Check max open positions limit FOURTH (prevent overexposure)
+            position_limit_check = self.check_position_limits(db, signal.account_id)
+            if not position_limit_check['allowed']:
+                return {
+                    'execute': False,
+                    'reason': position_limit_check['reason']
+                }
+
+            # Check correlation exposure FIFTH (prevent over-exposure to correlated pairs)
             correlation_check = self.check_correlation_exposure(db, signal.account_id, signal.symbol)
             if not correlation_check['allowed']:
                 return {
@@ -329,7 +416,7 @@ class AutoTrader:
                     'reason': correlation_check['reason']
                 }
 
-            # Check per-symbol-timeframe position limit THIRD (prevent duplicate positions)
+            # Check per-symbol-timeframe position limit SIXTH (prevent duplicate positions)
             existing_positions = db.query(Trade).filter(
                 and_(
                     Trade.account_id == signal.account_id,
@@ -373,8 +460,8 @@ class AutoTrader:
                     'reason': f'Low confidence ({signal.confidence}% < {symbol_min_confidence}% for {signal.symbol})'
                 }
 
-            # Check if signal has required data
-            if not signal.entry_price or not signal.sl or not signal.tp:
+            # Check if signal has required data (use sl_price/tp_price for DB compatibility)
+            if not signal.entry_price or not signal.sl_price or not signal.tp_price:
                 return {
                     'execute': False,
                     'reason': 'Missing entry/SL/TP'
@@ -407,9 +494,11 @@ class AutoTrader:
             True if valid, False otherwise
         """
         try:
-            entry = signal.entry_price
-            tp = signal.tp
-            sl = adjusted_sl
+            entry = float(signal.entry_price)
+            # Use tp_price directly (DB column name) instead of property
+            tp = getattr(signal, 'tp_price', None) or getattr(signal, 'tp', None)
+            tp = float(tp) if tp else None
+            sl = float(adjusted_sl)
 
             # Check 1: TP and SL must not be zero (MT5 EA rejects these)
             if tp == 0 or sl == 0 or tp is None or sl is None:
@@ -462,7 +551,7 @@ class AutoTrader:
             return True
 
         except Exception as e:
-            logger.error(f"Error in TP/SL validation: {e}")
+            logger.error(f"Error in TP/SL validation: {e}", exc_info=True)
             return False
 
     def create_trade_command(self, db: Session, signal: TradingSignal, volume: float) -> Optional[Command]:
@@ -478,6 +567,25 @@ class AutoTrader:
                 logger.warning(
                     f"⚠️  Pre-execution spread check FAILED for {signal.symbol}: {spread_check['reason']}"
                 )
+                
+                # Log spread rejection to AI Decision Log
+                from ai_decision_log import log_spread_rejection
+                log_spread_rejection(
+                    account_id=signal.account_id,
+                    symbol=signal.symbol,
+                    current_spread=spread_check.get('current_spread', 0),
+                    max_spread=spread_check.get('max_spread', 0),
+                    details={
+                        'signal_id': signal.id,
+                        'reason': spread_check['reason'],
+                        'average_spread': spread_check.get('average_spread'),
+                        'spread_multiple': spread_check.get('spread_multiple'),
+                        'tick_age': spread_check.get('tick_age'),
+                        'timeframe': signal.timeframe,
+                        'signal_type': signal.signal_type
+                    }
+                )
+                
                 return None
 
             command_id = f"auto_{uuid.uuid4().hex[:8]}"
@@ -487,7 +595,9 @@ class AutoTrader:
             sl_multiplier = get_symbol_sl_multiplier(signal.symbol)
 
             # Try to get SuperTrend-based dynamic SL for better risk management
-            adjusted_sl = signal.sl
+            # Use sl_price directly (DB column name) instead of property
+            sl_price = getattr(signal, 'sl_price', None) or getattr(signal, 'sl', None)
+            adjusted_sl = sl_price
             use_supertrend_sl = False
 
             try:
@@ -499,34 +609,51 @@ class AutoTrader:
                     # Use SuperTrend as dynamic SL (better than fixed distance)
                     if signal.signal_type == 'BUY' and supertrend['direction'] == 'bullish':
                         # For BUY: Use SuperTrend value as SL (price below SuperTrend = exit)
-                        adjusted_sl = supertrend['value']
-                        use_supertrend_sl = True
-                        logger.info(f"🎯 {signal.symbol}: Using SuperTrend SL | Price: {signal.entry_price} | SuperTrend SL: {adjusted_sl:.5f} ({supertrend['distance_pct']:.2f}% distance)")
+                        # Verify SuperTrend is below entry (valid for BUY)
+                        if float(supertrend['value']) < float(signal.entry_price):
+                            adjusted_sl = supertrend['value']
+                            use_supertrend_sl = True
+                            logger.info(f"🎯 {signal.symbol}: Using SuperTrend SL | Price: {signal.entry_price} | SuperTrend SL: {adjusted_sl:.5f} ({supertrend['distance_pct']:.2f}% distance)")
+                        else:
+                            logger.warning(f"⚠️ {signal.symbol} BUY: SuperTrend SL ({supertrend['value']:.5f}) above entry ({signal.entry_price}), using traditional SL")
                     elif signal.signal_type == 'SELL' and supertrend['direction'] == 'bearish':
                         # For SELL: Use SuperTrend value as SL (price above SuperTrend = exit)
-                        adjusted_sl = supertrend['value']
-                        use_supertrend_sl = True
-                        logger.info(f"🎯 {signal.symbol}: Using SuperTrend SL | Price: {signal.entry_price} | SuperTrend SL: {adjusted_sl:.5f} ({supertrend['distance_pct']:.2f}% distance)")
+                        # Verify SuperTrend is above entry (valid for SELL)
+                        if float(supertrend['value']) > float(signal.entry_price):
+                            adjusted_sl = supertrend['value']
+                            use_supertrend_sl = True
+                            logger.info(f"🎯 {signal.symbol}: Using SuperTrend SL | Price: {signal.entry_price} | SuperTrend SL: {adjusted_sl:.5f} ({supertrend['distance_pct']:.2f}% distance)")
+                        else:
+                            logger.warning(f"⚠️ {signal.symbol} SELL: SuperTrend SL ({supertrend['value']:.5f}) below entry ({signal.entry_price}), using traditional SL")
             except Exception as e:
                 logger.debug(f"SuperTrend SL calculation failed for {signal.symbol}, using traditional SL: {e}")
 
             # Fallback to symbol-specific multiplier if SuperTrend not available
             if not use_supertrend_sl:
-                if sl_multiplier != 1.0 and signal.entry_price and signal.sl:
-                    sl_distance = abs(signal.entry_price - signal.sl)
+                if sl_multiplier != 1.0 and signal.entry_price and sl_price:
+                    sl_distance = abs(float(signal.entry_price) - float(sl_price))
                     adjusted_sl_distance = sl_distance * sl_multiplier
 
                     if signal.signal_type == 'BUY':
-                        adjusted_sl = signal.entry_price - adjusted_sl_distance
+                        adjusted_sl = float(signal.entry_price) - adjusted_sl_distance
                     else:  # SELL
-                        adjusted_sl = signal.entry_price + adjusted_sl_distance
+                        adjusted_sl = float(signal.entry_price) + adjusted_sl_distance
 
-                    logger.info(f"📊 {signal.symbol}: Adjusted SL with multiplier {sl_multiplier} | Original: {signal.sl} → Adjusted: {adjusted_sl:.5f}")
+                    logger.info(f"📊 {signal.symbol}: Adjusted SL with multiplier {sl_multiplier} | Original: {sl_price} → Adjusted: {adjusted_sl:.5f}")
 
             # ✅ CRITICAL VALIDATION: Ensure TP/SL are valid before sending to MT5
             if not self._validate_tp_sl(signal, adjusted_sl):
                 logger.error(f"❌ TP/SL validation failed for {signal.symbol}: Invalid TP/SL values")
                 return None
+
+            # Use tp_price directly (DB column name) instead of property
+            tp_price = getattr(signal, 'tp_price', None) or getattr(signal, 'tp', None)
+
+            # Convert all numeric values to float to prevent Decimal JSON serialization errors
+            adjusted_sl = float(adjusted_sl)
+            tp_price = float(tp_price) if tp_price else None
+            volume = float(volume)
+            entry_price = float(signal.entry_price) if signal.entry_price else None
 
             # Store signal_id and timeframe in payload for trade linking
             payload_data = {
@@ -534,7 +661,7 @@ class AutoTrader:
                 'order_type': signal.signal_type,  # BUY or SELL
                 'volume': volume,
                 'sl': adjusted_sl,  # Use adjusted SL
-                'tp': signal.tp,
+                'tp': tp_price,
                 'comment': f"Auto-Trade Signal #{signal.id} ({signal.timeframe})",
                 'signal_id': signal.id,  # IMPORTANT: Link to signal
                 'timeframe': signal.timeframe  # IMPORTANT: Store timeframe for limiting
@@ -553,30 +680,32 @@ class AutoTrader:
             db.commit()
 
             # Push to Redis command queue
-            # CRITICAL FIX: Use adjusted_sl (not signal.sl) to match payload!
+            # CRITICAL FIX: Use adjusted_sl (not signal.sl_price) to match payload!
             command_data = {
                 'id': command_id,
                 'type': 'OPEN_TRADE',
                 'symbol': signal.symbol,
                 'order_type': signal.signal_type,
                 'volume': volume,
-                'sl': adjusted_sl,  # FIXED: Use adjusted SL (was: signal.sl)
-                'tp': signal.tp,
+                'sl': adjusted_sl,  # FIXED: Use adjusted SL
+                'tp': tp_price,
                 'comment': payload_data['comment']
             }
 
             self.redis.push_command(signal.account_id, command_data)
 
-            logger.info(f"✅ Trade command created: {command_id} - {signal.signal_type} {volume} {signal.symbol} @ {signal.entry_price} | SL: {adjusted_sl:.5f} | TP: {signal.tp:.5f}")
+            logger.info(f"✅ Trade command created: {command_id} - {signal.signal_type} {volume} {signal.symbol} @ {signal.entry_price} | SL: {adjusted_sl:.5f} | TP: {tp_price:.5f}")
 
             # Store command ID for execution tracking
             if not hasattr(self, 'pending_commands'):
                 self.pending_commands = {}
             self.pending_commands[command_id] = {
                 'signal_id': signal.id,
+                'account_id': signal.account_id,  # ✅ NEW: Store account_id for logging
                 'symbol': signal.symbol,
                 'created_at': datetime.utcnow(),
-                'timeout_at': datetime.utcnow() + timedelta(minutes=5)
+                'timeout_at': datetime.utcnow() + timedelta(minutes=5),
+                'retry_count': 0  # ✅ NEW: Track retries
             }
 
             return command
@@ -586,33 +715,92 @@ class AutoTrader:
             db.rollback()
             return None
 
+    def _get_signal_hash(self, signal: TradingSignal) -> str:
+        """
+        Generate a hash for a signal based on its key properties.
+        This allows detecting when a signal is updated with new values.
+        """
+        import hashlib
+        
+        # Create hash from key signal properties
+        hash_string = f"{signal.account_id}_{signal.symbol}_{signal.timeframe}_{signal.signal_type}_{signal.confidence}_{signal.entry_price}"
+        return hashlib.md5(hash_string.encode()).hexdigest()
+
     def process_new_signals(self, db: Session):
         """Process new trading signals"""
         try:
-            # Get recent unprocessed signals
+            # Get recent signals (last 10 minutes OR status='active')
+            # This catches both new and updated signals
             cutoff_time = datetime.utcnow() - timedelta(minutes=10)
 
             signals = db.query(TradingSignal).filter(
                 and_(
-                    TradingSignal.created_at >= cutoff_time,
-                    TradingSignal.signal_type.in_(['BUY', 'SELL'])
+                    TradingSignal.signal_type.in_(['BUY', 'SELL']),
+                    # Get signals that are either recent OR still active
+                    or_(
+                        TradingSignal.created_at >= cutoff_time,
+                        TradingSignal.status == 'active'
+                    )
                 )
             ).order_by(TradingSignal.created_at.desc()).all()
 
-            logger.info(f"🔍 Auto-trader found {len(signals)} signals in last 10 minutes, {len(self.processed_signals)} already processed")
-
+            # Count how many are truly new (not seen before)
+            new_count = 0
+            signals_to_process = []
+            
             for signal in signals:
-                # Skip already processed signals
-                if signal.id in self.processed_signals:
+                # Generate hash based on signal properties
+                signal_hash = self._get_signal_hash(signal)
+                
+                # Check if we've already processed this exact signal version
+                if signal_hash in self.processed_signal_hashes:
+                    # Already processed this version - skip
                     continue
+                
+                # This is a new/updated signal version
+                new_count += 1
+                signals_to_process.append(signal)
+                
+                # Mark this version as processed
+                self.processed_signal_hashes[signal_hash] = {
+                    'signal_id': signal.id,
+                    'processed_at': datetime.utcnow(),
+                    'symbol': signal.symbol,
+                    'timeframe': signal.timeframe
+                }
 
-                # Mark as processed
-                self.processed_signals.add(signal.id)
+            logger.info(f"🔍 Auto-trader found {len(signals)} signals ({new_count} new/updated), {len(self.processed_signal_hashes)} tracked hashes")
+
+            # Process new/updated signals
+            for signal in signals_to_process:
 
                 # Check if should execute
                 should_exec = self.should_execute_signal(signal, db)
                 if not should_exec['execute']:
                     logger.info(f"⏭️  Skipping signal #{signal.id} ({signal.symbol} {signal.timeframe}): {should_exec['reason']}")
+                    
+                    # Log decision to AI Decision Log
+                    from ai_decision_log import AIDecisionLogger
+                    decision_logger = AIDecisionLogger()
+                    decision_logger.log_decision(
+                        account_id=signal.account_id,
+                        decision_type='SIGNAL_SKIP',
+                        decision='REJECTED',
+                        primary_reason=should_exec['reason'],
+                        detailed_reasoning={
+                            'signal_id': signal.id,
+                            'symbol': signal.symbol,
+                            'timeframe': signal.timeframe,
+                            'signal_type': signal.signal_type,
+                            'confidence': float(signal.confidence) if signal.confidence else None,
+                            'entry_price': float(signal.entry_price) if signal.entry_price else None
+                        },
+                        symbol=signal.symbol,
+                        timeframe=signal.timeframe,
+                        signal_id=signal.id,
+                        impact_level='LOW',
+                        confidence_score=float(signal.confidence) if signal.confidence else None
+                    )
 
                     # Check if symbol is disabled - create shadow trade
                     from models import SymbolPerformanceTracking
@@ -661,23 +849,58 @@ class AutoTrader:
 
                 if command:
                     logger.info(f"🚀 Auto-Trade executed: Signal #{signal.id} → Command {command.id}")
+                    
+                    # Log successful trade command to AI Decision Log
+                    from ai_decision_log import AIDecisionLogger
+                    decision_logger = AIDecisionLogger()
+                    decision_logger.log_decision(
+                        account_id=signal.account_id,
+                        decision_type='TRADE_OPEN',
+                        decision='APPROVED',
+                        primary_reason=f"Signal #{signal.id} approved for trading",
+                        detailed_reasoning={
+                            'signal_id': signal.id,
+                            'command_id': command.id,
+                            'symbol': signal.symbol,
+                            'timeframe': signal.timeframe,
+                            'signal_type': signal.signal_type,
+                            'confidence': float(signal.confidence) if signal.confidence else None,
+                            'entry_price': float(signal.entry_price) if signal.entry_price else None,
+                            'volume': float(volume),
+                            'sl': float(command.payload.get('sl')) if command.payload.get('sl') else None,
+                            'tp': float(command.payload.get('tp')) if command.payload.get('tp') else None
+                        },
+                        symbol=signal.symbol,
+                        timeframe=signal.timeframe,
+                        signal_id=signal.id,
+                        impact_level='HIGH',
+                        confidence_score=float(signal.confidence) if signal.confidence else None
+                    )
 
         except Exception as e:
             logger.error(f"Error processing signals: {e}")
 
     def cleanup_processed_signals(self):
         """
-        Clean up old processed signal IDs to prevent unbounded memory growth.
+        Clean up old processed signal hashes to prevent unbounded memory growth.
 
-        Keeps last 500 IDs when threshold (1000) is reached.
+        Keeps only hashes from the last hour to allow signal re-processing.
         Runs every auto-trade iteration (every 10 seconds).
         """
-        # Processed signals: Limit to 1000 entries
-        if len(self.processed_signals) > 1000:
-            # Convert to sorted list, keep last 500
-            sorted_ids = sorted(list(self.processed_signals))
-            self.processed_signals = set(sorted_ids[-500:])
-            logger.debug(f"🧹 Cleaned up processed_signals: {len(sorted_ids)} → 500")
+        if len(self.processed_signal_hashes) > 100:
+            cutoff_time = datetime.utcnow() - timedelta(hours=1)
+            
+            # Remove old hashes
+            hashes_to_remove = []
+            for hash_key, hash_data in self.processed_signal_hashes.items():
+                if hash_data['processed_at'] < cutoff_time:
+                    hashes_to_remove.append(hash_key)
+            
+            for hash_key in hashes_to_remove:
+                del self.processed_signal_hashes[hash_key]
+            
+            if hashes_to_remove:
+                logger.debug(f"🧹 Cleaned up {len(hashes_to_remove)} old signal hashes (keeping last hour)")
 
     def cleanup_expired_cooldowns(self):
         """
@@ -774,6 +997,22 @@ class AutoTrader:
                     self.disable()
                     self.circuit_breaker_tripped = True
                     self.circuit_breaker_reason = f"{self.failed_command_count} consecutive command failures"
+                    
+                    # ✅ NEW: Log circuit breaker activation to AI Decision Log
+                    try:
+                        from ai_decision_log import log_circuit_breaker
+                        log_circuit_breaker(
+                            account_id=cmd_data.get('account_id', 1),
+                            failed_count=self.failed_command_count,
+                            reason=self.circuit_breaker_reason,
+                            details={
+                                'failed_commands': [cmd_id for cmd_id in commands_to_remove],
+                                'last_error': error_msg if command and command.status == 'failed' else 'Timeout',
+                                'timestamp': now.isoformat()
+                            }
+                        )
+                    except Exception as log_error:
+                        logger.error(f"Failed to log circuit breaker to AI Decision Log: {log_error}")
 
         # Clean up processed/timeout commands
         for cmd_id in commands_to_remove:
@@ -896,9 +1135,11 @@ class AutoTrader:
         elif any(curr in symbol_upper for curr in ['ZAR', 'TRY', 'MXN']):
             return 0.001  # 10 pips
 
-        # Crypto: variable spreads
+        # Crypto: variable spreads (use percentage of price)
         elif any(crypto in symbol_upper for crypto in ['BTC', 'ETH', 'XRP']):
-            return symbol.replace('USD', '').replace('EUR', '') + ' 0.5%'  # 0.5% of price
+            # Return 0.5% of current price as max spread
+            # This will be calculated dynamically based on the signal's entry price
+            return 100.0  # For crypto, allow larger absolute spreads (will be validated by % check above)
 
         # Gold/Silver
         elif 'XAU' in symbol_upper:

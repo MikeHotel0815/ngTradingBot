@@ -1,128 +1,28 @@
 """
-Smart TP/SL Calculator - Enhanced with Symbol-Specific Configuration
+Smart TP/SL Calculator - Hybrid Approach
 
 Combines multiple factors for realistic and achievable TP/SL levels:
 1. ATR-based targets (volatility)
 2. Bollinger Bands (statistical boundaries)
 3. Support/Resistance levels (technical analysis)
-4. Psychological levels (round numbers)
-5. **NEW:** Symbol-specific broker limits and asset-class configurations
+4. Psychologica levels (round numbers)
 
-Goal: Generate REALISTIC targets that are likely to be reached AND accepted by broker.
+Goal: Generate REALISTIC targets that are likely to be reached.
 """
 
 import logging
 from typing import Dict, Optional, Tuple
 from sqlalchemy.orm import Session
 from database import get_db
-from models import OHLCData, BrokerSymbol
+from models import OHLCData
 from technical_indicators import TechnicalIndicators
 
 logger = logging.getLogger(__name__)
 
 
-class SymbolConfig:
-    """Symbol-specific trading configuration based on asset class"""
-    
-    ASSET_CLASSES = {
-        'FOREX_MAJOR': {
-            'symbols': ['EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'AUDUSD', 'USDCAD', 'NZDUSD'],
-            'atr_tp_multiplier': 2.0,      # Conservative for Forex
-            'atr_sl_multiplier': 1.2,      # Tighter stop
-            'trailing_multiplier': 0.8,    # 0.8x ATR
-            'max_tp_pct': 1.0,             # Max 1% (100 pips typically)
-            'min_sl_pct': 0.15,            # Min 15 pips
-            'fallback_atr_pct': 0.0008,    # 0.08% (~8 pips @ 1.0000)
-        },
-        'FOREX_MINOR': {
-            'symbols': ['EURGBP', 'EURJPY', 'GBPJPY', 'EURCHF', 'EURAUD', 'EURCAD', 
-                       'AUDCAD', 'AUDNZD', 'CADJPY', 'CHFJPY', 'GBPAUD', 'GBPCAD'],
-            'atr_tp_multiplier': 2.5,
-            'atr_sl_multiplier': 1.3,
-            'trailing_multiplier': 0.9,
-            'max_tp_pct': 1.2,
-            'min_sl_pct': 0.2,
-            'fallback_atr_pct': 0.0012,    # 0.12%
-        },
-        'FOREX_EXOTIC': {
-            'symbols': ['USDTRY', 'USDZAR', 'USDMXN', 'USDBRL', 'EURTRY', 'USDRUB'],
-            'atr_tp_multiplier': 3.0,      # Wider due to volatility
-            'atr_sl_multiplier': 1.5,
-            'trailing_multiplier': 1.2,
-            'max_tp_pct': 2.0,
-            'min_sl_pct': 0.5,
-            'fallback_atr_pct': 0.0020,    # 0.20%
-        },
-        'CRYPTO': {
-            'symbols': ['BTCUSD', 'ETHUSD', 'LTCUSD', 'XRPUSD', 'BCHUSD', 'ADAUSD', 
-                       'DOTUSD', 'LINKUSD', 'SOLUSD', 'MATICUSD'],
-            'atr_tp_multiplier': 1.8,      # Aggressive (high volatility)
-            'atr_sl_multiplier': 1.0,      # Wider stop (volatility)
-            'trailing_multiplier': 0.7,    
-            'max_tp_pct': 5.0,             # Crypto can move 5%
-            'min_sl_pct': 1.0,             # Min 1% stop
-            'fallback_atr_pct': 0.020,     # 2%
-        },
-        'METALS': {
-            'symbols': ['XAUUSD', 'XAGUSD', 'XPTUSD', 'XPDUSD'],
-            'atr_tp_multiplier': 2.2,
-            'atr_sl_multiplier': 1.2,
-            'trailing_multiplier': 0.8,
-            'max_tp_pct': 2.0,             # Gold: max 2%
-            'min_sl_pct': 0.5,             # Min 0.5%
-            'fallback_atr_pct': 0.008,     # 0.8%
-        },
-        'INDICES': {
-            'symbols': ['US30', 'NAS100', 'SPX500', 'GER40', 'UK100', 'JPN225', 
-                       'AUS200', 'FRA40', 'ESP35', 'ITA40'],
-            'atr_tp_multiplier': 2.0,
-            'atr_sl_multiplier': 1.2,
-            'trailing_multiplier': 0.9,
-            'max_tp_pct': 1.5,
-            'min_sl_pct': 0.3,
-            'fallback_atr_pct': 0.006,     # 0.6%
-        },
-        'COMMODITIES': {
-            'symbols': ['XTIUSD', 'XBRUSD', 'NATGAS', 'UKOUSD'],  # Oil, Brent, Gas
-            'atr_tp_multiplier': 2.5,
-            'atr_sl_multiplier': 1.5,
-            'trailing_multiplier': 1.0,
-            'max_tp_pct': 3.0,
-            'min_sl_pct': 0.8,
-            'fallback_atr_pct': 0.015,     # 1.5%
-        },
-        'STOCKS': {
-            'symbols': ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA', 'META'],
-            'atr_tp_multiplier': 2.0,
-            'atr_sl_multiplier': 1.3,
-            'trailing_multiplier': 0.9,
-            'max_tp_pct': 2.0,
-            'min_sl_pct': 0.5,
-            'fallback_atr_pct': 0.010,     # 1%
-        }
-    }
-    
-    @classmethod
-    def get_asset_class_config(cls, symbol: str) -> Dict:
-        """Get asset class configuration for symbol"""
-        for asset_class, config in cls.ASSET_CLASSES.items():
-            if symbol in config['symbols']:
-                return {
-                    'asset_class': asset_class,
-                    **config
-                }
-        
-        # Default fallback (treat as forex major)
-        logger.warning(f"Unknown symbol {symbol}, using FOREX_MAJOR defaults")
-        return {
-            'asset_class': 'UNKNOWN',
-            **cls.ASSET_CLASSES['FOREX_MAJOR']
-        }
-
-
 class SmartTPSLCalculator:
     """
-    Intelligent TP/SL calculation using hybrid approach with broker-aware validation
+    Intelligent TP/SL calculation using hybrid approach
     """
 
     def __init__(self, account_id: int, symbol: str, timeframe: str):
@@ -130,64 +30,6 @@ class SmartTPSLCalculator:
         self.symbol = symbol
         self.timeframe = timeframe
         self.indicators = TechnicalIndicators(account_id, symbol, timeframe)
-        self.asset_config = SymbolConfig.get_asset_class_config(symbol)
-        self.broker_specs = None  # Lazy loaded
-
-    def _get_broker_specs(self, db: Session) -> Dict:
-        """Get broker symbol specifications"""
-        if self.broker_specs:
-            return self.broker_specs
-        
-        try:
-            broker_symbol = db.query(BrokerSymbol).filter_by(
-                account_id=self.account_id,
-                symbol=self.symbol
-            ).first()
-            
-            if broker_symbol:
-                self.broker_specs = {
-                    'digits': broker_symbol.digits or 5,
-                    'point': float(broker_symbol.point_value) if broker_symbol.point_value else 0.00001,
-                    'stops_level': broker_symbol.stops_level or 10,
-                    'freeze_level': broker_symbol.freeze_level or 0,
-                    'volume_min': float(broker_symbol.volume_min) if broker_symbol.volume_min else 0.01,
-                    'volume_step': float(broker_symbol.volume_step) if broker_symbol.volume_step else 0.01,
-                }
-                logger.debug(f"Loaded broker specs for {self.symbol}: {self.broker_specs}")
-            else:
-                # Fallback defaults
-                self.broker_specs = self._get_default_broker_specs()
-                logger.warning(f"No broker specs for {self.symbol}, using defaults")
-            
-            return self.broker_specs
-            
-        except Exception as e:
-            logger.error(f"Error loading broker specs for {self.symbol}: {e}")
-            self.broker_specs = self._get_default_broker_specs()
-            return self.broker_specs
-    
-    def _get_default_broker_specs(self) -> Dict:
-        """Default broker specs based on asset class"""
-        asset_class = self.asset_config.get('asset_class', 'UNKNOWN')
-        
-        defaults = {
-            'FOREX_MAJOR': {'digits': 5, 'point': 0.00001, 'stops_level': 10},
-            'FOREX_MINOR': {'digits': 5, 'point': 0.00001, 'stops_level': 15},
-            'FOREX_EXOTIC': {'digits': 5, 'point': 0.00001, 'stops_level': 50},
-            'CRYPTO': {'digits': 2, 'point': 0.01, 'stops_level': 50},
-            'METALS': {'digits': 2, 'point': 0.01, 'stops_level': 30},
-            'INDICES': {'digits': 2, 'point': 0.01, 'stops_level': 10},
-            'COMMODITIES': {'digits': 3, 'point': 0.001, 'stops_level': 20},
-            'STOCKS': {'digits': 2, 'point': 0.01, 'stops_level': 5},
-        }
-        
-        spec = defaults.get(asset_class, defaults['FOREX_MAJOR'])
-        return {
-            **spec,
-            'freeze_level': 0,
-            'volume_min': 0.01,
-            'volume_step': 0.01
-        }
 
     def calculate(self, signal_type: str, entry_price: float) -> Dict:
         """
@@ -205,19 +47,10 @@ class SmartTPSLCalculator:
                 - sl_reason: Why this SL was chosen
                 - risk_reward: Risk/Reward ratio
                 - trailing_distance_pct: Trailing stop distance in %
-                - tp_distance_points: TP distance in broker points
-                - sl_distance_points: SL distance in broker points
         """
-        db = next(get_db())
         try:
-            # Get broker specifications
-            broker_specs = self._get_broker_specs(db)
-            
             # Get all candidate levels
             atr = self._get_atr()
-            if atr == 0:
-                atr = self._get_smart_atr_fallback(entry_price)
-            
             bb_levels = self._get_bollinger_levels()
             sr_levels = self._get_support_resistance_levels()
             psych_levels = self._get_psychological_levels(entry_price)
@@ -233,61 +66,45 @@ class SmartTPSLCalculator:
             )
 
             # Select best TP (closest realistic target)
-            tp, tp_reason = self._select_best_tp(tp_candidates, entry_price, signal_type, atr)
+            tp, tp_reason = self._select_best_tp(tp_candidates, entry_price, signal_type)
 
             # Select best SL (tightest safe level)
-            sl, sl_reason = self._select_best_sl(sl_candidates, entry_price, signal_type, atr)
-
-            # Apply broker limits and rounding
-            tp, sl = self._apply_broker_limits(entry_price, tp, sl, signal_type, broker_specs)
+            sl, sl_reason = self._select_best_sl(sl_candidates, entry_price, signal_type)
 
             # Validate TP/SL
             if not self._validate_tp_sl(entry_price, tp, sl, signal_type):
                 # Fallback to ATR-based if validation fails
                 logger.warning(f"TP/SL validation failed, using ATR fallback for {self.symbol}")
-                return self._atr_fallback(signal_type, entry_price, atr, broker_specs)
+                return self._atr_fallback(signal_type, entry_price, atr)
 
             # Calculate risk/reward
             risk = abs(entry_price - sl)
             reward = abs(tp - entry_price)
             risk_reward = reward / risk if risk > 0 else 0
 
-            # Calculate distances in broker points
-            point = broker_specs['point']
-            tp_distance_points = round(abs(tp - entry_price) / point, 1)
-            sl_distance_points = round(abs(sl - entry_price) / point, 1)
-
             # Calculate trailing stop distance (based on ATR, not TP distance)
             trailing_distance_pct = self._calculate_trailing_distance(atr, entry_price)
 
             logger.info(
-                f"🎯 {self.symbol} ({self.asset_config['asset_class']}) {signal_type}: "
-                f"Entry={entry_price:.{broker_specs['digits']}f} | "
-                f"TP={tp:.{broker_specs['digits']}f} ({tp_reason}, {tp_distance_points}pts) | "
-                f"SL={sl:.{broker_specs['digits']}f} ({sl_reason}, {sl_distance_points}pts) | "
+                f"🎯 {self.symbol} {signal_type}: Entry={entry_price:.5f} | "
+                f"TP={tp:.5f} ({tp_reason}) | SL={sl:.5f} ({sl_reason}) | "
                 f"R:R={risk_reward:.2f} | Trail={trailing_distance_pct:.2f}%"
             )
 
             return {
-                'tp': tp,
-                'sl': sl,
+                'tp': round(tp, 5),
+                'sl': round(sl, 5),
                 'tp_reason': tp_reason,
                 'sl_reason': sl_reason,
                 'risk_reward': round(risk_reward, 2),
-                'trailing_distance_pct': round(trailing_distance_pct, 2),
-                'tp_distance_points': tp_distance_points,
-                'sl_distance_points': sl_distance_points,
-                'broker_stops_level': broker_specs['stops_level']
+                'trailing_distance_pct': round(trailing_distance_pct, 2)
             }
 
         except Exception as e:
             logger.error(f"Error in smart TP/SL calculation: {e}", exc_info=True)
             # Ultimate fallback
-            atr = self._get_smart_atr_fallback(entry_price)
-            broker_specs = self._get_default_broker_specs()
-            return self._atr_fallback(signal_type, entry_price, atr, broker_specs)
-        finally:
-            db.close()
+            atr = entry_price * 0.002  # 0.2% fallback
+            return self._atr_fallback(signal_type, entry_price, atr)
 
     def _get_atr(self) -> float:
         """Get Average True Range"""
@@ -297,21 +114,6 @@ class SmartTPSLCalculator:
         except Exception as e:
             logger.warning(f"ATR calculation failed for {self.symbol} {self.timeframe}: {e}")
             return 0
-    
-    def _get_smart_atr_fallback(self, entry_price: float) -> float:
-        """
-        Asset-class aware ATR fallback
-        Uses realistic ATR percentages based on asset class
-        """
-        fallback_pct = self.asset_config.get('fallback_atr_pct', 0.005)
-        atr = entry_price * fallback_pct
-        
-        logger.info(
-            f"Using smart ATR fallback for {self.symbol} ({self.asset_config['asset_class']}): "
-            f"{atr:.5f} ({fallback_pct*100:.2f}%)"
-        )
-        
-        return atr
 
     def _get_bollinger_levels(self) -> Dict:
         """Get Bollinger Band levels"""
@@ -325,6 +127,7 @@ class SmartTPSLCalculator:
                 }
         except Exception as e:
             logger.debug(f"Bollinger Bands calculation failed for {self.symbol}: {e}")
+            # Return empty dict - will use ATR fallback
         return {}
 
     def _get_support_resistance_levels(self) -> Dict:
@@ -406,17 +209,14 @@ class SmartTPSLCalculator:
     ) -> list:
         """Calculate all TP candidates with distances"""
         candidates = []
-        
-        # Get asset-specific multiplier
-        tp_multiplier = self.asset_config.get('atr_tp_multiplier', 2.5)
 
-        # 1. ATR-based TP (asset-specific multiplier)
+        # 1. ATR-based TP (current system: 2.5x ATR)
         if atr > 0:
-            atr_tp = entry + (tp_multiplier * atr) if signal_type == 'BUY' else entry - (tp_multiplier * atr)
+            atr_tp = entry + (2.5 * atr) if signal_type == 'BUY' else entry - (2.5 * atr)
             candidates.append({
                 'price': atr_tp,
                 'distance': abs(atr_tp - entry),
-                'reason': f'ATR {tp_multiplier}x'
+                'reason': 'ATR 2.5x'
             })
 
         # 2. Bollinger Band TP
@@ -475,17 +275,14 @@ class SmartTPSLCalculator:
     ) -> list:
         """Calculate all SL candidates"""
         candidates = []
-        
-        # Get asset-specific multiplier
-        sl_multiplier = self.asset_config.get('atr_sl_multiplier', 1.5)
 
-        # 1. ATR-based SL (asset-specific multiplier)
+        # 1. ATR-based SL (current system: 1.5x ATR)
         if atr > 0:
-            atr_sl = entry - (sl_multiplier * atr) if signal_type == 'BUY' else entry + (sl_multiplier * atr)
+            atr_sl = entry - (1.5 * atr) if signal_type == 'BUY' else entry + (1.5 * atr)
             candidates.append({
                 'price': atr_sl,
                 'distance': abs(atr_sl - entry),
-                'reason': f'ATR {sl_multiplier}x'
+                'reason': 'ATR 1.5x'
             })
 
         # 2. Bollinger Band SL (outside the band)
@@ -509,7 +306,7 @@ class SmartTPSLCalculator:
                         'reason': 'BB Upper +0.2%'
                     })
 
-        # 3. SuperTrend SL
+        # 3. SuperTrend SL (already implemented in auto_trader, but good to have here too)
         try:
             supertrend = self.indicators.calculate_supertrend()
             if supertrend and supertrend['value']:
@@ -521,21 +318,23 @@ class SmartTPSLCalculator:
                         'reason': 'SuperTrend'
                     })
         except Exception as e:
-            logger.debug(f"SuperTrend SL calculation failed for {self.symbol}: {e}")
+            logger.debug(f"SuperTrend TP calculation failed for {self.symbol}: {e}")
+            # Continue without SuperTrend TP
 
         return candidates
 
-    def _select_best_tp(self, candidates: list, entry: float, signal_type: str, atr: float) -> Tuple[float, str]:
+    def _select_best_tp(self, candidates: list, entry: float, signal_type: str) -> Tuple[float, str]:
         """
         Select best TP: Closest realistic target that's at least 1.5x ATR away
         """
         if not candidates:
             # Fallback
-            tp_multiplier = self.asset_config.get('atr_tp_multiplier', 2.5)
-            tp = entry + (tp_multiplier * atr) if signal_type == 'BUY' else entry - (tp_multiplier * atr)
+            atr = self._get_atr() or (entry * 0.002)
+            tp = entry + (2.5 * atr) if signal_type == 'BUY' else entry - (2.5 * atr)
             return tp, 'ATR Fallback'
 
         # Minimum distance: 1.5x ATR
+        atr = self._get_atr() or (entry * 0.002)
         min_distance = 1.5 * atr
 
         # Filter candidates that are too close
@@ -552,17 +351,18 @@ class SmartTPSLCalculator:
         best = valid_candidates[0]
         return best['price'], best['reason']
 
-    def _select_best_sl(self, candidates: list, entry: float, signal_type: str, atr: float) -> Tuple[float, str]:
+    def _select_best_sl(self, candidates: list, entry: float, signal_type: str) -> Tuple[float, str]:
         """
         Select best SL: Tightest safe level (but not too tight)
         """
         if not candidates:
             # Fallback
-            sl_multiplier = self.asset_config.get('atr_sl_multiplier', 1.5)
-            sl = entry - (sl_multiplier * atr) if signal_type == 'BUY' else entry + (sl_multiplier * atr)
+            atr = self._get_atr() or (entry * 0.002)
+            sl = entry - (1.5 * atr) if signal_type == 'BUY' else entry + (1.5 * atr)
             return sl, 'ATR Fallback'
 
         # Minimum distance: 1.0x ATR (don't go tighter)
+        atr = self._get_atr() or (entry * 0.002)
         min_distance = 1.0 * atr
 
         # Filter candidates that are too tight
@@ -574,8 +374,7 @@ class SmartTPSLCalculator:
                 if c['reason'].startswith('ATR'):
                     return c['price'], c['reason']
             # Ultimate fallback
-            sl_multiplier = self.asset_config.get('atr_sl_multiplier', 1.5)
-            sl = entry - (sl_multiplier * atr) if signal_type == 'BUY' else entry + (sl_multiplier * atr)
+            sl = entry - (1.5 * atr) if signal_type == 'BUY' else entry + (1.5 * atr)
             return sl, 'ATR Fallback Tight'
 
         # Sort by distance (tightest first)
@@ -584,43 +383,6 @@ class SmartTPSLCalculator:
         # Return tightest safe level
         best = valid_candidates[0]
         return best['price'], best['reason']
-
-    def _apply_broker_limits(
-        self, entry: float, tp: float, sl: float, 
-        signal_type: str, broker_specs: Dict
-    ) -> Tuple[float, float]:
-        """
-        Apply broker limits (stops_level) and round to correct digits
-        """
-        point = broker_specs['point']
-        min_stops = broker_specs['stops_level']
-        digits = broker_specs['digits']
-        
-        # Calculate distances in points
-        tp_distance_points = abs(tp - entry) / point
-        sl_distance_points = abs(sl - entry) / point
-        
-        # Adjust TP if too close
-        if tp_distance_points < min_stops:
-            tp = entry + (min_stops * point) if signal_type == 'BUY' else entry - (min_stops * point)
-            logger.warning(
-                f"TP adjusted to broker minimum: {min_stops} points "
-                f"(was {tp_distance_points:.1f} points)"
-            )
-        
-        # Adjust SL if too close
-        if sl_distance_points < min_stops:
-            sl = entry - (min_stops * point) if signal_type == 'BUY' else entry + (min_stops * point)
-            logger.warning(
-                f"SL adjusted to broker minimum: {min_stops} points "
-                f"(was {sl_distance_points:.1f} points)"
-            )
-        
-        # Round to correct digits
-        tp = round(tp, digits)
-        sl = round(sl, digits)
-        
-        return tp, sl
 
     def _validate_tp_sl(self, entry: float, tp: float, sl: float, signal_type: str) -> bool:
         """
@@ -641,17 +403,17 @@ class SmartTPSLCalculator:
             logger.warning(f"Risk/Reward too low: {reward/risk:.2f}")
             return False
 
-        # 3. Check TP not too far (asset-specific maximum)
+        # 3. Check TP not too far (max 5% for most assets, 3% for volatile)
         tp_distance_pct = abs(tp - entry) / entry * 100
-        max_distance = self.asset_config.get('max_tp_pct', 5.0)
+        max_distance = 3.0 if self.symbol in ['BTCUSD', 'ETHUSD', 'XAUUSD'] else 5.0
 
         if tp_distance_pct > max_distance:
             logger.warning(f"TP too far: {tp_distance_pct:.2f}% (max: {max_distance}%)")
             return False
 
-        # 4. Check SL not too tight (asset-specific minimum)
+        # 4. Check SL not too tight (min 0.1% for forex, 0.3% for volatile)
         sl_distance_pct = abs(sl - entry) / entry * 100
-        min_sl_distance = self.asset_config.get('min_sl_pct', 0.1)
+        min_sl_distance = 0.3 if self.symbol in ['BTCUSD', 'ETHUSD', 'XAUUSD'] else 0.1
 
         if sl_distance_pct < min_sl_distance:
             logger.warning(f"SL too tight: {sl_distance_pct:.2f}% (min: {min_sl_distance}%)")
@@ -662,58 +424,45 @@ class SmartTPSLCalculator:
     def _calculate_trailing_distance(self, atr: float, entry: float) -> float:
         """
         Calculate trailing stop distance in %
-        Based on ATR with asset-specific multiplier
+        Based on ATR, not TP distance
         """
-        # Get asset-specific multiplier
-        trailing_multiplier = self.asset_config.get('trailing_multiplier', 1.0)
-        
-        # Trailing distance: asset-specific multiplier * ATR
-        trailing_distance = trailing_multiplier * atr
+        if atr == 0:
+            atr = entry * 0.002
+
+        # Trailing distance: 1.0x ATR (tighter than TP, but not too tight)
+        trailing_distance = 1.0 * atr
         trailing_distance_pct = (trailing_distance / entry) * 100
 
-        # Clamp to reasonable range: 0.3% - 3.0%
-        trailing_distance_pct = max(0.3, min(3.0, trailing_distance_pct))
+        # Clamp to reasonable range: 0.5% - 2.0%
+        trailing_distance_pct = max(0.5, min(2.0, trailing_distance_pct))
 
         return trailing_distance_pct
 
-    def _atr_fallback(
-        self, signal_type: str, entry: float, atr: float, broker_specs: Dict
-    ) -> Dict:
-        """Fallback to simple ATR-based calculation with asset-specific multipliers"""
-        tp_multiplier = self.asset_config.get('atr_tp_multiplier', 2.5)
-        sl_multiplier = self.asset_config.get('atr_sl_multiplier', 1.5)
-        
+    def _atr_fallback(self, signal_type: str, entry: float, atr: float) -> Dict:
+        """Fallback to simple ATR-based calculation"""
+        if atr == 0:
+            atr = entry * 0.002
+
         if signal_type == 'BUY':
-            tp = entry + (tp_multiplier * atr)
-            sl = entry - (sl_multiplier * atr)
+            tp = entry + (2.5 * atr)
+            sl = entry - (1.5 * atr)
         else:
-            tp = entry - (tp_multiplier * atr)
-            sl = entry + (sl_multiplier * atr)
-        
-        # Apply broker limits
-        tp, sl = self._apply_broker_limits(entry, tp, sl, signal_type, broker_specs)
+            tp = entry - (2.5 * atr)
+            sl = entry + (1.5 * atr)
 
         risk = abs(entry - sl)
         reward = abs(tp - entry)
         risk_reward = reward / risk if risk > 0 else 1.67
 
         trailing_distance_pct = self._calculate_trailing_distance(atr, entry)
-        
-        # Calculate distances in points
-        point = broker_specs['point']
-        tp_distance_points = round(abs(tp - entry) / point, 1)
-        sl_distance_points = round(abs(sl - entry) / point, 1)
 
         return {
-            'tp': tp,
-            'sl': sl,
-            'tp_reason': f'ATR Fallback {tp_multiplier}x',
-            'sl_reason': f'ATR Fallback {sl_multiplier}x',
+            'tp': round(tp, 5),
+            'sl': round(sl, 5),
+            'tp_reason': 'ATR Fallback',
+            'sl_reason': 'ATR Fallback',
             'risk_reward': round(risk_reward, 2),
-            'trailing_distance_pct': round(trailing_distance_pct, 2),
-            'tp_distance_points': tp_distance_points,
-            'sl_distance_points': sl_distance_points,
-            'broker_stops_level': broker_specs['stops_level']
+            'trailing_distance_pct': round(trailing_distance_pct, 2)
         }
 
 

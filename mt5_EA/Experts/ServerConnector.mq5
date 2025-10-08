@@ -9,7 +9,7 @@
 #property strict
 
 // MANUAL: Update this date when code is modified!
-#define CODE_LAST_MODIFIED "2025-01-07 17:51:00"  // Added MT5 profit values in tick batches
+#define CODE_LAST_MODIFIED "2025-10-08 19:30:00"  // Fixed filling mode detection + SL/TP validation
 
 // Input parameters
 input string ServerURL = "http://100.97.100.50:9900";  // Python server URL (Tailscale)
@@ -1051,6 +1051,86 @@ void ExecuteOpenTrade(string commandId, string cmdObj)
       return;
    }
 
+   // Validate SL/TP distance with stops level
+   int stopsLevel = (int)SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   double minDistance = stopsLevel * point;
+   
+   double currentPrice = (orderTypeStr == "BUY") ? tick.ask : tick.bid;
+   
+   // For BUY: SL must be below price, TP above
+   // For SELL: SL must be above price, TP below
+   if(orderTypeStr == "BUY")
+   {
+      if(sl >= currentPrice)
+      {
+         SendCommandResponse(commandId, "failed", StringFormat("{\"error\":\"Invalid SL: %.5f >= Price: %.5f (BUY)\",\"error_code\":130}", sl, currentPrice));
+         Print("ERROR: BUY order - SL must be below current price! SL: ", sl, " Price: ", currentPrice);
+         return;
+      }
+      if(tp <= currentPrice)
+      {
+         SendCommandResponse(commandId, "failed", StringFormat("{\"error\":\"Invalid TP: %.5f <= Price: %.5f (BUY)\",\"error_code\":130}", tp, currentPrice));
+         Print("ERROR: BUY order - TP must be above current price! TP: ", tp, " Price: ", currentPrice);
+         return;
+      }
+      
+      // Check minimum distance
+      if(stopsLevel > 0)
+      {
+         double slDistance = currentPrice - sl;
+         double tpDistance = tp - currentPrice;
+         
+         if(slDistance < minDistance)
+         {
+            SendCommandResponse(commandId, "failed", StringFormat("{\"error\":\"SL too close: %.5f < %.5f (min %d points)\",\"error_code\":130}", slDistance, minDistance, stopsLevel));
+            Print("ERROR: SL too close to price! Distance: ", slDistance, " Min: ", minDistance, " (", stopsLevel, " points)");
+            return;
+         }
+         if(tpDistance < minDistance)
+         {
+            SendCommandResponse(commandId, "failed", StringFormat("{\"error\":\"TP too close: %.5f < %.5f (min %d points)\",\"error_code\":130}", tpDistance, minDistance, stopsLevel));
+            Print("ERROR: TP too close to price! Distance: ", tpDistance, " Min: ", minDistance, " (", stopsLevel, " points)");
+            return;
+         }
+      }
+   }
+   else if(orderTypeStr == "SELL")
+   {
+      if(sl <= currentPrice)
+      {
+         SendCommandResponse(commandId, "failed", StringFormat("{\"error\":\"Invalid SL: %.5f <= Price: %.5f (SELL)\",\"error_code\":130}", sl, currentPrice));
+         Print("ERROR: SELL order - SL must be above current price! SL: ", sl, " Price: ", currentPrice);
+         return;
+      }
+      if(tp >= currentPrice)
+      {
+         SendCommandResponse(commandId, "failed", StringFormat("{\"error\":\"Invalid TP: %.5f >= Price: %.5f (SELL)\",\"error_code\":130}", tp, currentPrice));
+         Print("ERROR: SELL order - TP must be below current price! TP: ", tp, " Price: ", currentPrice);
+         return;
+      }
+      
+      // Check minimum distance
+      if(stopsLevel > 0)
+      {
+         double slDistance = sl - currentPrice;
+         double tpDistance = currentPrice - tp;
+         
+         if(slDistance < minDistance)
+         {
+            SendCommandResponse(commandId, "failed", StringFormat("{\"error\":\"SL too close: %.5f < %.5f (min %d points)\",\"error_code\":130}", slDistance, minDistance, stopsLevel));
+            Print("ERROR: SL too close to price! Distance: ", slDistance, " Min: ", minDistance, " (", stopsLevel, " points)");
+            return;
+         }
+         if(tpDistance < minDistance)
+         {
+            SendCommandResponse(commandId, "failed", StringFormat("{\"error\":\"TP too close: %.5f < %.5f (min %d points)\",\"error_code\":130}", tpDistance, minDistance, stopsLevel));
+            Print("ERROR: TP too close to price! Distance: ", tpDistance, " Min: ", minDistance, " (", stopsLevel, " points)");
+            return;
+         }
+      }
+   }
+
    // Debug: Print symbol properties
    Print("DEBUG Symbol Properties for ", symbol, ":");
    Print("  Volume Min: ", SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN));
@@ -1101,11 +1181,30 @@ void ExecuteOpenTrade(string commandId, string cmdObj)
    request.magic = MagicNumber;
    request.comment = comment;
 
-   // Try different filling modes until one works
-   ENUM_ORDER_TYPE_FILLING fillingModes[3] = {ORDER_FILLING_FOK, ORDER_FILLING_IOC, ORDER_FILLING_RETURN};
+   // Get symbol's supported filling modes
+   int filling = (int)SymbolInfoInteger(symbol, SYMBOL_FILLING_MODE);
+   
+   // Build list of filling modes to try based on what symbol supports
+   ENUM_ORDER_TYPE_FILLING fillingModes[3];
+   int fillingCount = 0;
+   
+   // Check which modes are supported and add them in order of preference
+   if((filling & SYMBOL_FILLING_FOK) == SYMBOL_FILLING_FOK)
+   {
+      fillingModes[fillingCount++] = ORDER_FILLING_FOK;
+   }
+   if((filling & SYMBOL_FILLING_IOC) == SYMBOL_FILLING_IOC)
+   {
+      fillingModes[fillingCount++] = ORDER_FILLING_IOC;
+   }
+   // RETURN mode is always available as fallback for market orders
+   fillingModes[fillingCount++] = ORDER_FILLING_RETURN;
+   
+   Print("Symbol ", symbol, " supports filling modes: ", filling, " (trying ", fillingCount, " modes)");
+   
    bool orderSuccess = false;
 
-   for(int fm = 0; fm < 3; fm++)
+   for(int fm = 0; fm < fillingCount; fm++)
    {
       request.type_filling = fillingModes[fm];
 

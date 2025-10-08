@@ -358,7 +358,8 @@ class TradeMonitor:
 
                 if not current_price:
                     logger.warning(f"No price data for {trade.symbol} (Trade {trade.ticket})")
-                    continue
+                    # Use open price as fallback to still show the position
+                    current_price = {'bid': float(trade.open_price), 'ask': float(trade.open_price)}
 
                 # IMPORTANT: Use MT5 profit directly - it's already correct in account currency (EUR)
                 # The EA sends profit from PositionGetDouble(POSITION_PROFIT) which is always in account currency
@@ -474,8 +475,8 @@ class TradeMonitor:
                     # Emit WebSocket event for real-time UI updates
                     try:
                         from app import socketio
-                        # Emit from background thread - use socketio.emit directly
-                        socketio.emit('positions_update', monitoring_data, namespace='/', to=None)
+                        # Emit from background thread - use broadcast=True for background threads
+                        socketio.emit('positions_update', monitoring_data, namespace='/', broadcast=True)
                         logger.info(f"📡 WebSocket: Emitted positions_update for {len(account_positions)} positions to all clients")
                     except Exception as ws_error:
                         # Don't fail if WebSocket is not available

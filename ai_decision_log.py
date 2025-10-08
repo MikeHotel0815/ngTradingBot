@@ -1,19 +1,58 @@
 """
-AI Decision Log
+AI Decision Log - Updated October 8, 2025
 
 Tracks all AI decisions and reasoning for transparency.
 Allows user to see what the bot is "thinking" and why it makes certain decisions.
 
 Decision Types:
+TRADE EXECUTION:
 - TRADE_OPEN: Why trade was opened (or rejected)
 - TRADE_CLOSE: Why trade was closed
+- TRADE_RETRY: Retry attempt after execution failure
+- TRADE_FAILED: Trade execution failed
+- CIRCUIT_BREAKER: Auto-trading disabled due to failures
+
+SIGNAL PROCESSING:
+- SIGNAL_SKIP: Why signal was skipped
+- SIGNAL_GENERATED: New signal created
+- SIGNAL_EXPIRED: Signal expired before execution
+
+SYMBOL MANAGEMENT:
 - SYMBOL_DISABLE: Why symbol was auto-disabled
 - SYMBOL_ENABLE: Why symbol was re-enabled
-- SIGNAL_SKIP: Why signal was skipped
+- SHADOW_TRADE: Shadow trade created for disabled symbol
+- SYMBOL_RECOVERY: Recovery detected in disabled symbol
+
+RISK MANAGEMENT:
 - RISK_LIMIT: Why risk limit prevented action
 - CORRELATION_BLOCK: Why correlation limit blocked trade
-- NEWS_PAUSE: Why trading was paused due to news
 - DD_LIMIT: Why daily drawdown limit was hit
+- SPREAD_REJECTED: Spread too wide at execution time
+- TICK_STALE: Tick data too old for reliable execution
+
+MARKET CONDITIONS:
+- NEWS_PAUSE: Why trading was paused due to news
+- NEWS_RESUME: Trading resumed after news event
+- VOLATILITY_HIGH: High volatility detected
+- LIQUIDITY_LOW: Low liquidity warning
+
+TECHNICAL ANALYSIS:
+- SUPERTREND_SL: SuperTrend-based SL applied
+- MTF_CONFLICT: Multi-timeframe conflict detected
+- MTF_ALIGNMENT: Multi-timeframe alignment confirmed
+- TRAILING_STOP: Trailing stop updated
+
+PERFORMANCE & TESTING:
+- BACKTEST_START: Backtest started
+- BACKTEST_COMPLETE: Backtest completed
+- OPTIMIZATION_RUN: Parameter optimization running
+- PERFORMANCE_ALERT: Performance threshold triggered
+
+SYSTEM EVENTS:
+- MT5_DISCONNECT: MT5 connection lost
+- MT5_RECONNECT: MT5 connection restored
+- AUTOTRADING_ENABLED: Auto-trading enabled
+- AUTOTRADING_DISABLED: Auto-trading disabled
 """
 
 import logging
@@ -64,19 +103,54 @@ class AIDecisionLogger:
     """Logs AI decisions for transparency"""
 
     DECISION_TYPES = {
+        # Trade Execution Decisions
         'TRADE_OPEN': '🔵 Trade Open Decision',
         'TRADE_CLOSE': '🔴 Trade Close Decision',
+        'TRADE_RETRY': '🔄 Trade Retry Attempt',
+        'TRADE_FAILED': '❌ Trade Execution Failed',
+        'CIRCUIT_BREAKER': '🛑 Circuit Breaker Triggered',
+        
+        # Signal Processing
         'SIGNAL_SKIP': '⏭️ Signal Skipped',
+        'SIGNAL_GENERATED': '📊 Signal Generated',
+        'SIGNAL_EXPIRED': '⏰ Signal Expired',
+        
+        # Symbol Management
         'SYMBOL_DISABLE': '⛔ Symbol Auto-Disabled',
         'SYMBOL_ENABLE': '✅ Symbol Re-Enabled',
+        'SHADOW_TRADE': '🌑 Shadow Trade Created',
+        'SYMBOL_RECOVERY': '🔄 Symbol Recovery Detected',
+        
+        # Risk Management
         'RISK_LIMIT': '⚠️ Risk Limit Hit',
         'CORRELATION_BLOCK': '🔗 Correlation Block',
-        'NEWS_PAUSE': '📰 News Trading Pause',
         'DD_LIMIT': '📉 Daily Drawdown Limit',
+        'SPREAD_REJECTED': '📏 Spread Too Wide',
+        'TICK_STALE': '⏱️ Stale Tick Data',
+        
+        # Market Conditions
+        'NEWS_PAUSE': '📰 News Trading Pause',
+        'NEWS_RESUME': '✅ News Trading Resumed',
+        'VOLATILITY_HIGH': '� High Volatility Detected',
+        'LIQUIDITY_LOW': '💧 Low Liquidity Warning',
+        
+        # Technical Analysis
         'SUPERTREND_SL': '🎯 SuperTrend SL Applied',
         'MTF_CONFLICT': '📊 Multi-Timeframe Conflict',
+        'MTF_ALIGNMENT': '✅ Multi-Timeframe Alignment',
+        'TRAILING_STOP': '🎯 Trailing Stop Updated',
+        
+        # Performance & Testing
         'BACKTEST_START': '🔬 Backtest Started',
-        'BACKTEST_COMPLETE': '✅ Backtest Complete'
+        'BACKTEST_COMPLETE': '✅ Backtest Complete',
+        'OPTIMIZATION_RUN': '⚙️ Optimization Running',
+        'PERFORMANCE_ALERT': '📊 Performance Alert',
+        
+        # System Events
+        'MT5_DISCONNECT': '🔌 MT5 Connection Lost',
+        'MT5_RECONNECT': '🔌 MT5 Reconnected',
+        'AUTOTRADING_ENABLED': '✅ Auto-Trading Enabled',
+        'AUTOTRADING_DISABLED': '⏸️ Auto-Trading Disabled'
     }
 
     def __init__(self):
@@ -185,17 +259,54 @@ class AIDecisionLogger:
     def _get_emoji(self, decision_type: str, decision: str) -> str:
         """Get emoji for log entry"""
         emoji_map = {
+            # Trade Execution
             'TRADE_OPEN': '🔵' if decision == 'APPROVED' else '🚫',
             'TRADE_CLOSE': '🔴',
+            'TRADE_RETRY': '🔄',
+            'TRADE_FAILED': '❌',
+            'CIRCUIT_BREAKER': '🛑',
+            
+            # Signal Processing
             'SIGNAL_SKIP': '⏭️',
+            'SIGNAL_GENERATED': '📊',
+            'SIGNAL_EXPIRED': '⏰',
+            
+            # Symbol Management
             'SYMBOL_DISABLE': '⛔',
             'SYMBOL_ENABLE': '✅',
+            'SHADOW_TRADE': '🌑',
+            'SYMBOL_RECOVERY': '🔄',
+            
+            # Risk Management
             'RISK_LIMIT': '⚠️',
             'CORRELATION_BLOCK': '🔗',
-            'NEWS_PAUSE': '📰',
             'DD_LIMIT': '📉',
+            'SPREAD_REJECTED': '📏',
+            'TICK_STALE': '⏱️',
+            
+            # Market Conditions
+            'NEWS_PAUSE': '📰',
+            'NEWS_RESUME': '✅',
+            'VOLATILITY_HIGH': '📈',
+            'LIQUIDITY_LOW': '�',
+            
+            # Technical Analysis
             'SUPERTREND_SL': '🎯',
-            'MTF_CONFLICT': '📊'
+            'MTF_CONFLICT': '📊',
+            'MTF_ALIGNMENT': '✅',
+            'TRAILING_STOP': '🎯',
+            
+            # Performance & Testing
+            'BACKTEST_START': '🔬',
+            'BACKTEST_COMPLETE': '✅',
+            'OPTIMIZATION_RUN': '⚙️',
+            'PERFORMANCE_ALERT': '📊',
+            
+            # System Events
+            'MT5_DISCONNECT': '🔌',
+            'MT5_RECONNECT': '🔌',
+            'AUTOTRADING_ENABLED': '✅',
+            'AUTOTRADING_DISABLED': '⏸️'
         }
         return emoji_map.get(decision_type, '🤖')
 
@@ -404,3 +515,108 @@ def log_risk_limit(account_id: int, limit_type: str, reason: str, details: Dict)
         impact_level='CRITICAL',
         user_action_required=True
     )
+
+
+def log_spread_rejection(account_id: int, symbol: str, current_spread: float, max_spread: float, details: Dict):
+    """Log spread rejection before trade execution"""
+    logger = get_decision_logger()
+    logger.log_decision(
+        account_id=account_id,
+        decision_type='SPREAD_REJECTED',
+        decision='REJECTED',
+        primary_reason=f"Spread too wide: {current_spread:.1f} pips (max: {max_spread:.1f})",
+        detailed_reasoning=details,
+        symbol=symbol,
+        impact_level='MEDIUM',
+        user_action_required=False
+    )
+
+
+def log_circuit_breaker(account_id: int, failed_count: int, reason: str, details: Dict):
+    """Log circuit breaker activation"""
+    logger = get_decision_logger()
+    logger.log_decision(
+        account_id=account_id,
+        decision_type='CIRCUIT_BREAKER',
+        decision='DISABLED',
+        primary_reason=f"Circuit breaker triggered: {failed_count} consecutive failures - {reason}",
+        detailed_reasoning=details,
+        impact_level='CRITICAL',
+        user_action_required=True
+    )
+
+
+def log_shadow_trade(account_id: int, symbol: str, signal_id: int, details: Dict):
+    """Log shadow trade creation for disabled symbol"""
+    logger = get_decision_logger()
+    logger.log_decision(
+        account_id=account_id,
+        decision_type='SHADOW_TRADE',
+        decision='CREATED',
+        primary_reason=f"Shadow trade created for disabled symbol {symbol}",
+        detailed_reasoning=details,
+        symbol=symbol,
+        signal_id=signal_id,
+        impact_level='LOW',
+        user_action_required=False
+    )
+
+
+def log_symbol_recovery(account_id: int, symbol: str, metrics: Dict):
+    """Log symbol recovery detection"""
+    logger = get_decision_logger()
+    logger.log_decision(
+        account_id=account_id,
+        decision_type='SYMBOL_RECOVERY',
+        decision='DETECTED',
+        primary_reason=f"Symbol {symbol} showing recovery - consider re-enabling",
+        detailed_reasoning=metrics,
+        symbol=symbol,
+        impact_level='MEDIUM',
+        user_action_required=True
+    )
+
+
+def log_news_pause(account_id: int, reason: str, details: Dict):
+    """Log news-related trading pause"""
+    logger = get_decision_logger()
+    logger.log_decision(
+        account_id=account_id,
+        decision_type='NEWS_PAUSE',
+        decision='PAUSED',
+        primary_reason=reason,
+        detailed_reasoning=details,
+        impact_level='HIGH',
+        user_action_required=False
+    )
+
+
+def log_mt5_disconnect(account_id: int, reason: str, details: Dict):
+    """Log MT5 connection loss"""
+    logger = get_decision_logger()
+    logger.log_decision(
+        account_id=account_id,
+        decision_type='MT5_DISCONNECT',
+        decision='DISCONNECTED',
+        primary_reason=reason,
+        detailed_reasoning=details,
+        impact_level='CRITICAL',
+        user_action_required=True
+    )
+
+
+def log_trailing_stop(account_id: int, trade_id: int, symbol: str, new_sl: float, details: Dict):
+    """Log trailing stop update"""
+    logger = get_decision_logger()
+    logger.log_decision(
+        account_id=account_id,
+        decision_type='TRAILING_STOP',
+        decision='UPDATED',
+        primary_reason=f"Trailing stop moved to {new_sl}",
+        detailed_reasoning=details,
+        symbol=symbol,
+        trade_id=trade_id,
+        impact_level='LOW',
+        user_action_required=False
+    )
+

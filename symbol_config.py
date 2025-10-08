@@ -60,13 +60,13 @@ class SymbolConfig:
             'breakeven_trigger_percent': 12.0,  # Very early break-even
             'partial_trailing_trigger_percent': 25.0,
             'aggressive_trailing_trigger_percent': 50.0,
-            'min_confidence': 70.0,  # High confidence needed
+            'min_confidence': 60.0,  # Lowered from 70 to allow more trades
             'risk_per_trade_percent': 0.01,  # Lower risk
         },
         'EURUSD': {
             'sl_multiplier': 0.5,
             'breakeven_trigger_percent': 15.0,
-            'min_confidence': 70.0,
+            'min_confidence': 60.0,  # Lowered from 70 to allow more trades
             'risk_per_trade_percent': 0.015,
         },
         'GBPUSD': {
@@ -81,7 +81,7 @@ class SymbolConfig:
             'breakeven_trigger_percent': 15.0,  # Early break-even
             'partial_trailing_trigger_percent': 30.0,
             'aggressive_trailing_trigger_percent': 55.0,
-            'min_confidence': 75.0,  # MUCH higher confidence required
+            'min_confidence': 70.0,  # Lowered from 75 to 70 (still strict but allows good signals)
             'risk_per_trade_percent': 0.015,  # Lower risk (was 2.5%)
         },
         'XAUUSD': {

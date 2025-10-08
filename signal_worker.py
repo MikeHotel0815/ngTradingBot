@@ -118,8 +118,8 @@ class SignalWorker:
         signals_count = 0
 
         try:
-            # Get first account and extract ID immediately
-            account = db.query(Account).first()
+            # Get active account (most recent heartbeat) and extract ID immediately
+            account = db.query(Account).order_by(Account.last_heartbeat.desc()).first()
             if not account:
                 logger.warning("No account found")
                 return 0
@@ -244,10 +244,11 @@ class SignalWorker:
                         # Use local variable instead of accessing sub.symbol which might fail
                         try:
                             symbol_name = sub.symbol
-                        except:
+                        except AttributeError:
                             symbol_name = "UNKNOWN"
                         logger.error(
-                            f"Error generating signal for {symbol_name} {timeframe}: {e}"
+                            f"Error generating signal for {symbol_name} {timeframe}: {e}",
+                            exc_info=True
                         )
 
             return signals_count

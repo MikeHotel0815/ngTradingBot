@@ -2890,7 +2890,12 @@
         // ==================== NEW: OPEN POSITIONS ====================
         async function loadOpenTrades() {
             try {
-                const response = await fetch('http://' + window.location.hostname + ':9900/api/monitoring/1');  // Account ID 1
+                // Get current account ID from dashboard status
+                const statusResponse = await fetch('/api/dashboard/status');
+                const statusData = await statusResponse.json();
+                const accountId = statusData?.account?.id || 1;  // Fallback to 1 if not found
+
+                const response = await fetch('http://' + window.location.hostname + ':9900/api/monitoring/' + accountId);
                 const data = await response.json();
 
                 if (data && data.positions) {

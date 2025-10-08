@@ -16,7 +16,7 @@ Configuration per account:
 import logging
 from datetime import datetime, timedelta, time
 from typing import Optional, Dict
-from sqlalchemy import Column, Integer, Numeric, Date, Boolean
+from sqlalchemy import Column, Integer, Numeric, Date, Boolean, func
 from database import get_db, Base
 from models import Account, Trade
 from ai_decision_log import log_risk_limit
@@ -119,7 +119,7 @@ class DailyDrawdownProtection:
                 Trade.close_time >= today_start,
                 Trade.status == 'closed'
             ).with_entities(
-                db.func.sum(Trade.profit).label('total')
+                func.sum(Trade.profit).label('total')
             ).scalar() or 0.0
 
             limit.daily_pnl = float(daily_pnl)
@@ -175,7 +175,7 @@ class DailyDrawdownProtection:
                 'daily_pnl': daily_pnl,
                 'limit_eur': loss_limit_eur,
                 'limit_percent': float(loss_limit_percent) if loss_limit_percent else None,
-                'remaining_eur': loss_limit_eur + daily_pnl if loss_limit_eur else None
+                'remaining_eur': float(loss_limit_eur) + float(daily_pnl) if loss_limit_eur else None
             }
 
         except Exception as e:
