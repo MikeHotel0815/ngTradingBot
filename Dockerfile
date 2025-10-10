@@ -18,6 +18,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY *.py .
 COPY *.sh .
 COPY templates templates/
+COPY workers workers/
 
 # Make scripts executable
 RUN chmod +x *.sh

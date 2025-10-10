@@ -102,6 +102,23 @@ services:
       - tradingbot_network
     restart: unless-stopped
 
+  trade_timeout:
+    build: .
+    container_name: ngtradingbot_trade_timeout
+    command: python workers/trade_timeout_worker.py
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql://trader:${DB_PASSWORD:-tradingbot_secret_2025}@postgres:5432/ngtradingbot
+      - TRADE_TIMEOUT_HOURS=${TRADE_TIMEOUT_HOURS:-24}
+      - TRADE_TIMEOUT_ENABLED=${TRADE_TIMEOUT_ENABLED:-true}
+      - TRADE_TIMEOUT_ACTION=${TRADE_TIMEOUT_ACTION:-close}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - tradingbot_network
+    restart: unless-stopped
+
 volumes:
   pgdata:
   redisdata:

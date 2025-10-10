@@ -484,12 +484,12 @@ class TradeMonitor:
                     # Emit WebSocket event for real-time UI updates
                     try:
                         from app import socketio
-                        # Emit from background thread - use broadcast=True for background threads
-                        socketio.emit('positions_update', monitoring_data, namespace='/', broadcast=True)
-                        logger.info(f"📡 WebSocket: Emitted positions_update for {len(account_positions)} positions to all clients")
+                        # Emit from background thread - removed broadcast parameter (deprecated)
+                        socketio.emit('positions_update', monitoring_data, namespace='/')
+                        logger.debug(f"📡 WebSocket: Emitted positions_update for {len(account_positions)} positions")
                     except Exception as ws_error:
                         # Don't fail if WebSocket is not available
-                        logger.warning(f"WebSocket emission failed (non-critical): {ws_error}")
+                        logger.debug(f"WebSocket emission failed (non-critical): {ws_error}")
 
                 logger.info(f"📊 Monitoring {len(positions_data)} positions - Total P&L: €{round(total_pnl, 2)}")
 

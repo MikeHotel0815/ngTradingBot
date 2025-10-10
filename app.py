@@ -547,7 +547,7 @@ def command_response(account, db):
                     'command_id': command_id,
                     'status': status,
                     'response': response_data
-                }, namespace='/', broadcast=True)
+                }, namespace='/')
             except Exception as e:
                 logger.error(f"Failed to publish command response: {e}")
 

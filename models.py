@@ -569,7 +569,7 @@ class GlobalSettings(Base):
     # Risk Management
     max_positions = Column(Integer, default=5, nullable=False)
     max_positions_per_symbol_timeframe = Column(Integer, default=1, nullable=False)  # Max 1 position per symbol+timeframe
-    risk_per_trade_percent = Column(Numeric(5, 4), default=0.02, nullable=False)  # 2%
+    risk_per_trade_percent = Column(Numeric(5, 4), default=0.01, nullable=False)  # 1% (Default changed from 2% to 1% on 2025-10-10)
     position_size_percent = Column(Numeric(5, 4), default=0.01, nullable=False)  # 1%
     max_drawdown_percent = Column(Numeric(5, 4), default=0.10, nullable=False)  # 10%
     
