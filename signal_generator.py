@@ -65,6 +65,44 @@ class SignalGenerator:
             MIN_GENERATION_CONFIDENCE = 40
 
             if signal and signal['confidence'] >= MIN_GENERATION_CONFIDENCE:
+                # ✅ NEW: Check multi-timeframe alignment BEFORE calculating TP/SL
+                from multi_timeframe_analyzer import check_multi_timeframe_conflict
+
+                mtf_check = check_multi_timeframe_conflict(
+                    signal_type=signal['signal_type'],
+                    timeframe=self.timeframe,
+                    symbol=self.symbol,
+                    account_id=self.account_id
+                )
+
+                # Apply confidence adjustment from multi-timeframe analysis
+                if mtf_check['confidence_adjustment'] != 0:
+                    original_confidence = signal['confidence']
+                    signal['confidence'] = max(0, min(100,
+                        signal['confidence'] + mtf_check['confidence_adjustment']
+                    ))
+
+                    # Add MTF info to reasons
+                    if mtf_check['reason']:
+                        signal['reasons'].append(f"MTF: {mtf_check['reason']}")
+
+                    logger.info(
+                        f"🔄 Multi-TF Adjustment: {self.symbol} {self.timeframe} "
+                        f"{signal['signal_type']} confidence {original_confidence:.1f}% → "
+                        f"{signal['confidence']:.1f}% ({mtf_check['confidence_adjustment']:+.1f}%)"
+                    )
+
+                    # Re-check minimum threshold after adjustment
+                    if signal['confidence'] < MIN_GENERATION_CONFIDENCE:
+                        logger.warning(
+                            f"⚠️ Signal rejected after MTF adjustment: "
+                            f"{signal['confidence']:.1f}% < {MIN_GENERATION_CONFIDENCE}%"
+                        )
+                        self._expire_active_signals(
+                            f"confidence too low after MTF adjustment ({signal['confidence']:.1f}%)"
+                        )
+                        return None
+
                 # Calculate entry, SL, TP
                 entry, sl, tp = self._calculate_entry_sl_tp(signal)
 

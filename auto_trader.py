@@ -28,7 +28,6 @@ class AutoTrader:
 
     def __init__(self):
         self.redis = get_redis()
-        self.enabled = True  # ✅ ENABLED BY DEFAULT as requested
         self.check_interval = 10  # Check for new signals every 10 seconds
 
         # Track processed signals by hash (symbol+timeframe+type+entry_price)
@@ -37,17 +36,10 @@ class AutoTrader:
 
         # Cooldown tracking after SL hits: symbol -> cooldown_until_time
         self.symbol_cooldowns = {}
-        
+
         # Track pending commands and failure count
         self.pending_commands = {}
         self.failed_command_count = 0
-
-        # ✅ Auto-trade minimum confidence: 60% DEFAULT (as requested by user)
-        # This is the threshold for automatic trade execution
-        self.min_autotrade_confidence = 60.0  # Default 60%
-        
-        # ✅ NEW: Max open positions limit
-        self.max_open_positions = 10  # Global limit to prevent overexposure
 
         # Circuit breaker settings
         self.circuit_breaker_enabled = True
@@ -58,6 +50,8 @@ class AutoTrader:
 
         # Correlation limits - prevent over-exposure to correlated pairs
         self.max_correlated_positions = 2  # Max 2 positions in same currency group
+        self.max_open_positions = 10  # Global limit to prevent overexposure
+
         self.correlation_groups = {
             'EUR': ['EURUSD', 'EURJPY', 'EURGBP', 'EURAUD', 'EURCHF', 'EURCAD', 'EURNZD'],
             'GBP': ['GBPUSD', 'GBPJPY', 'EURGBP', 'GBPAUD', 'GBPCHF', 'GBPCAD', 'GBPNZD'],
@@ -71,27 +65,72 @@ class AutoTrader:
             'CRYPTO': ['BTCUSD', 'ETHUSD', 'LTCUSD'],
         }
 
-        # Settings will be loaded per-request from database
-        logger.info("Auto-Trader initialized")
+        # ✅ NEW: Load auto-trade status from database on startup
+        self.enabled = True  # Default fallback
+        self.min_autotrade_confidence = 60.0  # Default fallback
+        self._load_autotrade_status_from_db()
+
+        logger.info(f"Auto-Trader initialized (enabled={self.enabled}, min_confidence={self.min_autotrade_confidence}%)")
 
     def _load_settings(self, db: Session):
         """Load global settings from database"""
         from models import GlobalSettings
         return GlobalSettings.get_settings(db)
 
+    def _load_autotrade_status_from_db(self):
+        """✅ NEW: Load auto-trade status from database on startup"""
+        try:
+            from models import GlobalSettings
+            db = ScopedSession()
+            try:
+                settings = GlobalSettings.get_settings(db)
+                self.enabled = settings.autotrade_enabled
+                self.min_autotrade_confidence = float(settings.autotrade_min_confidence)
+                logger.info(
+                    f"✅ Auto-Trade status loaded from DB: "
+                    f"enabled={self.enabled}, min_confidence={self.min_autotrade_confidence}%"
+                )
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"❌ Failed to load auto-trade status from DB: {e}")
+            logger.info("Using default values: enabled=True, min_confidence=60%")
+
+    def _save_autotrade_status_to_db(self):
+        """✅ NEW: Save auto-trade status to database"""
+        try:
+            from models import GlobalSettings
+            db = ScopedSession()
+            try:
+                settings = GlobalSettings.get_settings(db)
+                settings.autotrade_enabled = self.enabled
+                settings.autotrade_min_confidence = self.min_autotrade_confidence
+                db.commit()
+                logger.info(
+                    f"✅ Auto-Trade status saved to DB: "
+                    f"enabled={self.enabled}, min_confidence={self.min_autotrade_confidence}%"
+                )
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"❌ Failed to save auto-trade status to DB: {e}")
+
     def set_min_confidence(self, min_confidence: float):
         """Set minimum confidence threshold for auto-trading"""
         self.min_autotrade_confidence = float(min_confidence)
+        self._save_autotrade_status_to_db()  # ✅ Persist to DB
         logger.info(f"Auto-Trade min confidence set to {min_confidence}%")
 
     def enable(self):
         """Enable auto-trading"""
         self.enabled = True
+        self._save_autotrade_status_to_db()  # ✅ Persist to DB
         logger.info(f"🤖 Auto-Trading ENABLED (min confidence: {self.min_autotrade_confidence}%)")
 
     def disable(self):
         """Disable auto-trading (kill-switch)"""
         self.enabled = False
+        self._save_autotrade_status_to_db()  # ✅ Persist to DB
         logger.warning("🛑 Auto-Trading DISABLED (Kill-Switch)")
 
     def reset_circuit_breaker(self):
@@ -426,6 +465,8 @@ class AutoTrader:
                 )
             ).count()
 
+            logger.info(f"🔍 Position check: {signal.symbol} {signal.timeframe} - Found {existing_positions} open positions (max: {settings.max_positions_per_symbol_timeframe})")
+
             if existing_positions >= settings.max_positions_per_symbol_timeframe:
                 return {
                     'execute': False,
@@ -440,7 +481,19 @@ class AutoTrader:
                     'reason': f'Signal too old ({signal_age.seconds}s)'
                 }
 
-            # Check cooldown after SL hit (prevent revenge trading)
+            # ✅ ENHANCED: Check SL-Hit Protection (automatic pause after multiple SL hits)
+            from sl_hit_protection import get_sl_hit_protection
+            sl_protection = get_sl_hit_protection()
+            sl_check = sl_protection.check_sl_hits(db, signal.account_id, signal.symbol, max_hits=2, timeframe_hours=4)
+
+            if sl_check['should_pause']:
+                logger.warning(f"🚨 {signal.symbol} auto-trade BLOCKED: {sl_check['reason']}")
+                return {
+                    'execute': False,
+                    'reason': sl_check['reason']
+                }
+
+            # Check cooldown after SL hit (prevent revenge trading) - LEGACY SUPPORT
             if signal.symbol in self.symbol_cooldowns:
                 cooldown_until = self.symbol_cooldowns[signal.symbol]
                 if datetime.utcnow() < cooldown_until:
@@ -655,6 +708,22 @@ class AutoTrader:
             volume = float(volume)
             entry_price = float(signal.entry_price) if signal.entry_price else None
 
+            # 🛑 CRITICAL FAILSAFE: Double-check for duplicate positions before creating command
+            duplicate_check = db.query(Trade).filter(
+                and_(
+                    Trade.account_id == signal.account_id,
+                    Trade.symbol == signal.symbol,
+                    Trade.timeframe == signal.timeframe,
+                    Trade.status == 'open'
+                )
+            ).count()
+
+            if duplicate_check > 0:
+                logger.error(f"🚨 FAILSAFE TRIGGERED: Prevented duplicate trade! {signal.symbol} {signal.timeframe} already has {duplicate_check} open position(s)")
+                return  # ABORT command creation
+
+            logger.info(f"✓ Duplicate check passed: No open {signal.symbol} {signal.timeframe} positions")
+
             # Store signal_id and timeframe in payload for trade linking
             payload_data = {
                 'symbol': signal.symbol,
@@ -820,8 +889,47 @@ class AutoTrader:
 
                     continue
 
-                # Check for existing open position for same symbol+timeframe
+                # ✅ NEW: Check for opportunity cost - should we replace existing trades?
+                from trade_replacement_manager import get_trade_replacement_manager
                 from models import Trade
+
+                trm = get_trade_replacement_manager()
+
+                # Check if better signal warrants closing existing trades
+                replacement_result = trm.process_opportunity_cost_management(
+                    db=db,
+                    account_id=signal.account_id,
+                    new_signal=signal
+                )
+
+                if replacement_result['trades_closed'] > 0:
+                    logger.info(
+                        f"🔄 Opportunity Cost: Closed {replacement_result['trades_closed']} trades "
+                        f"for better signal #{signal.id} ({signal.symbol} {signal.confidence}%)"
+                    )
+
+                    # Log to AI Decision Log
+                    from ai_decision_log import AIDecisionLogger
+                    decision_logger = AIDecisionLogger()
+                    decision_logger.log_decision(
+                        account_id=signal.account_id,
+                        decision_type='TRADE_REPLACEMENT',
+                        decision='APPROVED',
+                        primary_reason=f"Replaced {replacement_result['trades_closed']} trades for better opportunity",
+                        detailed_reasoning={
+                            'signal_id': signal.id,
+                            'symbol': signal.symbol,
+                            'confidence': float(signal.confidence) if signal.confidence else None,
+                            'trades_closed': replacement_result['trades_closed'],
+                            'reasons': replacement_result['reasons']
+                        },
+                        symbol=signal.symbol,
+                        impact_level='MEDIUM',
+                        confidence_score=float(signal.confidence) if signal.confidence else None
+                    )
+
+                # Check for existing open position for same symbol+timeframe
+                # (After potential replacement - there might still be positions we don't want to replace)
                 existing_trade = db.query(Trade).filter(
                     and_(
                         Trade.account_id == signal.account_id,
@@ -1042,6 +1150,56 @@ class AutoTrader:
         error_lower = error_msg.lower()
         return any(err in error_lower for err in retriable_errors)
 
+    def check_stale_trades(self, db: Session):
+        """
+        ✅ NEW: Periodically check for trades that exceeded max hold time
+
+        This runs independently of signal processing to ensure trades
+        don't get stuck running too long.
+        """
+        try:
+            from trade_replacement_manager import get_trade_replacement_manager
+            from ai_decision_log import AIDecisionLogger
+
+            # Get first account (in production you'd iterate over all accounts)
+            from models import Account
+            account = db.query(Account).first()
+            if not account:
+                return
+
+            trm = get_trade_replacement_manager()
+
+            # Check for stale trades (no new signal needed)
+            result = trm.process_opportunity_cost_management(
+                db=db,
+                account_id=account.id,
+                new_signal=None  # Just check max hold times
+            )
+
+            if result['trades_closed'] > 0:
+                logger.warning(
+                    f"⏰ Stale Trade Check: Closed {result['trades_closed']} trades "
+                    f"exceeding max hold time"
+                )
+
+                # Log to AI Decision Log
+                decision_logger = AIDecisionLogger()
+                decision_logger.log_decision(
+                    account_id=account.id,
+                    decision_type='TRADE_TIMEOUT',
+                    decision='FORCED_CLOSE',
+                    primary_reason=f"Closed {result['trades_closed']} trades exceeding max hold time",
+                    detailed_reasoning={
+                        'trades_closed': result['trades_closed'],
+                        'reasons': result['reasons'],
+                        'check_type': 'periodic_stale_check'
+                    },
+                    impact_level='HIGH'
+                )
+
+        except Exception as e:
+            logger.error(f"Error checking stale trades: {e}", exc_info=True)
+
     def _validate_spread_before_execution(self, db: Session, signal: TradingSignal) -> Dict:
         """
         ✅ FIX #3: Validate spread before trade execution
@@ -1168,6 +1326,11 @@ class AutoTrader:
                 db = ScopedSession()
                 self.process_new_signals(db)
                 self.check_pending_commands(db)  # Verify trade execution
+
+                # ✅ NEW: Check for stale trades every 60 seconds
+                if int(time.time()) % 60 < 10:
+                    self.check_stale_trades(db)
+
                 db.close()
 
                 # Cleanup every 10 iterations (~100 seconds)

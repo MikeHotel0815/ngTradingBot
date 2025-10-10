@@ -129,11 +129,14 @@ class InputValidator:
         str_value = str(value)
         
         if not case_sensitive:
-            str_value = str_value.upper()
-            allowed_values = [v.upper() for v in allowed_values]
-        
-        if str_value in allowed_values:
-            return str_value
+            # Create uppercase mapping for comparison while preserving original values
+            upper_value = str_value.upper()
+            for original in allowed_values:
+                if original.upper() == upper_value:
+                    return original  # Return the original allowed value, not the uppercased input
+        else:
+            if str_value in allowed_values:
+                return str_value
         
         logger.warning(f"Invalid enum value '{value}', allowed: {allowed_values}, using default {default}")
         return default

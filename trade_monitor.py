@@ -192,48 +192,57 @@ class TradeMonitor:
             # Calculate points moved (for display only)
             points = abs(close_price - open_price)
 
-            # Distance to TP/SL in price points and EUR value
-            distance_to_tp = None
-            distance_to_tp_eur = None
-            distance_to_sl = None
-            distance_to_sl_eur = None
+            # ✅ FIXED: Calculate INITIAL Potential/Risk from OPEN price (not current!)
+            # These values should be CONSTANT - they represent the trade plan at entry
+            initial_potential = None
+            initial_potential_eur = None
+            initial_risk = None
+            initial_risk_eur = None
 
             if trade.tp:
                 tp_val = float(trade.tp)
                 if is_buy:  # BUY
-                    distance_to_tp = tp_val - close_price_val
+                    # Potential profit if TP hit (from OPEN price, not current)
+                    initial_potential = tp_val - open_price
                 else:  # SELL
-                    distance_to_tp = close_price_val - tp_val
+                    # Potential profit if TP hit (from OPEN price, not current)
+                    initial_potential = open_price - tp_val
 
-                # Calculate EUR value using MT5-accurate conversion
-                if distance_to_tp and distance_to_tp > 0:
-                    distance_to_tp_eur = self.calculate_price_to_eur(
-                        trade.symbol, distance_to_tp, volume, close_price_val, db
+                # Calculate EUR value (Initial Potential Profit)
+                # This is FIXED at trade open - shows "What can I gain?"
+                if initial_potential is not None and initial_potential > 0:
+                    initial_potential_eur = self.calculate_price_to_eur(
+                        trade.symbol, abs(initial_potential), volume, open_price, db
                     )
 
             if trade.sl:
                 sl_val = float(trade.sl)
                 if is_buy:  # BUY
-                    distance_to_sl = close_price_val - sl_val
+                    # Risk if SL hit (from OPEN price, not current)
+                    initial_risk = open_price - sl_val
                 else:  # SELL
-                    distance_to_sl = sl_val - close_price_val
+                    # Risk if SL hit (from OPEN price, not current)
+                    initial_risk = sl_val - open_price
 
-                # Calculate EUR value using MT5-accurate conversion
-                if distance_to_sl and distance_to_sl > 0:
-                    distance_to_sl_eur = self.calculate_price_to_eur(
-                        trade.symbol, distance_to_sl, volume, close_price_val, db
+                # Calculate EUR value (Initial Risk)
+                # This is FIXED at trade open - shows "What can I lose?"
+                if initial_risk is not None and initial_risk > 0:
+                    initial_risk_eur = self.calculate_price_to_eur(
+                        trade.symbol, abs(initial_risk), volume, open_price, db
                     )
 
             return {
                 'current_price': close_price,
                 'pnl': round(mt5_profit, 2),  # ✅ Use MT5 profit - already correct!
                 'points': round(points, 5),
-                'distance_to_tp': round(distance_to_tp, 5) if distance_to_tp else None,
-                'distance_to_tp_eur': round(distance_to_tp_eur, 2) if distance_to_tp_eur else None,
-                'distance_to_sl': round(distance_to_sl, 5) if distance_to_sl else None,
-                'distance_to_sl_eur': round(distance_to_sl_eur, 2) if distance_to_sl_eur else None,
-                'tp_reached': distance_to_tp is not None and distance_to_tp <= 0,
-                'sl_reached': distance_to_sl is not None and distance_to_sl <= 0
+                # ✅ RENAMED: distance_to_* → initial_* (fixed values from open)
+                'distance_to_tp': round(initial_potential, 5) if initial_potential else None,
+                'distance_to_tp_eur': round(initial_potential_eur, 2) if initial_potential_eur else None,
+                'distance_to_sl': round(initial_risk, 5) if initial_risk else None,
+                'distance_to_sl_eur': round(initial_risk_eur, 2) if initial_risk_eur else None,
+                # Note: tp_reached/sl_reached would need current price comparison, keeping None for now
+                'tp_reached': None,  # Not applicable with initial values
+                'sl_reached': None   # Not applicable with initial values
             }
 
         except Exception as e:

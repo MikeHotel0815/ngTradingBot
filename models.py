@@ -175,6 +175,7 @@ class Trade(Base):
     signal_id = Column(Integer, ForeignKey('trading_signals.id'))  # Link to signal if from autotrade
     timeframe = Column(String(10))  # Timeframe signal was generated on
     entry_reason = Column(String(200))  # Why trade was opened: pattern, indicator confluence, etc
+    entry_confidence = Column(Numeric(5, 2))  # ✅ NEW: Signal confidence at entry (for opportunity cost comparison)
     close_reason = Column(String(100))  # TP_HIT, SL_HIT, MANUAL, TRAILING_STOP, etc
     response_data = Column(JSONB)  # Full EA response
     status = Column(String(20), default='open')  # open, closed, cancelled
@@ -575,7 +576,11 @@ class GlobalSettings(Base):
     # Signal Processing
     min_signal_confidence = Column(Numeric(5, 4), default=0.60, nullable=False)  # 60%
     signal_max_age_minutes = Column(Integer, default=60, nullable=False)  # Changed from 5 to 60 minutes - 2025-10-08
-    
+
+    # Auto-Trading
+    autotrade_enabled = Column(Boolean, default=True, nullable=False)  # ✅ NEW: Persist auto-trade status
+    autotrade_min_confidence = Column(Numeric(5, 2), default=60.0, nullable=False)  # ✅ NEW: Persist min confidence
+
     # Cooldown Settings
     sl_cooldown_minutes = Column(Integer, default=60, nullable=False)  # 1 hour
     

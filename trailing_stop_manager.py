@@ -62,11 +62,52 @@ class TrailingStopManager:
             'trailing_update_interval': 5,       # Only update every 5 seconds per trade
         }
 
+        # ✅ NEW: Symbol-specific trailing stop configuration
+        self.symbol_specific_settings = {
+            'BTCUSD': {
+                'max_sl_move_per_update': 50000.0,  # ✅ BTC needs MASSIVE movements (50k pips = 500 price points)
+                'min_trailing_pips': 100.0,          # Minimum 100 pip trail for BTC
+                'breakeven_trigger_percent': 20.0,  # Earlier breakeven for volatile asset
+                'aggressive_trailing_trigger_percent': 60.0,  # More aggressive
+            },
+            'ETHUSD': {
+                'max_sl_move_per_update': 2000.0,
+                'min_trailing_pips': 30.0,
+                'breakeven_trigger_percent': 20.0,
+            },
+            'XAUUSD': {
+                'max_sl_move_per_update': 500.0,   # Gold needs larger movements
+                'min_trailing_pips': 20.0,
+                'breakeven_trigger_percent': 25.0,
+            },
+            'DE40.c': {
+                'max_sl_move_per_update': 300.0,   # Index needs larger movements
+                'min_trailing_pips': 25.0,
+            },
+            'EURUSD': {
+                'max_sl_move_per_update': 100.0,   # Standard FOREX
+                'min_trailing_pips': 10.0,
+                'aggressive_trailing_trigger_percent': 70.0,  # ✅ More aggressive for EURUSD
+            },
+            'GBPUSD': {
+                'max_sl_move_per_update': 100.0,
+                'min_trailing_pips': 12.0,
+            },
+            'USDJPY': {
+                'max_sl_move_per_update': 100.0,
+                'min_trailing_pips': 10.0,
+                'aggressive_trailing_trigger_percent': 65.0,  # ✅ More aggressive
+            },
+        }
+
         # Track last trailing stop update time per trade
         self.last_update_time = {}
 
-    def _load_settings(self, db: Session) -> Dict:
-        """Load trailing stop settings from database or use defaults"""
+    def _load_settings(self, db: Session, symbol: str = None) -> Dict:
+        """
+        Load trailing stop settings from database or use defaults.
+        Applies symbol-specific overrides if symbol is provided.
+        """
         try:
             settings = GlobalSettings.get_settings(db)
 
@@ -80,6 +121,12 @@ class TrailingStopManager:
                 result['breakeven_trigger_percent'] = float(settings.breakeven_trigger_percent)
             if hasattr(settings, 'partial_trailing_trigger_percent'):
                 result['partial_trailing_trigger_percent'] = float(settings.partial_trailing_trigger_percent)
+
+            # ✅ NEW: Apply symbol-specific settings
+            if symbol and symbol in self.symbol_specific_settings:
+                symbol_settings = self.symbol_specific_settings[symbol]
+                result.update(symbol_settings)
+                logger.debug(f"Applied symbol-specific TS settings for {symbol}: {symbol_settings}")
 
             return result
 
@@ -456,11 +503,14 @@ class TrailingStopManager:
             return False
 
         # Check max movement per update
-        max_move = settings['max_sl_move_per_update'] * 0.00001
+        # ✅ FIX: Use symbol point instead of hardcoded 0.00001
+        symbol_point = settings.get('symbol_point', 0.00001)
+        max_move = settings['max_sl_move_per_update'] * symbol_point
         sl_movement = abs(new_sl - current_sl)
 
         if sl_movement > max_move:
-            logger.warning(f"SL movement too large ({sl_movement:.5f} > {max_move:.5f})")
+            logger.warning(f"SL movement too large ({sl_movement:.5f} > {max_move:.5f}) "
+                         f"[max_move_pips={settings['max_sl_move_per_update']}, point={symbol_point}]")
             return False
 
         # Ensure SL is on correct side of price
@@ -490,18 +540,17 @@ class TrailingStopManager:
         """
         try:
             # Create modify command
+            import uuid
             command = Command(
+                id=str(uuid.uuid4()),
                 account_id=trade.account_id,
                 command_type='modify_sl',
-                ticket=trade.ticket,
-                symbol=trade.symbol,
-                sl=Decimal(str(new_sl)),
                 status='pending',
                 created_at=datetime.utcnow(),
-                metadata={
-                    'trailing_stop': True,
-                    'reason': reason,
-                    'old_sl': float(trade.sl) if trade.sl else None
+                payload={
+                    'ticket': trade.ticket,
+                    'symbol': trade.symbol,
+                    'sl': float(new_sl),
                 }
             )
 
@@ -540,8 +589,8 @@ class TrailingStopManager:
             if not self.should_update_trailing_stop(trade):
                 return None
 
-            # Load settings
-            settings = self._load_settings(db)
+            # Load settings (with symbol-specific overrides)
+            settings = self._load_settings(db, symbol=trade.symbol)
 
             # Calculate new trailing stop with dynamic pip calculation
             result = self.calculate_trailing_stop(trade, current_price, settings, db=db)
@@ -652,8 +701,8 @@ class TrailingStopManager:
             Dict with trailing stop stage, profit %, next trigger, etc.
         """
         try:
-            # Load settings
-            settings = self._load_settings(db)
+            # Load settings (with symbol-specific overrides)
+            settings = self._load_settings(db, symbol=trade.symbol)
 
             if not settings.get('trailing_stop_enabled', True):
                 return None
@@ -713,6 +762,21 @@ class TrailingStopManager:
             else:
                 sl_distance_eur = 0
 
+            # Calculate protected profit/loss (from entry to SL)
+            # This is the actual P&L if SL is hit, can be negative!
+            if is_buy:
+                protected_profit_distance = current_sl - entry_price  # Can be negative
+            else:
+                protected_profit_distance = entry_price - current_sl  # Can be negative
+
+            # Always calculate the EUR value, even if it's a loss
+            protected_profit_eur = self._calculate_price_to_eur(
+                trade.symbol, abs(protected_profit_distance), volume, current_price, eurusd_rate
+            )
+            # Apply sign: negative if it's a loss
+            if protected_profit_distance < 0:
+                protected_profit_eur = -protected_profit_eur
+
             # Determine current stage
             stage = None
             stage_label = "None"
@@ -751,6 +815,7 @@ class TrailingStopManager:
                 'profit_percent': round(profit_percent, 1),
                 'sl_distance_pips': round(sl_distance_pips, 1),
                 'sl_distance_eur': round(sl_distance_eur, 2),
+                'protected_profit_eur': round(protected_profit_eur, 2),
                 'next_trigger': next_trigger,
                 'next_trigger_percent': next_trigger_percent
             }

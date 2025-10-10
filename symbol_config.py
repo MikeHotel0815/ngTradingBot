@@ -85,11 +85,11 @@ class SymbolConfig:
             'risk_per_trade_percent': 0.015,  # Lower risk (was 2.5%)
         },
         'XAUUSD': {
-            # PERFORMANCE: 100% win-rate, €2.48 avg → EXCELLENT, keep it!
-            'sl_multiplier': 0.8,
-            'breakeven_trigger_percent': 25.0,
-            'min_confidence': 60.0,
-            'risk_per_trade_percent': 0.02,
+            # ✅ UPDATED 2025-10-10: Performance dropped to 33% WR after SL hits - adjusting params
+            'sl_multiplier': 0.9,           # ✅ Slightly increased from 0.8 to allow more room
+            'breakeven_trigger_percent': 15.0,  # ✅ FIXED: Reduced from 25% to 15% (earlier break-even)
+            'min_confidence': 65.0,         # ✅ Increased from 60% to 65% (higher quality trades)
+            'risk_per_trade_percent': 0.015,  # ✅ Reduced risk from 2% to 1.5%
         },
         'DE40.c': {
             # PERFORMANCE: 100% win-rate, €0.97 avg → PERFECT, keep aggressive

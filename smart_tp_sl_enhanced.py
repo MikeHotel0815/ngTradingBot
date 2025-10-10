@@ -28,8 +28,8 @@ class SymbolConfig:
         'FOREX_MAJOR': {
             'symbols': ['EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'AUDUSD', 'USDCAD', 'NZDUSD'],
             'atr_tp_multiplier': 2.0,      # Conservative for Forex
-            'atr_sl_multiplier': 1.2,      # Tighter stop
-            'trailing_multiplier': 0.8,    # 0.8x ATR
+            'atr_sl_multiplier': 0.9,      # ✅ TIGHTER: Was 1.2, now 0.9 (prevent 18h losses)
+            'trailing_multiplier': 0.6,    # ✅ MORE AGGRESSIVE: Was 0.8, now 0.6
             'max_tp_pct': 1.0,             # Max 1% (100 pips typically)
             'min_sl_pct': 0.15,            # Min 15 pips
             'fallback_atr_pct': 0.0008,    # 0.08% (~8 pips @ 1.0000)
@@ -66,8 +66,8 @@ class SymbolConfig:
         'METALS': {
             'symbols': ['XAUUSD', 'XAGUSD', 'XPTUSD', 'XPDUSD'],
             'atr_tp_multiplier': 2.2,
-            'atr_sl_multiplier': 1.2,
-            'trailing_multiplier': 0.8,
+            'atr_sl_multiplier': 1.8,      # ✅ FIXED: Increased from 1.2 to 1.8 (more breathing room)
+            'trailing_multiplier': 0.6,    # ✅ FIXED: Reduced from 0.8 to 0.6 (more aggressive trailing)
             'max_tp_pct': 2.0,             # Gold: max 2%
             'min_sl_pct': 0.5,             # Min 0.5%
             'fallback_atr_pct': 0.008,     # 0.8%
