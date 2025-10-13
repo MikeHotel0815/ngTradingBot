@@ -4347,8 +4347,8 @@ def get_ai_decisions():
     try:
         from ai_decision_log import get_decision_logger
 
-        # Use account ID 1 (default account for dashboard)
-        account_id = 1
+        # Use account ID 3 (actual trading account)
+        account_id = 3
         limit = request.args.get('limit', 50, type=int)
         decision_type = request.args.get('type')
         minutes = request.args.get('minutes', type=int)
@@ -4396,8 +4396,8 @@ def get_ai_decision_stats():
     try:
         from ai_decision_log import get_decision_logger
 
-        # Use account ID 1 (default account for dashboard)
-        account_id = 1
+        # Use account ID 3 (actual trading account)
+        account_id = 3
         hours = request.args.get('hours', 24, type=int)
 
         decision_logger = get_decision_logger()
@@ -4419,8 +4419,8 @@ def get_action_required_decisions():
     try:
         from ai_decision_log import get_decision_logger
 
-        # Use account ID 1 (default account for dashboard)
-        account_id = 1
+        # Use account ID 3 (actual trading account)
+        account_id = 3
 
         decision_logger = get_decision_logger()
         decisions = decision_logger.get_decisions_requiring_action(account_id)
@@ -4805,19 +4805,22 @@ if __name__ == '__main__':
     logger.info("📊 Daily Backtest Scheduler started (runs at 00:00 UTC daily)")
 
     # Request fresh account data from EA on startup
-    from account_refresh import request_account_data_refresh, schedule_periodic_refresh
-    startup_db2 = ScopedSession()
     try:
-        count = request_account_data_refresh(startup_db2)
-        if count > 0:
-            logger.info(f"🔄 Requested account data refresh for {count} accounts on startup")
-    except Exception as e:
-        logger.error(f"Error requesting account data refresh: {e}")
-    finally:
-        startup_db2.close()
-    
-    # Schedule periodic refresh every 5 minutes
-    schedule_periodic_refresh(interval=300)
+        from account_refresh import request_account_data_refresh, schedule_periodic_refresh
+        startup_db2 = ScopedSession()
+        try:
+            count = request_account_data_refresh(startup_db2)
+            if count > 0:
+                logger.info(f"🔄 Requested account data refresh for {count} accounts on startup")
+        except Exception as e:
+            logger.error(f"Error requesting account data refresh: {e}")
+        finally:
+            startup_db2.close()
+
+        # Schedule periodic refresh every 5 minutes
+        schedule_periodic_refresh(interval=300)
+    except ImportError:
+        logger.warning("account_refresh module not found, skipping account refresh feature")
 
     logger.info("Background tasks started (tick aggregation + retention cleanup + backup + tick batch writer + signal worker + trade monitor + auto-trader + daily backtest scheduler + account refresh)")
 
