@@ -109,9 +109,26 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - DATABASE_URL=postgresql://trader:${DB_PASSWORD:-tradingbot_secret_2025}@postgres:5432/ngtradingbot
-      - TRADE_TIMEOUT_HOURS=${TRADE_TIMEOUT_HOURS:-24}
+      - TRADE_TIMEOUT_HOURS=${TRADE_TIMEOUT_HOURS:-48}
       - TRADE_TIMEOUT_ENABLED=${TRADE_TIMEOUT_ENABLED:-true}
-      - TRADE_TIMEOUT_ACTION=${TRADE_TIMEOUT_ACTION:-close}
+      - TRADE_TIMEOUT_ACTION=${TRADE_TIMEOUT_ACTION:-alert}  # Nur warnen, nicht schließen!
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - tradingbot_network
+    restart: unless-stopped
+
+  strategy_validation:
+    build: .
+    container_name: ngtradingbot_strategy_validation
+    command: python workers/strategy_validation_worker.py
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql://trader:${DB_PASSWORD:-tradingbot_secret_2025}@postgres:5432/ngtradingbot
+      - STRATEGY_VALIDATION_ENABLED=${STRATEGY_VALIDATION_ENABLED:-true}
+      - STRATEGY_VALIDATION_CHECK_INTERVAL=${STRATEGY_VALIDATION_CHECK_INTERVAL:-300}  # 5 minutes
+      - MIN_LOSS_TO_CHECK=${MIN_LOSS_TO_CHECK:--5.0}  # Only check trades losing >5 EUR
     depends_on:
       postgres:
         condition: service_healthy
