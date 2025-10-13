@@ -136,6 +136,49 @@ services:
       - tradingbot_network
     restart: unless-stopped
 
+  drawdown_protection:
+    build: .
+    container_name: ngtradingbot_drawdown_protection
+    command: python workers/drawdown_protection_worker.py
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql://trader:${DB_PASSWORD:-tradingbot_secret_2025}@postgres:5432/ngtradingbot
+      - DRAWDOWN_PROTECTION_ENABLED=${DRAWDOWN_PROTECTION_ENABLED:-true}
+      - DRAWDOWN_CHECK_INTERVAL=${DRAWDOWN_CHECK_INTERVAL:-60}  # Check every minute
+      - DAILY_LOSS_LIMIT=${DAILY_LOSS_LIMIT:--30.0}  # EUR
+      - DAILY_LOSS_WARNING=${DAILY_LOSS_WARNING:--20.0}  # EUR
+      - ACCOUNT_EMERGENCY_LIMIT=${ACCOUNT_EMERGENCY_LIMIT:--50.0}  # EUR
+      - MAX_POSITIONS_SAME_CURRENCY=${MAX_POSITIONS_SAME_CURRENCY:-2}
+      - MAX_POSITIONS_PER_SYMBOL=${MAX_POSITIONS_PER_SYMBOL:-1}
+      - MAX_TOTAL_OPEN_POSITIONS=${MAX_TOTAL_OPEN_POSITIONS:-5}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - tradingbot_network
+    restart: unless-stopped
+
+  partial_close:
+    build: .
+    container_name: ngtradingbot_partial_close
+    command: python workers/partial_close_worker.py
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql://trader:${DB_PASSWORD:-tradingbot_secret_2025}@postgres:5432/ngtradingbot
+      - PARTIAL_CLOSE_ENABLED=${PARTIAL_CLOSE_ENABLED:-true}
+      - PARTIAL_CLOSE_CHECK_INTERVAL=${PARTIAL_CLOSE_CHECK_INTERVAL:-60}  # Check every minute
+      - FIRST_PARTIAL_PERCENT=${FIRST_PARTIAL_PERCENT:-50.0}  # Close 50% at 50% TP
+      - FIRST_PARTIAL_CLOSE=${FIRST_PARTIAL_CLOSE:-0.50}
+      - SECOND_PARTIAL_PERCENT=${SECOND_PARTIAL_PERCENT:-75.0}  # Close 25% at 75% TP
+      - SECOND_PARTIAL_CLOSE=${SECOND_PARTIAL_CLOSE:-0.25}
+      - MIN_LOT_FOR_PARTIAL=${MIN_LOT_FOR_PARTIAL:-0.02}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - tradingbot_network
+    restart: unless-stopped
+
 volumes:
   pgdata:
   redisdata:
