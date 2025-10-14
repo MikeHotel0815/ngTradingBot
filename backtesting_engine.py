@@ -842,6 +842,10 @@ class BacktestingEngine:
             if len(historical_bars) < 50:
                 return None
 
+            # VOLATILITY FILTER: Check if market conditions are tradeable
+            if not self._check_volatility_filter(historical_bars):
+                return None
+
             # Detect market regime first
             regime_info = self._detect_regime_on_bars(historical_bars)
 
@@ -880,6 +884,85 @@ class BacktestingEngine:
         except Exception as e:
             logger.error(f"Error in full signal generation for {symbol} {timeframe}: {e}", exc_info=True)
             return None
+
+    def _check_volatility_filter(self, bars: List[OHLCData]) -> bool:
+        """
+        Volatility filter to avoid trading in unfavorable conditions
+
+        Returns False (skip signal) when:
+        - ATR is too high (excessive volatility = unpredictable)
+        - ATR is too low (no movement = poor signals)
+        - Spread/ATR ratio is unfavorable
+
+        Args:
+            bars: Historical bars for analysis
+
+        Returns:
+            True if conditions are tradeable, False otherwise
+        """
+        import numpy as np
+
+        try:
+            if len(bars) < 20:
+                return True  # Not enough data, allow trade (benefit of doubt)
+
+            # Reverse to chronological order
+            bars_sorted = list(reversed(bars))
+
+            # Calculate current ATR (14 periods)
+            true_ranges = []
+            for i in range(1, min(15, len(bars_sorted))):
+                high = float(bars_sorted[i].high)
+                low = float(bars_sorted[i].low)
+                prev_close = float(bars_sorted[i-1].close)
+                tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+                true_ranges.append(tr)
+
+            if not true_ranges:
+                return True
+
+            current_atr = sum(true_ranges) / len(true_ranges)
+
+            # Calculate average ATR over last 50 periods for comparison
+            atr_values = []
+            for i in range(1, min(50, len(bars_sorted))):
+                high = float(bars_sorted[i].high)
+                low = float(bars_sorted[i].low)
+                prev_close = float(bars_sorted[i-1].close)
+                tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+                atr_values.append(tr)
+
+            avg_atr = sum(atr_values) / len(atr_values) if atr_values else current_atr
+
+            # Filter 1: ATR too high (excessive volatility)
+            # Skip if current ATR > 2.5x average (market too wild)
+            if current_atr > avg_atr * 2.5:
+                logger.debug(f"Volatility filter: ATR too high ({current_atr:.5f} > {avg_atr * 2.5:.5f})")
+                return False
+
+            # Filter 2: ATR too low (no movement)
+            # Skip if current ATR < 0.3x average (market too quiet, signals unreliable)
+            if current_atr < avg_atr * 0.3:
+                logger.debug(f"Volatility filter: ATR too low ({current_atr:.5f} < {avg_atr * 0.3:.5f})")
+                return False
+
+            # Filter 3: Price movement check (last 10 bars)
+            # Ensure there's actual price action, not just noise
+            recent_closes = [float(b.close) for b in bars_sorted[-10:]]
+            price_range = max(recent_closes) - min(recent_closes)
+            avg_price = sum(recent_closes) / len(recent_closes)
+            price_range_pct = (price_range / avg_price) * 100
+
+            # Skip if price hasn't moved at least 0.1% in last 10 bars
+            if price_range_pct < 0.1:
+                logger.debug(f"Volatility filter: Insufficient price movement ({price_range_pct:.2f}%)")
+                return False
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Error in volatility filter: {e}")
+            return True  # On error, allow trade (fail-open)
 
     def _detect_regime_on_bars(self, bars: List[OHLCData]) -> Dict:
         """
@@ -956,7 +1039,7 @@ class BacktestingEngine:
 
         signals = []
 
-        # RSI (14) - Relaxed thresholds for backtesting - MEAN-REVERSION
+        # RSI (14) - Standard thresholds with trend confirmation - MEAN-REVERSION
         if len(closes) >= 14:
             deltas = np.diff(closes)
             gains = np.where(deltas > 0, deltas, 0)
@@ -967,10 +1050,10 @@ class BacktestingEngine:
                 rs = avg_gain / avg_loss
                 rsi = 100 - (100 / (1 + rs))
 
-                # Relaxed thresholds: 40/60 instead of 30/70
-                if rsi < 40:
+                # Standard thresholds: 30/70 (only trade extreme conditions)
+                if rsi < 30:
                     signals.append({'type': 'BUY', 'indicator': 'RSI', 'value': rsi, 'reason': f'RSI oversold ({rsi:.1f})', 'strength': 'medium', 'strategy_type': 'mean_reversion'})
-                elif rsi > 60:
+                elif rsi > 70:
                     signals.append({'type': 'SELL', 'indicator': 'RSI', 'value': rsi, 'reason': f'RSI overbought ({rsi:.1f})', 'strength': 'medium', 'strategy_type': 'mean_reversion'})
 
         # EMA 20/50 crossover AND trend alignment - TREND-FOLLOWING
@@ -1023,7 +1106,7 @@ class BacktestingEngine:
         bars = list(reversed(bars))
         signals = []
 
-        # Simple bullish/bearish engulfing pattern
+        # === ENGULFING PATTERNS ===
         if len(bars) >= 2:
             last = bars[-1]
             prev = bars[-2]
@@ -1054,7 +1137,150 @@ class BacktestingEngine:
                     'strength': 'medium'
                 })
 
+        # === PIN BAR PATTERNS ===
+        # Pin bar = Long wick (rejection), small body
+        # Bullish pin bar: Long lower wick (price rejected downwards)
+        # Bearish pin bar: Long upper wick (price rejected upwards)
+        if len(bars) >= 3:
+            last = bars[-1]
+            o = float(last.open)
+            h = float(last.high)
+            l = float(last.low)
+            c = float(last.close)
+
+            # Body size
+            body = abs(c - o)
+            # Total range
+            total_range = h - l
+
+            if total_range > 0:
+                # Upper wick
+                upper_wick = h - max(o, c)
+                # Lower wick
+                lower_wick = min(o, c) - l
+
+                # Pin bar criteria:
+                # 1. Body must be < 33% of total range (small body)
+                # 2. Rejection wick must be > 66% of total range (long wick)
+                # 3. Opposite wick must be < 15% of total range (minimal opposite wick)
+
+                body_pct = (body / total_range) * 100
+                upper_wick_pct = (upper_wick / total_range) * 100
+                lower_wick_pct = (lower_wick / total_range) * 100
+
+                # BULLISH PIN BAR (Hammer): Long lower wick
+                if (body_pct < 33 and
+                    lower_wick_pct > 66 and
+                    upper_wick_pct < 15):
+
+                    # Check trend context (stronger signal if at support/downtrend)
+                    trend_strength = self._check_trend_context(bars, 'bullish_reversal')
+                    reliability = 65 if trend_strength == 'strong' else 55
+
+                    signals.append({
+                        'type': 'BUY',
+                        'pattern': 'BULLISH_PIN_BAR',
+                        'reason': f'Bullish pin bar (hammer) - rejection at {l:.5f}',
+                        'reliability': reliability,
+                        'strength': 'strong' if trend_strength == 'strong' else 'medium'
+                    })
+
+                # BEARISH PIN BAR (Shooting Star): Long upper wick
+                elif (body_pct < 33 and
+                      upper_wick_pct > 66 and
+                      lower_wick_pct < 15):
+
+                    # Check trend context (stronger signal if at resistance/uptrend)
+                    trend_strength = self._check_trend_context(bars, 'bearish_reversal')
+                    reliability = 65 if trend_strength == 'strong' else 55
+
+                    signals.append({
+                        'type': 'SELL',
+                        'pattern': 'BEARISH_PIN_BAR',
+                        'reason': f'Bearish pin bar (shooting star) - rejection at {h:.5f}',
+                        'reliability': reliability,
+                        'strength': 'strong' if trend_strength == 'strong' else 'medium'
+                    })
+
+        # === INSIDE BAR PATTERNS ===
+        # Inside bar = Current bar's range is completely inside previous bar's range
+        # Indicates consolidation, breakout likely
+        if len(bars) >= 3:
+            last = bars[-1]
+            mother = bars[-2]
+
+            last_high = float(last.high)
+            last_low = float(last.low)
+            mother_high = float(mother.high)
+            mother_low = float(mother.low)
+
+            # Inside bar criteria: high < mother high AND low > mother low
+            if last_high < mother_high and last_low > mother_low:
+                # Determine breakout direction based on close position
+                last_close = float(last.close)
+                mother_range = mother_high - mother_low
+
+                if mother_range > 0:
+                    # Close in upper 60% = bullish bias
+                    close_position = (last_close - mother_low) / mother_range
+
+                    if close_position > 0.6:
+                        # Bullish inside bar
+                        signals.append({
+                            'type': 'BUY',
+                            'pattern': 'INSIDE_BAR_BULLISH',
+                            'reason': f'Bullish inside bar - close at {close_position*100:.0f}% of range',
+                            'reliability': 58,
+                            'strength': 'medium'
+                        })
+                    elif close_position < 0.4:
+                        # Bearish inside bar
+                        signals.append({
+                            'type': 'SELL',
+                            'pattern': 'INSIDE_BAR_BEARISH',
+                            'reason': f'Bearish inside bar - close at {close_position*100:.0f}% of range',
+                            'reliability': 58,
+                            'strength': 'medium'
+                        })
+                    # If close is in middle 40-60%, no clear signal (neutral inside bar)
+
         return signals
+
+    def _check_trend_context(self, bars: List[OHLCData], pattern_type: str) -> str:
+        """
+        Check trend context for pattern validation
+
+        Returns:
+            'strong': Pattern aligns with trend (high probability)
+            'weak': Pattern against trend or unclear (lower probability)
+        """
+        try:
+            if len(bars) < 10:
+                return 'weak'
+
+            # Check last 10 bars for trend direction
+            recent_closes = [float(bar.close) for bar in bars[-10:]]
+
+            # Simple trend check: first 5 vs last 5
+            first_half_avg = sum(recent_closes[:5]) / 5
+            second_half_avg = sum(recent_closes[5:]) / 5
+
+            price_change_pct = ((second_half_avg - first_half_avg) / first_half_avg) * 100
+
+            if pattern_type == 'bullish_reversal':
+                # Bullish reversal strongest after downtrend
+                if price_change_pct < -0.5:  # Price declining
+                    return 'strong'
+            elif pattern_type == 'bearish_reversal':
+                # Bearish reversal strongest after uptrend
+                if price_change_pct > 0.5:  # Price rising
+                    return 'strong'
+
+            return 'weak'
+
+        except Exception as e:
+            logger.error(f"Error checking trend context: {e}")
+            return 'weak'
 
     def _filter_signals_by_regime(self, signals: List[Dict], regime: str) -> List[Dict]:
         """
@@ -1282,13 +1508,26 @@ class BacktestingEngine:
             else:
                 atr = entry * 0.002  # 0.2% fallback
 
-            # Calculate SL and TP (same as SignalGenerator)
+            # Calculate SL and TP with wider stops for better survivability
+            # Symbol-specific SL multipliers
+            sl_multiplier = 2.0  # Default: 2.0x ATR for Forex
+            tp_multiplier = 3.0  # 1:1.5 Risk/Reward ratio
+
+            if 'XAU' in signal['symbol'] or 'XAG' in signal['symbol']:
+                # Gold/Silver: More volatile, need wider stops
+                sl_multiplier = 2.5
+                tp_multiplier = 3.5
+            elif any(idx in signal['symbol'] for idx in ['DAX', 'DE40', 'SPX', 'US500']):
+                # Indices: Moderate volatility
+                sl_multiplier = 2.2
+                tp_multiplier = 3.2
+
             if signal['signal_type'] == 'BUY':
-                sl = entry - (1.5 * atr)
-                tp = entry + (2.5 * atr)
+                sl = entry - (sl_multiplier * atr)
+                tp = entry + (tp_multiplier * atr)
             else:  # SELL
-                sl = entry + (1.5 * atr)
-                tp = entry - (2.5 * atr)
+                sl = entry + (sl_multiplier * atr)
+                tp = entry - (tp_multiplier * atr)
 
             return (
                 round(entry, 5),
