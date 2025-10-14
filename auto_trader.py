@@ -408,6 +408,27 @@ class AutoTrader:
     def should_execute_signal(self, signal: TradingSignal, db: Session) -> Dict:
         """Determine if signal should be executed"""
         try:
+            # 🔒 CRITICAL: Redis lock to prevent race conditions on position checks
+            # This prevents multiple workers from opening duplicate positions simultaneously
+            lock_key = f"position_check:{signal.account_id}:{signal.symbol}:{signal.timeframe}"
+            lock_acquired = False
+
+            try:
+                # Try to acquire lock with 30-second timeout
+                lock_acquired = self.redis.redis_client.set(
+                    lock_key, "1", nx=True, ex=30
+                )
+
+                if not lock_acquired:
+                    # Another worker is processing this symbol+timeframe
+                    return {
+                        'execute': False,
+                        'reason': f'Position check in progress for {signal.symbol} {signal.timeframe}'
+                    }
+            except Exception as lock_error:
+                logger.warning(f"Redis lock error (continuing without lock): {lock_error}")
+                # Continue without lock (fail-open for availability)
+
             settings = self._load_settings(db)
 
             # Check DAILY DRAWDOWN PROTECTION FIRST (most critical check)
@@ -503,10 +524,56 @@ class AutoTrader:
                         'reason': f'Symbol in cooldown ({remaining:.0f}min remaining)'
                     }
 
-            # Check confidence threshold (use symbol-specific minimum if available)
-            from symbol_config import get_symbol_min_confidence
-            symbol_min_confidence = max(self.min_autotrade_confidence, get_symbol_min_confidence(signal.symbol))
+            # ✅ NEW: Symbol-Specific Dynamic Configuration Check
+            # This checks per-symbol learned settings (confidence, risk, status, regime)
+            try:
+                from symbol_dynamic_manager import SymbolDynamicManager
+                from technical_indicators import TechnicalIndicators
 
+                symbol_manager = SymbolDynamicManager(account_id=signal.account_id)
+
+                # Get market regime for this symbol
+                try:
+                    ti = TechnicalIndicators(signal.account_id, signal.symbol, signal.timeframe)
+                    regime_info = ti.detect_market_regime()
+                    market_regime = regime_info.get('regime', 'UNKNOWN')
+                except Exception as e:
+                    logger.debug(f"Could not detect market regime for {signal.symbol}: {e}")
+                    market_regime = None
+
+                # Check if symbol+direction config allows trading
+                should_trade, reason, config = symbol_manager.should_trade_signal(
+                    db, signal, market_regime
+                )
+
+                if not should_trade:
+                    logger.info(
+                        f"🚫 Symbol config blocked {signal.symbol} {signal.signal_type}: {reason}"
+                    )
+                    return {
+                        'execute': False,
+                        'reason': f'Symbol config: {reason}'
+                    }
+
+                # Use symbol-specific confidence threshold (dynamically adjusted)
+                symbol_min_confidence = max(
+                    self.min_autotrade_confidence,
+                    float(config.min_confidence_threshold)
+                )
+
+                logger.debug(
+                    f"📊 {signal.symbol} {signal.signal_type}: "
+                    f"Config status={config.status}, conf≥{config.min_confidence_threshold}%, "
+                    f"risk={config.risk_multiplier}x, WR={config.rolling_winrate or 0}%"
+                )
+
+            except Exception as e:
+                logger.warning(f"Symbol dynamic config check failed: {e}")
+                # Fallback to legacy symbol_config
+                from symbol_config import get_symbol_min_confidence
+                symbol_min_confidence = max(self.min_autotrade_confidence, get_symbol_min_confidence(signal.symbol))
+
+            # Check confidence threshold (now using dynamically adjusted threshold)
             if signal.confidence and signal.confidence < symbol_min_confidence:
                 return {
                     'execute': False,
@@ -532,6 +599,14 @@ class AutoTrader:
         except Exception as e:
             logger.error(f"Error evaluating signal: {e}")
             return {'execute': False, 'reason': str(e)}
+        finally:
+            # Release Redis lock if we acquired it
+            if lock_acquired:
+                try:
+                    self.redis.redis_client.delete(lock_key)
+                    logger.debug(f"🔓 Released position check lock for {signal.symbol} {signal.timeframe}")
+                except Exception as e:
+                    logger.error(f"Failed to release Redis lock: {e}")
 
     def _validate_tp_sl(self, signal: TradingSignal, adjusted_sl: float) -> bool:
         """
@@ -949,8 +1024,30 @@ class AutoTrader:
                     logger.warning(f"⚠️  Risk limit blocked signal #{signal.id}: {risk_check['reason']}")
                     continue
 
-                # Calculate position size
-                volume = self.calculate_position_size(db, signal.account_id, signal)
+                # Calculate position size with dynamic risk adjustment
+                base_volume = self.calculate_position_size(db, signal.account_id, signal)
+
+                # ✅ NEW: Apply symbol-specific risk multiplier
+                try:
+                    from symbol_dynamic_manager import SymbolDynamicManager
+                    symbol_manager = SymbolDynamicManager(account_id=signal.account_id)
+                    config = symbol_manager.get_config(db, signal.symbol, signal.signal_type)
+
+                    # Apply risk multiplier
+                    adjusted_volume = base_volume * float(config.risk_multiplier)
+
+                    # Clamp to safe limits
+                    volume = max(0.01, min(adjusted_volume, 1.0))
+
+                    if config.risk_multiplier != 1.0:
+                        logger.info(
+                            f"📊 {signal.symbol} {signal.signal_type}: "
+                            f"Volume adjusted by risk multiplier {config.risk_multiplier}x: "
+                            f"{base_volume:.2f} → {volume:.2f}"
+                        )
+                except Exception as e:
+                    logger.warning(f"Could not apply risk multiplier: {e}")
+                    volume = base_volume
 
                 # Create trade command
                 command = self.create_trade_command(db, signal, volume)

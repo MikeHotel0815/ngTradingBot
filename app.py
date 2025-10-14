@@ -295,10 +295,55 @@ def heartbeat(account, db):
         profit_month = data.get('profit_month')
         profit_year = data.get('profit_year')
 
+        # ✅ FIX: Calculate accurate profits from database instead of trusting MT5's values
+        # MT5 calculates profit_today incorrectly (uses deal history with server time instead of close_time)
+        from sqlalchemy import func, cast, Date
+        from models import Trade
+
+        now = datetime.utcnow()
+        today_date = now.date()
+        week_start_date = (now - timedelta(days=now.weekday())).date()  # Monday
+        month_start_date = now.replace(day=1).date()
+        year_start_date = now.replace(month=1, day=1).date()
+
+        # Calculate actual profit from closed trades (profit + commission + swap)
+        # Use DATE comparison to avoid timezone issues (close_time is in broker time, not UTC)
+        actual_profit_today = db.query(
+            func.coalesce(func.sum(Trade.profit + Trade.commission + Trade.swap), 0)
+        ).filter(
+            Trade.account_id == account.id,
+            Trade.status == 'closed',
+            cast(Trade.close_time, Date) == today_date
+        ).scalar() or 0.0
+
+        actual_profit_week = db.query(
+            func.coalesce(func.sum(Trade.profit + Trade.commission + Trade.swap), 0)
+        ).filter(
+            Trade.account_id == account.id,
+            Trade.status == 'closed',
+            cast(Trade.close_time, Date) >= week_start_date
+        ).scalar() or 0.0
+
+        actual_profit_month = db.query(
+            func.coalesce(func.sum(Trade.profit + Trade.commission + Trade.swap), 0)
+        ).filter(
+            Trade.account_id == account.id,
+            Trade.status == 'closed',
+            cast(Trade.close_time, Date) >= month_start_date
+        ).scalar() or 0.0
+
+        actual_profit_year = db.query(
+            func.coalesce(func.sum(Trade.profit + Trade.commission + Trade.swap), 0)
+        ).filter(
+            Trade.account_id == account.id,
+            Trade.status == 'closed',
+            cast(Trade.close_time, Date) >= year_start_date
+        ).scalar() or 0.0
+
         # Correct profits by removing deposits/withdrawals
         from profit_calculator import calculate_corrected_profits
         corrected_today, corrected_week, corrected_month, corrected_year = calculate_corrected_profits(
-            db, account.id, profit_today, profit_week, profit_month, profit_year
+            db, account.id, actual_profit_today, actual_profit_week, actual_profit_month, actual_profit_year
         )
 
         # Update last heartbeat and account data
@@ -311,8 +356,8 @@ def heartbeat(account, db):
             account.margin = margin
         if free_margin is not None:
             account.free_margin = free_margin
-        
-        # Use corrected profits instead of raw EA values
+
+        # Use corrected profits calculated from database instead of raw EA values
         account.profit_today = corrected_today
         account.profit_week = corrected_week
         account.profit_month = corrected_month
@@ -2750,6 +2795,47 @@ def dashboard_performance():
     """Get live symbol performance metrics (24h) - Port 9905"""
     result, status = _get_symbol_performance()
     return jsonify(result), status
+
+
+@app_webui.route('/api/symbol-config/summary', methods=['GET'])
+def get_symbol_config_summary():
+    """Get summary of symbol configs"""
+    try:
+        from models import SymbolTradingConfig
+        account_id = request.args.get('account_id', 3, type=int)
+
+        db = ScopedSession()
+        try:
+            configs = db.query(SymbolTradingConfig).filter_by(account_id=account_id).all()
+
+            summary = {
+                'total': len(configs),
+                'active': len([c for c in configs if c.status == 'active']),
+                'paused': len([c for c in configs if c.status == 'paused']),
+                'configs': []
+            }
+
+            for c in configs:
+                summary['configs'].append({
+                    'id': c.id,
+                    'symbol': c.symbol,
+                    'direction': c.direction,
+                    'status': c.status,
+                    'risk_multiplier': float(c.risk_multiplier) if c.risk_multiplier else 1.0,
+                    'min_confidence': float(c.min_confidence_threshold) if c.min_confidence_threshold else 50.0,
+                    'rolling_profit': float(c.rolling_profit) if c.rolling_profit else 0.0,
+                    'rolling_winrate': float(c.rolling_winrate) if c.rolling_winrate else 0.0,
+                    'rolling_trades': c.rolling_trades_count or 0
+                })
+
+            return jsonify({'success': True, 'summary': summary}), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Symbol config summary error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app_webui.route('/api/dashboard/storage')
