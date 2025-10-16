@@ -1382,9 +1382,10 @@ void ExecuteOpenTrade(string commandId, string cmdObj)
    request.symbol = symbol;
    request.volume = volume;
    request.type = orderType;
-   request.price = 0;  // ✅ CRITICAL FIX: Must be 0 for TRADE_ACTION_DEAL (market orders)
-   request.sl = 0;     // ✅ FIX: Don't set SL/TP in initial order - set via modify after
-   request.tp = 0;     // ✅ FIX: Prevents error 4756 "Wrong request structure"
+   request.price = 0;        // 0 means "use current market price" for TRADE_ACTION_DEAL
+   // ✅ CRITICAL FIX: Do NOT set request.sl or request.tp here
+   // Setting them (even to 0) causes error 4756 with some brokers
+   // We'll set SL/TP via TRADE_ACTION_SLTP modify after order opens
    request.deviation = 10;
    request.magic = MagicNumber;
    request.comment = comment;
