@@ -2374,9 +2374,28 @@ def update_trade(account, db):
                 matching_command = db.query(Command).filter(
                     Command.account_id == account.id,
                     Command.command_type == 'OPEN_TRADE',
-                    Command.status == 'completed',
+                    Command.status.in_(['completed', 'processing']),  # ✅ FIXED: Also check processing commands
                     Command.response['ticket'].astext == str(ticket)
                 ).order_by(Command.created_at.desc()).first()
+
+                # ✅ NEW: If no match by ticket, try to match by symbol/volume/time window
+                if not matching_command:
+                    # Look for recently created commands (last 30 seconds) with matching symbol and volume
+                    from datetime import datetime, timedelta
+                    recent_threshold = datetime.utcnow() - timedelta(seconds=30)
+                    
+                    matching_command = db.query(Command).filter(
+                        Command.account_id == account.id,
+                        Command.command_type == 'OPEN_TRADE',
+                        Command.created_at >= recent_threshold,
+                        Command.payload['symbol'].astext == symbol,
+                        Command.payload['volume'].astext == str(float(volume)),
+                        Command.payload['order_type'].astext == signal_type,
+                        Command.response['ticket'].astext.is_(None)  # No ticket assigned yet
+                    ).order_by(Command.created_at.desc()).first()
+                    
+                    if matching_command:
+                        logger.info(f"🔗 Matched trade #{ticket} to command #{matching_command.id} by symbol/volume/time")
 
                 if matching_command:
                     command_id = matching_command.id
