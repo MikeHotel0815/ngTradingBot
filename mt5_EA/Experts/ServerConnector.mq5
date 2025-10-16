@@ -9,7 +9,7 @@
 #property strict
 
 // MANUAL: Update this date when code is modified!
-#define CODE_LAST_MODIFIED "2025-10-13 20:15:00"  // CRITICAL FIX: Verify TP/SL after OrderSend + auto-modify if needed
+#define CODE_LAST_MODIFIED "2025-10-16 13:15:00"  // FIX: Deposits/Withdrawals tracking separate from profit
 
 // Input parameters
 input string ServerURL = "http://100.97.100.50:9900";  // Python server URL (Tailscale)
