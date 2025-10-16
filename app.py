@@ -1787,9 +1787,8 @@ def receive_historical_ohlc(account, db):
             # MT5 timestamps are in broker timezone, treat as UTC for consistency
             timestamp = datetime.fromtimestamp(candle['timestamp'], tz=timezone.utc).replace(tzinfo=None)
 
-            # Check if candle already exists
+            # Check if candle already exists (GLOBAL - no account_id)
             existing = db.query(OHLCData).filter_by(
-                account_id=account.id,
                 symbol=symbol,
                 timeframe=timeframe,
                 timestamp=timestamp
@@ -1799,9 +1798,8 @@ def receive_historical_ohlc(account, db):
                 skipped_count += 1
                 continue
 
-            # Create new OHLC entry
+            # Create new OHLC entry (GLOBAL - no account_id)
             ohlc = OHLCData(
-                account_id=account.id,
                 symbol=symbol,
                 timeframe=timeframe,
                 timestamp=timestamp,
@@ -1829,6 +1827,92 @@ def receive_historical_ohlc(account, db):
         logger.error(f"Historical OHLC receive error: {str(e)}")
         db.rollback()
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_command.route('/api/ohlc/coverage', methods=['POST'])
+def check_ohlc_coverage():
+    """
+    Check OHLC data coverage for a symbol/timeframe (GLOBAL - no auth needed)
+    
+    Returns:
+    {
+        "has_data": true/false,
+        "bar_count": 168,
+        "expected_bars": 168,
+        "coverage_percent": 100.0,
+        "oldest_bar": "2025-10-09T16:00:00",
+        "newest_bar": "2025-10-16T15:00:00",
+        "needs_update": false
+    }
+    """
+    db = ScopedSession()
+    try:
+        from datetime import datetime, timedelta
+        
+        data = request.get_json()
+        symbol = data.get('symbol')
+        timeframe = data.get('timeframe')
+        required_bars = data.get('required_bars', 168)  # Default 168 (7 days H1)
+        
+        if not symbol or not timeframe:
+            return jsonify({
+                'status': 'error',
+                'message': 'Missing required fields: symbol, timeframe'
+            }), 400
+        
+        # Count existing bars (GLOBAL - no account_id)
+        bar_count = db.query(OHLCData).filter_by(
+            symbol=symbol,
+            timeframe=timeframe
+        ).count()
+        
+        # Get oldest and newest bar timestamps (GLOBAL - no account_id)
+        oldest = db.query(OHLCData.timestamp).filter_by(
+            symbol=symbol,
+            timeframe=timeframe
+        ).order_by(OHLCData.timestamp.asc()).first()
+        
+        newest = db.query(OHLCData.timestamp).filter_by(
+            symbol=symbol,
+            timeframe=timeframe
+        ).order_by(OHLCData.timestamp.desc()).first()
+        
+        has_data = bar_count > 0
+        coverage_percent = (bar_count / required_bars * 100) if required_bars > 0 else 0
+        
+        # Consider data sufficient if we have >= 90% of required bars
+        # AND newest bar is less than 2x timeframe old
+        timeframe_minutes = {
+            'H1': 60,
+            'H4': 240,
+            'D1': 1440
+        }.get(timeframe, 60)
+        
+        max_age_minutes = timeframe_minutes * 2  # Max 2 candles old
+        newest_is_fresh = False
+        
+        if newest:
+            age = datetime.utcnow() - newest[0]
+            newest_is_fresh = age.total_seconds() < (max_age_minutes * 60)
+        
+        needs_update = not has_data or coverage_percent < 90.0 or not newest_is_fresh
+        
+        return jsonify({
+            'status': 'success',
+            'has_data': has_data,
+            'bar_count': bar_count,
+            'expected_bars': required_bars,
+            'coverage_percent': round(coverage_percent, 1),
+            'oldest_bar': oldest[0].isoformat() if oldest else None,
+            'newest_bar': newest[0].isoformat() if newest else None,
+            'needs_update': needs_update
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"OHLC coverage check error: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    finally:
+        db.close()
 
 
 @app_command.route('/api/request_historical_data', methods=['POST'])

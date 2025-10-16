@@ -9,7 +9,7 @@
 #property strict
 
 // MANUAL: Update this date when code is modified!
-#define CODE_LAST_MODIFIED "2025-10-16 16:10:00"  // FINAL: Deposits tracking + profit calculation fixed
+#define CODE_LAST_MODIFIED "2025-10-16 16:15:00"  // OPTIMIZATION: Smart OHLC data sending - checks server coverage before upload
 
 // Input parameters
 input string ServerURL = "http://100.97.100.50:9900";  // Python server URL (Tailscale)
@@ -664,16 +664,101 @@ void SendSymbolSpecifications()
 }
 
 //+------------------------------------------------------------------+
-//| Send historical data for all subscribed symbols                  |
+//| Check OHLC data coverage on server                               |
+//+------------------------------------------------------------------+
+bool CheckOHLCCoverage(string symbol, string timeframe, int requiredBars, double &coveragePercent)
+{
+   if(apiKey == "")
+   {
+      Print("Cannot check OHLC coverage - no API key");
+      return false;
+   }
+
+   string url = ServerURL + "/api/ohlc/coverage";
+   string headers = "Content-Type: application/json\r\nX-API-Key: " + apiKey + "\r\n";
+
+   string jsonData = StringFormat(
+      "{\"symbol\":\"%s\",\"timeframe\":\"%s\",\"required_bars\":%d}",
+      symbol,
+      timeframe,
+      requiredBars
+   );
+
+   char post[];
+   char result[];
+   string resultHeaders;
+
+   StringToCharArray(jsonData, post, 0, StringLen(jsonData));
+
+   int res = WebRequest(
+      "POST",
+      url,
+      headers,
+      5000,  // 5 second timeout
+      post,
+      result,
+      resultHeaders
+   );
+
+   if(res == 200)
+   {
+      string response = CharArrayToString(result);
+      
+      // Parse coverage_percent from JSON
+      string searchKey = "\"coverage_percent\":";
+      int pos = StringFind(response, searchKey);
+      if(pos >= 0)
+      {
+         string valueStr = StringSubstr(response, pos + StringLen(searchKey));
+         // Extract number (up to comma or closing brace)
+         int commaPos = StringFind(valueStr, ",");
+         int bracePos = StringFind(valueStr, "}");
+         int endPos = (commaPos > 0 && commaPos < bracePos) ? commaPos : bracePos;
+         
+         if(endPos > 0)
+         {
+            valueStr = StringSubstr(valueStr, 0, endPos);
+            // Remove whitespace
+            StringTrimLeft(valueStr);
+            StringTrimRight(valueStr);
+            coveragePercent = StringToDouble(valueStr);
+            
+            // Parse needs_update
+            string needsUpdateKey = "\"needs_update\":";
+            int needsPos = StringFind(response, needsUpdateKey);
+            if(needsPos >= 0)
+            {
+               string needsStr = StringSubstr(response, needsPos + StringLen(needsUpdateKey));
+               bool needsUpdate = (StringFind(needsStr, "true") == 0);
+               return !needsUpdate;  // Return true if data is sufficient (doesn't need update)
+            }
+         }
+      }
+      
+      return false;  // Couldn't parse, assume needs update
+   }
+   else
+   {
+      Print("Failed to check OHLC coverage - HTTP ", res);
+      return false;  // On error, assume we need to send data
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Send historical data for all subscribed symbols (SMART)          |
 //+------------------------------------------------------------------+
 void SendAllHistoricalData()
 {
    Print("======================================");
-   Print("Sending historical OHLC data...");
+   Print("Checking OHLC data coverage...");
    Print("======================================");
 
    ENUM_TIMEFRAMES timeframes[] = {PERIOD_H1, PERIOD_H4};
+   string timeframeStrs[] = {"H1", "H4"};
    int barCounts[] = {168, 84};  // H1:7d, H4:14d - optimized for auto-optimization system
+
+   int skippedCount = 0;
+   int sentCount = 0;
 
    for(int s = 0; s < symbolCount; s++)
    {
@@ -681,12 +766,31 @@ void SendAllHistoricalData()
 
       for(int t = 0; t < ArraySize(timeframes); t++)
       {
-         SendHistoricalData(symbol, timeframes[t], barCounts[t]);
+         // Check if server already has sufficient data
+         double coveragePercent = 0.0;
+         bool hasSufficientData = CheckOHLCCoverage(symbol, timeframeStrs[t], barCounts[t], coveragePercent);
+         
+         if(hasSufficientData && coveragePercent >= 90.0)
+         {
+            Print(StringFormat("✓ Skipping %s %s - server has %.1f%% coverage (%d bars expected)", 
+                              symbol, timeframeStrs[t], coveragePercent, barCounts[t]));
+            skippedCount++;
+         }
+         else
+         {
+            Print(StringFormat("↑ Sending %s %s - coverage: %.1f%% (updating...)", 
+                              symbol, timeframeStrs[t], coveragePercent));
+            SendHistoricalData(symbol, timeframes[t], barCounts[t]);
+            sentCount++;
+         }
+         
          Sleep(100);  // Small delay to avoid overwhelming server
       }
    }
 
-   Print("Historical data upload complete");
+   Print("======================================");
+   Print(StringFormat("OHLC data sync complete: %d sent, %d skipped", sentCount, skippedCount));
+   Print("======================================");
 }
 
 //+------------------------------------------------------------------+
@@ -3101,6 +3205,102 @@ string ErrorDescription(int errorCode)
    }
 
    return error;
+}
+
+//+------------------------------------------------------------------+
+//| DEBUG: Analyze all October trades from broker history            |
+//+------------------------------------------------------------------+
+void AnalyzeOctoberTrades()
+{
+   Print("======================================");
+   Print("DEBUG: Analyzing October trades from broker...");
+   Print("======================================");
+   
+   // Select October history
+   MqlDateTime oct1;
+   TimeToStruct(TimeCurrent(), oct1);
+   oct1.mon = 10;
+   oct1.day = 1;
+   oct1.hour = 0;
+   oct1.min = 0;
+   oct1.sec = 0;
+   datetime startOfOctober = StructToTime(oct1);
+   
+   if(!HistorySelect(startOfOctober, TimeCurrent()))
+   {
+      Print("ERROR: Failed to select October history");
+      return;
+   }
+   
+   int totalDeals = HistoryDealsTotal();
+   int tradingDeals = 0;
+   int balanceDeals = 0;
+   
+   double totalProfit = 0.0;
+   double totalSwap = 0.0;
+   double totalCommission = 0.0;
+   double totalDeposits = 0.0;
+   
+   int dealsWithSwap = 0;
+   int dealsWithCommission = 0;
+   
+   Print("Total deals in history since Oct 1: ", totalDeals);
+   
+   for(int i = 0; i < totalDeals; i++)
+   {
+      ulong ticket = HistoryDealGetTicket(i);
+      if(ticket > 0)
+      {
+         ENUM_DEAL_TYPE dealType = (ENUM_DEAL_TYPE)HistoryDealGetInteger(ticket, DEAL_TYPE);
+         ENUM_DEAL_ENTRY dealEntry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(ticket, DEAL_ENTRY);
+         
+         if(dealType == DEAL_TYPE_BALANCE)
+         {
+            // Deposit/Withdrawal
+            double amount = HistoryDealGetDouble(ticket, DEAL_PROFIT);
+            totalDeposits += amount;
+            balanceDeals++;
+            
+            datetime dealTime = (datetime)HistoryDealGetInteger(ticket, DEAL_TIME);
+            Print("  DEPOSIT: ", amount, " at ", TimeToString(dealTime, TIME_DATE|TIME_MINUTES));
+         }
+         else if(dealType == DEAL_TYPE_BUY || dealType == DEAL_TYPE_SELL)
+         {
+            // Trading deal
+            if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_INOUT)
+            {
+               // Only count close deals for profit
+               double profit = HistoryDealGetDouble(ticket, DEAL_PROFIT);
+               double swap = HistoryDealGetDouble(ticket, DEAL_SWAP);
+               double commission = HistoryDealGetDouble(ticket, DEAL_COMMISSION);
+               
+               totalProfit += profit;
+               totalSwap += swap;
+               totalCommission += commission;
+               
+               if(swap != 0) dealsWithSwap++;
+               if(commission != 0) dealsWithCommission++;
+               
+               tradingDeals++;
+            }
+         }
+      }
+   }
+   
+   Print("======================================");
+   Print("BROKER OCTOBER SUMMARY:");
+   Print("  Trading deals (closed): ", tradingDeals);
+   Print("  Balance operations: ", balanceDeals);
+   Print("  ---");
+   Print("  Gross Profit: ", totalProfit);
+   Print("  Swap: ", totalSwap);
+   Print("  Commission: ", totalCommission);
+   Print("  Deposits: ", totalDeposits);
+   Print("  ---");
+   Print("  Net P&L (excl deposits): ", totalProfit + totalSwap + totalCommission);
+   Print("  Deals with Swap: ", dealsWithSwap);
+   Print("  Deals with Commission: ", dealsWithCommission);
+   Print("======================================");
 }
 
 //+------------------------------------------------------------------+
