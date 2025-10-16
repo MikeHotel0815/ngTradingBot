@@ -9,7 +9,7 @@
 #property strict
 
 // MANUAL: Update this date when code is modified!
-#define CODE_LAST_MODIFIED "2025-10-16 15:50:00"  // DEBUG: Analyze all October trades from broker
+#define CODE_LAST_MODIFIED "2025-10-16 16:05:00"  // FIX: GetProfitSince() only counts ENTRY_OUT deals (closed positions)
 
 // Input parameters
 input string ServerURL = "http://100.97.100.50:9900";  // Python server URL (Tailscale)
@@ -764,6 +764,12 @@ double GetProfitSince(datetime sinceTime)
          
          // Only count trading deals (BUY, SELL), not balance adjustments
          if(dealType == DEAL_TYPE_BALANCE)
+            continue;
+         
+         // ✅ FIX: Only count ENTRY_OUT deals (closed positions)
+         // ENTRY_IN has no profit yet (position just opened)
+         ENUM_DEAL_ENTRY dealEntry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(ticket, DEAL_ENTRY);
+         if(dealEntry != DEAL_ENTRY_OUT && dealEntry != DEAL_ENTRY_INOUT)
             continue;
          
          double dealProfit = HistoryDealGetDouble(ticket, DEAL_PROFIT);
