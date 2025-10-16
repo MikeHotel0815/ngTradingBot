@@ -1354,19 +1354,16 @@ void ExecuteOpenTrade(string commandId, string cmdObj)
    Print("  Point: ", SymbolInfoDouble(symbol, SYMBOL_POINT));
    Print("  Current Bid: ", tick.bid, " Ask: ", tick.ask);
 
-   // Determine order type and price
+   // Determine order type
    ENUM_ORDER_TYPE orderType;
-   double price;
 
    if(orderTypeStr == "BUY")
    {
       orderType = ORDER_TYPE_BUY;
-      price = tick.ask;
    }
    else if(orderTypeStr == "SELL")
    {
       orderType = ORDER_TYPE_SELL;
-      price = tick.bid;
    }
    else
    {
@@ -1385,7 +1382,7 @@ void ExecuteOpenTrade(string commandId, string cmdObj)
    request.symbol = symbol;
    request.volume = volume;
    request.type = orderType;
-   request.price = price;
+   request.price = 0;  // ✅ CRITICAL FIX: Must be 0 for TRADE_ACTION_DEAL (market orders)
    request.sl = sl;
    request.tp = tp;
    request.deviation = 10;
