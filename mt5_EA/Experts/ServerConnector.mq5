@@ -9,7 +9,7 @@
 #property strict
 
 // MANUAL: Update this date when code is modified!
-#define CODE_LAST_MODIFIED "2025-10-16 15:23:00"  // FIX: Deposits/Withdrawals tracking separate from profit
+#define CODE_LAST_MODIFIED "2025-10-16 15:27:00"  // DEBUG: Added logging to deposits calculation
 
 // Input parameters
 input string ServerURL = "http://100.97.100.50:9900";  // Python server URL (Tailscale)
@@ -707,6 +707,7 @@ double GetDepositsSince(datetime sinceTime)
    }
 
    int totalDeals = HistoryDealsTotal();
+   int balanceDealsFound = 0;
 
    for(int i = 0; i < totalDeals; i++)
    {
@@ -719,10 +720,17 @@ double GetDepositsSince(datetime sinceTime)
          if(dealType == DEAL_TYPE_BALANCE)
          {
             double dealProfit = HistoryDealGetDouble(ticket, DEAL_PROFIT);
+            datetime dealTime = (datetime)HistoryDealGetInteger(ticket, DEAL_TIME);
+            
+            Print("DEBUG: Found BALANCE deal #", ticket, " Amount: ", dealProfit, " Time: ", TimeToString(dealTime, TIME_DATE|TIME_MINUTES));
+            
             totalDeposits += dealProfit;
+            balanceDealsFound++;
          }
       }
    }
+   
+   Print("DEBUG: GetDepositsSince(", TimeToString(sinceTime, TIME_DATE|TIME_MINUTES), ") - Found ", balanceDealsFound, " BALANCE deals, Total: ", totalDeposits);
 
    return totalDeposits;
 }
@@ -934,6 +942,8 @@ void UpdateProfitCache()
    cachedDepositsWeek = GetDepositsWeek();
    cachedDepositsMonth = GetDepositsMonth();
    cachedDepositsYear = GetDepositsYear();
+   
+   Print("DEBUG: Profit cache updated - Month: ", cachedProfitMonth, " Deposits Month: ", cachedDepositsMonth);
    
    lastProfitUpdate = TimeCurrent();
 
