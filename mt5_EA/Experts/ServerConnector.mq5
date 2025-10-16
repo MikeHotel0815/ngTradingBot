@@ -9,7 +9,7 @@
 #property strict
 
 // MANUAL: Update this date when code is modified!
-#define CODE_LAST_MODIFIED "2025-10-16 15:40:00"  // FINAL: Deposits/Withdrawals tracking complete, debug logging removed
+#define CODE_LAST_MODIFIED "2025-10-16 15:50:00"  // DEBUG: Analyze all October trades from broker
 
 // Input parameters
 input string ServerURL = "http://100.97.100.50:9900";  // Python server URL (Tailscale)
@@ -138,6 +138,9 @@ int OnInit()
       }
       Print("Tracking ", trackedPositionCount, " open positions");
    }
+   
+   // DEBUG: Analyze October trades from broker
+   AnalyzeOctoberTrades();
 
    return(INIT_SUCCEEDED);
 }
@@ -3095,6 +3098,102 @@ string ErrorDescription(int errorCode)
    }
 
    return error;
+}
+
+//+------------------------------------------------------------------+
+//| DEBUG: Analyze all October trades from broker history            |
+//+------------------------------------------------------------------+
+void AnalyzeOctoberTrades()
+{
+   Print("======================================");
+   Print("DEBUG: Analyzing October trades from broker...");
+   Print("======================================");
+   
+   // Select October history
+   MqlDateTime oct1;
+   TimeToStruct(TimeCurrent(), oct1);
+   oct1.mon = 10;
+   oct1.day = 1;
+   oct1.hour = 0;
+   oct1.min = 0;
+   oct1.sec = 0;
+   datetime startOfOctober = StructToTime(oct1);
+   
+   if(!HistorySelect(startOfOctober, TimeCurrent()))
+   {
+      Print("ERROR: Failed to select October history");
+      return;
+   }
+   
+   int totalDeals = HistoryDealsTotal();
+   int tradingDeals = 0;
+   int balanceDeals = 0;
+   
+   double totalProfit = 0.0;
+   double totalSwap = 0.0;
+   double totalCommission = 0.0;
+   double totalDeposits = 0.0;
+   
+   int dealsWithSwap = 0;
+   int dealsWithCommission = 0;
+   
+   Print("Total deals in history since Oct 1: ", totalDeals);
+   
+   for(int i = 0; i < totalDeals; i++)
+   {
+      ulong ticket = HistoryDealGetTicket(i);
+      if(ticket > 0)
+      {
+         ENUM_DEAL_TYPE dealType = (ENUM_DEAL_TYPE)HistoryDealGetInteger(ticket, DEAL_TYPE);
+         ENUM_DEAL_ENTRY dealEntry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(ticket, DEAL_ENTRY);
+         
+         if(dealType == DEAL_TYPE_BALANCE)
+         {
+            // Deposit/Withdrawal
+            double amount = HistoryDealGetDouble(ticket, DEAL_PROFIT);
+            totalDeposits += amount;
+            balanceDeals++;
+            
+            datetime dealTime = (datetime)HistoryDealGetInteger(ticket, DEAL_TIME);
+            Print("  DEPOSIT: ", amount, " at ", TimeToString(dealTime, TIME_DATE|TIME_MINUTES));
+         }
+         else if(dealType == DEAL_TYPE_BUY || dealType == DEAL_TYPE_SELL)
+         {
+            // Trading deal
+            if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_INOUT)
+            {
+               // Only count close deals for profit
+               double profit = HistoryDealGetDouble(ticket, DEAL_PROFIT);
+               double swap = HistoryDealGetDouble(ticket, DEAL_SWAP);
+               double commission = HistoryDealGetDouble(ticket, DEAL_COMMISSION);
+               
+               totalProfit += profit;
+               totalSwap += swap;
+               totalCommission += commission;
+               
+               if(swap != 0) dealsWithSwap++;
+               if(commission != 0) dealsWithCommission++;
+               
+               tradingDeals++;
+            }
+         }
+      }
+   }
+   
+   Print("======================================");
+   Print("BROKER OCTOBER SUMMARY:");
+   Print("  Trading deals (closed): ", tradingDeals);
+   Print("  Balance operations: ", balanceDeals);
+   Print("  ---");
+   Print("  Gross Profit: ", totalProfit);
+   Print("  Swap: ", totalSwap);
+   Print("  Commission: ", totalCommission);
+   Print("  Deposits: ", totalDeposits);
+   Print("  ---");
+   Print("  Net P&L (excl deposits): ", totalProfit + totalSwap + totalCommission);
+   Print("  Deals with Swap: ", dealsWithSwap);
+   Print("  Deals with Commission: ", dealsWithCommission);
+   Print("======================================");
 }
 
 //+------------------------------------------------------------------+
