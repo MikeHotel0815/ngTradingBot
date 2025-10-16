@@ -301,54 +301,24 @@ def heartbeat(account, db):
         profit_week = data.get('profit_week')
         profit_month = data.get('profit_month')
         profit_year = data.get('profit_year')
+        deposits_today = data.get('deposits_today')
+        deposits_week = data.get('deposits_week')
+        deposits_month = data.get('deposits_month')
+        deposits_year = data.get('deposits_year')
 
-        # ✅ FIX: Calculate accurate profits from database instead of trusting MT5's values
-        # MT5 calculates profit_today incorrectly (uses deal history with server time instead of close_time)
-        from sqlalchemy import func, cast, Date
-        from models import Trade
-
-        now = datetime.utcnow()
-        today_date = now.date()
-        week_start_date = (now - timedelta(days=now.weekday())).date()  # Monday
-        month_start_date = now.replace(day=1).date()
-        year_start_date = now.replace(month=1, day=1).date()
-
-        # Calculate actual profit from closed trades
-        # Use DATE comparison to avoid timezone issues (close_time is in broker time, not UTC)
-        # Note: profit field already includes commission and swap
-        actual_profit_today = db.query(
-            func.coalesce(func.sum(Trade.profit), 0)
-        ).filter(
-            Trade.account_id == account.id,
-            Trade.status == 'closed',
-            cast(Trade.close_time, Date) == today_date
-        ).scalar() or 0.0
-
-        actual_profit_week = db.query(
-            func.coalesce(func.sum(Trade.profit), 0)
-        ).filter(
-            Trade.account_id == account.id,
-            Trade.status == 'closed',
-            cast(Trade.close_time, Date) >= week_start_date
-        ).scalar() or 0.0
-
-        actual_profit_month = db.query(
-            func.coalesce(func.sum(Trade.profit), 0)
-        ).filter(
-            Trade.account_id == account.id,
-            Trade.status == 'closed',
-            cast(Trade.close_time, Date) >= month_start_date
-        ).scalar() or 0.0
-
-        actual_profit_year = db.query(
-            func.coalesce(func.sum(Trade.profit), 0)
-        ).filter(
-            Trade.account_id == account.id,
-            Trade.status == 'closed',
-            cast(Trade.close_time, Date) >= year_start_date
-        ).scalar() or 0.0
-
-        # Don't subtract deposits/withdrawals - just use raw profit from trades
+        # ✅ UPDATED: Use profit values from MT5 EA (now excludes deposits/withdrawals)
+        # EA's GetProfitSince() function filters out DEAL_TYPE_BALANCE operations
+        # This gives us accurate trading profit without manual recalculation
+        actual_profit_today = profit_today if profit_today is not None else 0.0
+        actual_profit_week = profit_week if profit_week is not None else 0.0
+        actual_profit_month = profit_month if profit_month is not None else 0.0
+        actual_profit_year = profit_year if profit_year is not None else 0.0
+        
+        # Deposits/Withdrawals (separate from profit)
+        actual_deposits_today = deposits_today if deposits_today is not None else 0.0
+        actual_deposits_week = deposits_week if deposits_week is not None else 0.0
+        actual_deposits_month = deposits_month if deposits_month is not None else 0.0
+        actual_deposits_year = deposits_year if deposits_year is not None else 0.0
         # The initial balance is not a withdrawal, it's starting capital
         # Update last heartbeat and account data
         account.last_heartbeat = datetime.utcnow()
@@ -361,11 +331,15 @@ def heartbeat(account, db):
         if free_margin is not None:
             account.free_margin = free_margin
 
-        # Use profits calculated directly from database trades
+        # Use profits and deposits from MT5 EA
         account.profit_today = actual_profit_today
         account.profit_week = actual_profit_week
         account.profit_month = actual_profit_month
         account.profit_year = actual_profit_year
+        account.deposits_today = actual_deposits_today
+        account.deposits_week = actual_deposits_week
+        account.deposits_month = actual_deposits_month
+        account.deposits_year = actual_deposits_year
         
         db.commit()
 

@@ -32,6 +32,10 @@ class Account(Base):
     profit_week = Column(Numeric(15, 2), default=0.0)
     profit_month = Column(Numeric(15, 2), default=0.0)
     profit_year = Column(Numeric(15, 2), default=0.0)
+    deposits_today = Column(Numeric(15, 2), default=0.0)
+    deposits_week = Column(Numeric(15, 2), default=0.0)
+    deposits_month = Column(Numeric(15, 2), default=0.0)
+    deposits_year = Column(Numeric(15, 2), default=0.0)
     created_at = Column(DateTime, default=datetime.utcnow)
     last_heartbeat = Column(DateTime)
 

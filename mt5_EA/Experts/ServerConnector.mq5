@@ -55,6 +55,12 @@ int lastDealsCount = 0;
 datetime lastProfitUpdate = 0;
 bool profitUpdateInProgress = false;  // Mutex to prevent race conditions
 
+// Deposits/Withdrawals caching
+double cachedDepositsToday = 0.0;
+double cachedDepositsWeek = 0.0;
+double cachedDepositsMonth = 0.0;
+double cachedDepositsYear = 0.0;
+
 // Transaction tracking
 datetime lastTransactionCheck = 0;
 
@@ -686,12 +692,15 @@ void SendAllHistoricalData()
 //+------------------------------------------------------------------+
 //| Calculate total deposits since account creation                  |
 //+------------------------------------------------------------------+
-double GetTotalDeposits()
+//+------------------------------------------------------------------+
+//| Get deposits/withdrawals since a specific time                   |
+//+------------------------------------------------------------------+
+double GetDepositsSince(datetime sinceTime)
 {
    double totalDeposits = 0.0;
 
-   // Get all history since account creation (timestamp 0)
-   if(!HistorySelect(0, TimeCurrent()))
+   // Get history since specified time
+   if(!HistorySelect(sinceTime, TimeCurrent()))
    {
       Print("Failed to select history for deposits");
       return 0.0;
@@ -719,6 +728,14 @@ double GetTotalDeposits()
 }
 
 //+------------------------------------------------------------------+
+//| Get total deposits since account creation                        |
+//+------------------------------------------------------------------+
+double GetTotalDeposits()
+{
+   return GetDepositsSince(0);  // All time
+}
+
+//+------------------------------------------------------------------+
 //| Calculate profit since a given timestamp                         |
 //+------------------------------------------------------------------+
 double GetProfitSince(datetime sinceTime)
@@ -739,6 +756,13 @@ double GetProfitSince(datetime sinceTime)
       ulong ticket = HistoryDealGetTicket(i);
       if(ticket > 0)
       {
+         // ✅ FIX: Exclude balance operations (deposits/withdrawals)
+         ENUM_DEAL_TYPE dealType = (ENUM_DEAL_TYPE)HistoryDealGetInteger(ticket, DEAL_TYPE);
+         
+         // Only count trading deals (BUY, SELL), not balance adjustments
+         if(dealType == DEAL_TYPE_BALANCE)
+            continue;
+         
          double dealProfit = HistoryDealGetDouble(ticket, DEAL_PROFIT);
          double dealSwap = HistoryDealGetDouble(ticket, DEAL_SWAP);
          double dealCommission = HistoryDealGetDouble(ticket, DEAL_COMMISSION);
@@ -748,6 +772,75 @@ double GetProfitSince(datetime sinceTime)
    }
 
    return totalProfit;
+}
+
+//+------------------------------------------------------------------+
+//| Get deposits/withdrawals for today                               |
+//+------------------------------------------------------------------+
+double GetDepositsToday()
+{
+   MqlDateTime today;
+   TimeToStruct(TimeCurrent(), today);
+   today.hour = 0;
+   today.min = 0;
+   today.sec = 0;
+
+   datetime startOfDay = StructToTime(today);
+   return GetDepositsSince(startOfDay);
+}
+
+//+------------------------------------------------------------------+
+//| Get deposits/withdrawals for this week                           |
+//+------------------------------------------------------------------+
+double GetDepositsWeek()
+{
+   MqlDateTime now;
+   TimeToStruct(TimeCurrent(), now);
+
+   int dayOfWeek = now.day_of_week;  // 0=Sunday, 1=Monday, ..., 6=Saturday
+   int daysToMonday = (dayOfWeek == 0) ? 6 : (dayOfWeek - 1);  // Days since Monday
+
+   datetime startOfWeek = TimeCurrent() - (daysToMonday * 86400);
+   MqlDateTime weekStart;
+   TimeToStruct(startOfWeek, weekStart);
+   weekStart.hour = 0;
+   weekStart.min = 0;
+   weekStart.sec = 0;
+
+   return GetDepositsSince(StructToTime(weekStart));
+}
+
+//+------------------------------------------------------------------+
+//| Get deposits/withdrawals for this month                          |
+//+------------------------------------------------------------------+
+double GetDepositsMonth()
+{
+   MqlDateTime now;
+   TimeToStruct(TimeCurrent(), now);
+   now.day = 1;
+   now.hour = 0;
+   now.min = 0;
+   now.sec = 0;
+
+   datetime startOfMonth = StructToTime(now);
+   return GetDepositsSince(startOfMonth);
+}
+
+//+------------------------------------------------------------------+
+//| Get deposits/withdrawals for this year                           |
+//+------------------------------------------------------------------+
+double GetDepositsYear()
+{
+   MqlDateTime now;
+   TimeToStruct(TimeCurrent(), now);
+   now.mon = 1;
+   now.day = 1;
+   now.hour = 0;
+   now.min = 0;
+   now.sec = 0;
+
+   datetime startOfYear = StructToTime(now);
+   return GetDepositsSince(startOfYear);
 }
 
 //+------------------------------------------------------------------+
@@ -830,10 +923,18 @@ void UpdateProfitCache()
 
    profitUpdateInProgress = true;
 
+   // Update profit cache
    cachedProfitToday = GetProfitToday();
    cachedProfitWeek = GetProfitWeek();
    cachedProfitMonth = GetProfitMonth();
    cachedProfitYear = GetProfitYear();
+   
+   // Update deposits cache
+   cachedDepositsToday = GetDepositsToday();
+   cachedDepositsWeek = GetDepositsWeek();
+   cachedDepositsMonth = GetDepositsMonth();
+   cachedDepositsYear = GetDepositsYear();
+   
    lastProfitUpdate = TimeCurrent();
 
    profitUpdateInProgress = false;
@@ -1898,7 +1999,7 @@ bool SendHeartbeat()
    UpdateProfitCache();
 
    string jsonData = StringFormat(
-      "{\"account\":%d,\"api_key\":\"%s\",\"timestamp\":%d,\"balance\":%.2f,\"equity\":%.2f,\"margin\":%.2f,\"free_margin\":%.2f,\"profit_today\":%.2f,\"profit_week\":%.2f,\"profit_month\":%.2f,\"profit_year\":%.2f}",
+      "{\"account\":%d,\"api_key\":\"%s\",\"timestamp\":%d,\"balance\":%.2f,\"equity\":%.2f,\"margin\":%.2f,\"free_margin\":%.2f,\"profit_today\":%.2f,\"profit_week\":%.2f,\"profit_month\":%.2f,\"profit_year\":%.2f,\"deposits_today\":%.2f,\"deposits_week\":%.2f,\"deposits_month\":%.2f,\"deposits_year\":%.2f}",
       AccountInfoInteger(ACCOUNT_LOGIN),
       apiKey,
       TimeCurrent(),
@@ -1909,7 +2010,11 @@ bool SendHeartbeat()
       cachedProfitToday,
       cachedProfitWeek,
       cachedProfitMonth,
-      cachedProfitYear
+      cachedProfitYear,
+      cachedDepositsToday,
+      cachedDepositsWeek,
+      cachedDepositsMonth,
+      cachedDepositsYear
    );
 
    char post[];
