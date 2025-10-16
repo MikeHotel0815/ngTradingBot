@@ -9,7 +9,7 @@
 #property strict
 
 // MANUAL: Update this date when code is modified!
-#define CODE_LAST_MODIFIED "2025-10-16 13:15:00"  // FIX: Deposits/Withdrawals tracking separate from profit
+#define CODE_LAST_MODIFIED "2025-10-16 15:23:00"  // FIX: Deposits/Withdrawals tracking separate from profit
 
 // Input parameters
 input string ServerURL = "http://100.97.100.50:9900";  // Python server URL (Tailscale)
