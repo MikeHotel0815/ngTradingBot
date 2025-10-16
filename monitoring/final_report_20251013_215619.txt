@@ -1,0 +1,87 @@
+==========================================
+72-STUNDEN TEST - ABSCHLUSSBERICHT
+==========================================
+Test-Zeitraum: Fri Oct 10 21:55:34 CEST 2025 bis Mon Oct 13 21:56:19 CEST 2025
+
+ZUSAMMENFASSUNG:
+- Gesamte Prüfungen: 3718
+- Gesamte Fehler: 58041
+- Container-Restarts: 0
+
+ENDGÜLTIGE CONTAINER-STATUS:
+NAMES                           STATUS                CREATED
+ngtradingbot_trade_timeout      Up 2 days             2 days ago
+ngtradingbot_server             Up 2 days             3 days ago
+ngtradingbot_news_fetch         Up 3 days             3 days ago
+ngtradingbot_decision_cleanup   Up 3 days             3 days ago
+ngtradingbot_db                 Up 3 days (healthy)   3 days ago
+ngtradingbot_redis              Up 3 days (healthy)   3 days ago
+
+RESSOURCEN-NUTZUNG:
+NAME                            CPU %     MEM USAGE / LIMIT    MEM %
+radarr                          0.03%     131.2MiB / 94.1GiB   0.14%
+qbittorrent                     0.02%     26.96MiB / 94.1GiB   0.03%
+sonarr                          0.03%     262MiB / 94.1GiB     0.27%
+ngtradingbot_trade_timeout      0.00%     48.31MiB / 94.1GiB   0.05%
+ngtradingbot_server             11.07%    224.5MiB / 94.1GiB   0.23%
+ngtradingbot_news_fetch         0.00%     57.79MiB / 94.1GiB   0.06%
+ngtradingbot_decision_cleanup   0.00%     50.07MiB / 94.1GiB   0.05%
+ngtradingbot_db                 4.99%     347.4MiB / 94.1GiB   0.36%
+ngtradingbot_redis              0.60%     62.84MiB / 94.1GiB   0.07%
+wikijs-app                      0.01%     186.6MiB / 94.1GiB   0.19%
+wikijs-db                       0.00%     39.03MiB / 94.1GiB   0.04%
+mailcow-memcached-mailcow-1     0.01%     3.809MiB / 94.1GiB   0.00%
+paperless-gotenberg             0.02%     32.65MiB / 94.1GiB   0.03%
+sabnzbd                         0.04%     87.55MiB / 94.1GiB   0.09%
+mosquitto                       0.14%     6.875MiB / 94.1GiB   0.01%
+cloudflareddns                  0.00%     23.95MiB / 94.1GiB   0.02%
+bazarr                          0.08%     232.1MiB / 94.1GiB   0.24%
+jellyfin                        0.00%     554.9MiB / 94.1GiB   0.58%
+prowlarr                        0.03%     196.8MiB / 94.1GiB   0.20%
+bookstack-db                    0.01%     171MiB / 94.1GiB     0.18%
+n8n                             0.00%     286.8MiB / 94.1GiB   0.30%
+gluetun                         2.28%     159.8MiB / 94.1GiB   0.17%
+mailcow-mysql-mailcow-1         0.01%     305.1MiB / 94.1GiB   0.32%
+bookstack-app                   0.01%     64.9MiB / 94.1GiB    0.07%
+postgresql17-teslamate          1.12%     165.7MiB / 94.1GiB   0.17%
+mt5-grafana                     0.31%     214.5MiB / 94.1GiB   0.22%
+python-bridge-server            0.12%     56.04MiB / 94.1GiB   0.06%
+mt5-timescaledb                 0.33%     553.5MiB / 94.1GiB   0.57%
+mt5-prometheus                  0.00%     97.94MiB / 94.1GiB   0.10%
+mailcow-ofelia-mailcow-1        0.00%     313.3MiB / 94.1GiB   0.33%
+paperless-db                    0.65%     44.97MiB / 94.1GiB   0.05%
+paperless-ngx                   3.04%     668.7MiB / 94.1GiB   0.69%
+paperless-redis                 0.36%     12.54MiB / 94.1GiB   0.01%
+paperless-tika                  0.11%     483.4MiB / 94.1GiB   0.50%
+regnodeicieli-sync              0.00%     99.55MiB / 94.1GiB   0.10%
+HomeAssistant_inabox            0.01%     76.48MiB / 94.1GiB   0.08%
+frigate                         23.42%    1.708GiB / 94.1GiB   1.81%
+HandBrake                       0.09%     189.2MiB / 94.1GiB   0.20%
+homepage                        0.00%     139.8MiB / 94.1GiB   0.15%
+watchtower                      1.74%     37.66MiB / 94.1GiB   0.04%
+TeslaMate-Grafana               0.10%     197.5MiB / 94.1GiB   0.20%
+SMBv1_Printer                   0.00%     47.98MiB / 94.1GiB   0.05%
+ai-terminal                     9.32%     1.48GiB / 94.1GiB    1.57%
+Nginx-Proxy-Manager-Official    0.05%     177.7MiB / 1GiB      17.35%
+UrBackup                        0.00%     104.7MiB / 94.1GiB   0.11%
+mailcow-ipv6nat-mailcow-1       0.17%     26.64MiB / 94.1GiB   0.03%
+mailcow-watchdog-mailcow-1      0.22%     44.56MiB / 94.1GiB   0.05%
+mailcow-acme-mailcow-1          0.00%     4.109MiB / 94.1GiB   0.00%
+mailcow-nginx-mailcow-1         0.00%     36.89MiB / 94.1GiB   0.04%
+mailcow-rspamd-mailcow-1        0.23%     210.1MiB / 94.1GiB   0.22%
+mailcow-dovecot-mailcow-1       0.01%     150.9MiB / 94.1GiB   0.16%
+mailcow-postfix-mailcow-1       0.01%     108.1MiB / 94.1GiB   0.11%
+mailcow-php-fpm-mailcow-1       0.01%     103MiB / 94.1GiB     0.11%
+mailcow-clamd-mailcow-1         0.00%     1.786GiB / 94.1GiB   1.90%
+mailcow-redis-mailcow-1         0.33%     24.31MiB / 94.1GiB   0.03%
+mailcow-unbound-mailcow-1       0.01%     78.22MiB / 94.1GiB   0.08%
+mailcow-sogo-mailcow-1          0.15%     368.1MiB / 94.1GiB   0.38%
+mailcow-dockerapi-mailcow-1     0.18%     122.5MiB / 94.1GiB   0.13%
+mailcow-olefy-mailcow-1         0.00%     25.49MiB / 94.1GiB   0.03%
+mailcow-netfilter-mailcow-1     0.00%     29.35MiB / 94.1GiB   0.03%
+Crontab-UI                      0.44%     75.3MiB / 94.1GiB    0.08%
+TeslaMate                       467.87%   249.1MiB / 94.1GiB   0.26%
+
+DATENBANK-STATISTIKEN:
+
+==========================================

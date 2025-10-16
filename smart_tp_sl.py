@@ -27,11 +27,11 @@ class SymbolConfig:
     ASSET_CLASSES = {
         'FOREX_MAJOR': {
             'symbols': ['EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'AUDUSD', 'USDCAD', 'NZDUSD'],
-            'atr_tp_multiplier': 2.0,      # Conservative for Forex
-            'atr_sl_multiplier': 1.2,      # Tighter stop
+            'atr_tp_multiplier': 2.5,      # ✅ INCREASED from 2.0 to 2.5 (wider TP for BUY)
+            'atr_sl_multiplier': 1.0,      # ✅ REDUCED from 1.2 to 1.0 (tighter SL)
             'trailing_multiplier': 0.8,    # 0.8x ATR
-            'max_tp_pct': 1.0,             # Max 1% (100 pips typically)
-            'min_sl_pct': 0.15,            # Min 15 pips
+            'max_tp_pct': 1.2,             # ✅ INCREASED from 1.0% to 1.2% (allow wider TP)
+            'min_sl_pct': 0.12,            # ✅ REDUCED from 0.15 to 0.12 (allow tighter SL)
             'fallback_atr_pct': 0.0008,    # 0.08% (~8 pips @ 1.0000)
         },
         'FOREX_MINOR': {
@@ -73,14 +73,14 @@ class SymbolConfig:
             'fallback_atr_pct': 0.008,     # 0.8%
         },
         'INDICES': {
-            'symbols': ['US30', 'NAS100', 'SPX500', 'GER40', 'UK100', 'JPN225', 
-                       'AUS200', 'FRA40', 'ESP35', 'ITA40'],
-            'atr_tp_multiplier': 2.0,
-            'atr_sl_multiplier': 1.2,
+            'symbols': ['US30', 'NAS100', 'SPX500', 'GER40', 'UK100', 'JPN225',
+                       'AUS200', 'FRA40', 'ESP35', 'ITA40', 'DE40.c'],  # ✅ ADDED DE40.c
+            'atr_tp_multiplier': 4.5,      # ✅ INCREASED to maintain 1:1.5 R/R ratio with wider SL
+            'atr_sl_multiplier': 3.0,      # ✅ INCREASED from 1.0 to 3.0 (DAX needs more room due to volatility)
             'trailing_multiplier': 0.9,
-            'max_tp_pct': 1.5,
-            'min_sl_pct': 0.3,
-            'fallback_atr_pct': 0.006,     # 0.6%
+            'max_tp_pct': 2.5,             # ✅ INCREASED to accommodate wider TP
+            'min_sl_pct': 0.4,             # ✅ INCREASED to accommodate wider SL
+            'fallback_atr_pct': 0.008,     # ✅ INCREASED from 0.6% to 0.8% for wider stops
         },
         'COMMODITIES': {
             'symbols': ['XTIUSD', 'XBRUSD', 'NATGAS', 'UKOUSD'],  # Oil, Brent, Gas
@@ -406,9 +406,16 @@ class SmartTPSLCalculator:
     ) -> list:
         """Calculate all TP candidates with distances"""
         candidates = []
-        
-        # Get asset-specific multiplier
-        tp_multiplier = self.asset_config.get('atr_tp_multiplier', 2.5)
+
+        # ✅ FIX: Asymmetric TP - BUY needs wider TP than SELL
+        base_tp_multiplier = self.asset_config.get('atr_tp_multiplier', 2.5)
+
+        if signal_type == 'BUY':
+            # BUY: Use 1.2x the base multiplier (wider TP)
+            tp_multiplier = base_tp_multiplier * 1.2
+        else:
+            # SELL: Use standard multiplier
+            tp_multiplier = base_tp_multiplier
 
         # 1. ATR-based TP (asset-specific multiplier)
         if atr > 0:
@@ -416,7 +423,7 @@ class SmartTPSLCalculator:
             candidates.append({
                 'price': atr_tp,
                 'distance': abs(atr_tp - entry),
-                'reason': f'ATR {tp_multiplier}x'
+                'reason': f'ATR {tp_multiplier:.1f}x'
             })
 
         # 2. Bollinger Band TP
@@ -475,9 +482,16 @@ class SmartTPSLCalculator:
     ) -> list:
         """Calculate all SL candidates"""
         candidates = []
-        
-        # Get asset-specific multiplier
-        sl_multiplier = self.asset_config.get('atr_sl_multiplier', 1.5)
+
+        # ✅ FIX: Asymmetric SL - BUY needs tighter SL than SELL
+        base_sl_multiplier = self.asset_config.get('atr_sl_multiplier', 1.0)
+
+        if signal_type == 'BUY':
+            # BUY: Use 0.9x the base multiplier (tighter SL)
+            sl_multiplier = base_sl_multiplier * 0.9
+        else:
+            # SELL: Use standard multiplier
+            sl_multiplier = base_sl_multiplier
 
         # 1. ATR-based SL (asset-specific multiplier)
         if atr > 0:
@@ -485,7 +499,7 @@ class SmartTPSLCalculator:
             candidates.append({
                 'price': atr_sl,
                 'distance': abs(atr_sl - entry),
-                'reason': f'ATR {sl_multiplier}x'
+                'reason': f'ATR {sl_multiplier:.1f}x'
             })
 
         # 2. Bollinger Band SL (outside the band)
@@ -634,11 +648,15 @@ class SmartTPSLCalculator:
             if tp >= entry or sl <= entry:
                 return False
 
-        # 2. Check risk/reward minimum (1:1.5)
+        # 2. Check risk/reward minimum (asymmetric - BUY needs better R:R)
         risk = abs(entry - sl)
         reward = abs(tp - entry)
-        if risk == 0 or reward / risk < 1.5:
-            logger.warning(f"Risk/Reward too low: {reward/risk:.2f}")
+
+        # ✅ FIX: BUY requires minimum 1:2 R:R, SELL requires 1:1.5
+        min_rr = 2.0 if signal_type == 'BUY' else 1.5
+
+        if risk == 0 or reward / risk < min_rr:
+            logger.warning(f"Risk/Reward too low for {signal_type}: {reward/risk:.2f} (min: {min_rr:.1f})")
             return False
 
         # 3. Check TP not too far (asset-specific maximum)

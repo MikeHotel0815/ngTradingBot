@@ -116,6 +116,7 @@ class PatternRecognizer:
         # Check cache first
         cached = self._get_cached()
         if cached is not None:
+            # logger.debug(f"🔍 Pattern cache HIT: {self.symbol} {self.timeframe} - {len(cached)} patterns cached")
             return cached
 
         patterns = []
@@ -123,7 +124,10 @@ class PatternRecognizer:
         # Get OHLC data
         df = self._get_ohlc_data()
         if df is None or len(df) < 5:
+            logger.info(f"🔍 Pattern detection SKIPPED: {self.symbol} {self.timeframe} - insufficient OHLC data")
             return patterns
+
+        logger.info(f"🔍 Pattern detection START: {self.symbol} {self.timeframe} - {len(df)} candles available")
 
         open_p = df['open'].values
         high = df['high'].values
@@ -230,6 +234,11 @@ class PatternRecognizer:
 
         # Cache patterns
         self._set_cache(patterns)
+
+        logger.info(f"🔍 Pattern detection END: {self.symbol} {self.timeframe} - {len(patterns)} patterns detected")
+        if patterns:
+            for p in patterns:
+                logger.info(f"  └─ {p['name']} ({p['type']}) - Reliability: {p['reliability']}%")
 
         return patterns
 
@@ -362,6 +371,8 @@ class PatternRecognizer:
         patterns = self.detect_patterns()
         signals = []
 
+        logger.info(f"📊 Converting {len(patterns)} detected patterns to signals (reliability threshold: > 50%)")
+
         # Pattern categorization by strategy type
         # Mean-Reversion: Reversal patterns that work in ranging markets
         MEAN_REVERSION_PATTERNS = [
@@ -409,8 +420,13 @@ class PatternRecognizer:
                     'strategy_type': strategy_type
                 })
 
+                logger.info(f"  ✅ Pattern → Signal: {pattern['name']} ({signal_type}) - {strength} - {strategy_type}")
+
                 # Save high-reliability patterns to database
                 if pattern['reliability'] >= 60:
                     self.save_pattern_detection(pattern)
+            else:
+                logger.info(f"  ❌ Pattern REJECTED: {pattern['name']} - Reliability {pattern['reliability']}% ≤ 50%")
 
+        logger.info(f"📊 Pattern signals: {len(signals)} signals generated from {len(patterns)} patterns")
         return signals

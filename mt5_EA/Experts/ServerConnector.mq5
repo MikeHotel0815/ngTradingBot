@@ -9,7 +9,7 @@
 #property strict
 
 // MANUAL: Update this date when code is modified!
-#define CODE_LAST_MODIFIED "2025-10-08 19:30:00"  // Fixed filling mode detection + SL/TP validation
+#define CODE_LAST_MODIFIED "2025-10-13 20:15:00"  // CRITICAL FIX: Verify TP/SL after OrderSend + auto-modify if needed
 
 // Input parameters
 input string ServerURL = "http://100.97.100.50:9900";  // Python server URL (Tailscale)
@@ -1214,17 +1214,86 @@ void ExecuteOpenTrade(string commandId, string cmdObj)
       {
          if(result.retcode == TRADE_RETCODE_DONE)
          {
+            // CRITICAL FIX: Verify TP/SL were actually set by broker
+            // Some brokers/symbols don't accept TP/SL in initial order and return 0
+            Sleep(500);  // Give broker time to process
+
+            double actualSL = 0;
+            double actualTP = 0;
+            bool tpslVerified = false;
+
+            // Try to read actual TP/SL from opened position (with retries)
+            for(int retry = 0; retry < 3; retry++)
+            {
+               if(PositionSelectByTicket(result.order))
+               {
+                  actualSL = PositionGetDouble(POSITION_SL);
+                  actualTP = PositionGetDouble(POSITION_TP);
+
+                  if(actualSL != 0 && actualTP != 0)
+                  {
+                     tpslVerified = true;
+                     break;
+                  }
+               }
+               Sleep(200);
+            }
+
+            // If broker didn't set TP/SL, try to modify position
+            if(!tpslVerified || actualSL == 0 || actualTP == 0)
+            {
+               Print("WARNING: Broker did not set TP/SL in initial order! Attempting to modify position...");
+               Print("  Requested: SL=", sl, " TP=", tp);
+               Print("  Got: SL=", actualSL, " TP=", actualTP);
+
+               // Attempt to modify position with TP/SL
+               MqlTradeRequest modifyReq;
+               MqlTradeResult modifyRes;
+               ZeroMemory(modifyReq);
+               ZeroMemory(modifyRes);
+
+               modifyReq.action = TRADE_ACTION_SLTP;
+               modifyReq.position = result.order;
+               modifyReq.symbol = symbol;
+               modifyReq.sl = sl;
+               modifyReq.tp = tp;
+
+               if(OrderSend(modifyReq, modifyRes))
+               {
+                  if(modifyRes.retcode == TRADE_RETCODE_DONE)
+                  {
+                     Print("SUCCESS: TP/SL set via modify! SL:", sl, " TP:", tp);
+                     actualSL = sl;
+                     actualTP = tp;
+                     tpslVerified = true;
+                  }
+                  else
+                  {
+                     Print("ERROR: Modify failed with retcode: ", modifyRes.retcode);
+                     SendLog("ERROR", "TP/SL modification failed", StringFormat("Ticket %d retcode %d", result.order, modifyRes.retcode));
+                  }
+               }
+               else
+               {
+                  int modError = GetLastError();
+                  Print("ERROR: Modify OrderSend failed: ", modError, " - ", ErrorDescription(modError));
+                  SendLog("ERROR", "TP/SL modification failed", StringFormat("Ticket %d error %d", result.order, modError));
+               }
+            }
+
+            // Send response with ACTUAL TP/SL values (not requested ones!)
             string responseData = StringFormat(
-               "{\"ticket\":%d,\"price\":%.5f,\"volume\":%.2f,\"sl\":%.5f,\"tp\":%.5f}",
+               "{\"ticket\":%d,\"price\":%.5f,\"volume\":%.2f,\"sl\":%.5f,\"tp\":%.5f,\"tpsl_verified\":%s}",
                result.order,
                result.price,
                result.volume,
-               sl,
-               tp
+               actualSL,
+               actualTP,
+               tpslVerified ? "true" : "false"
             );
             SendCommandResponse(commandId, "completed", responseData);
-            Print("Trade opened successfully! Ticket: ", result.order, " Filling mode: ", fillingModes[fm]);
-            SendLog("INFO", "Command executed successfully", StringFormat("OPEN_TRADE: %s %s %.2f @ %.5f, Ticket: %d", orderTypeStr, symbol, volume, result.price, result.order));
+            Print("Trade opened successfully! Ticket: ", result.order, " Filling mode: ", fillingModes[fm], " TP/SL verified: ", tpslVerified);
+            SendLog("INFO", "Command executed successfully", StringFormat("OPEN_TRADE: %s %s %.2f @ %.5f, Ticket: %d, SL: %.5f, TP: %.5f", orderTypeStr, symbol, volume, result.price, result.order, actualSL, actualTP));
             orderSuccess = true;
             break;
          }

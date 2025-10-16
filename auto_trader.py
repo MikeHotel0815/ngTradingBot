@@ -407,27 +407,11 @@ class AutoTrader:
 
     def should_execute_signal(self, signal: TradingSignal, db: Session) -> Dict:
         """Determine if signal should be executed"""
+        # 🔒 CRITICAL: Redis lock to prevent race conditions on position checks
+        # This prevents multiple workers from opening duplicate positions simultaneously
+        # NOTE: Lock is NOT acquired here anymore - moved to process_new_signals()
+        # to ensure lock is held until trade command is created
         try:
-            # 🔒 CRITICAL: Redis lock to prevent race conditions on position checks
-            # This prevents multiple workers from opening duplicate positions simultaneously
-            lock_key = f"position_check:{signal.account_id}:{signal.symbol}:{signal.timeframe}"
-            lock_acquired = False
-
-            try:
-                # Try to acquire lock with 30-second timeout
-                lock_acquired = self.redis.redis_client.set(
-                    lock_key, "1", nx=True, ex=30
-                )
-
-                if not lock_acquired:
-                    # Another worker is processing this symbol+timeframe
-                    return {
-                        'execute': False,
-                        'reason': f'Position check in progress for {signal.symbol} {signal.timeframe}'
-                    }
-            except Exception as lock_error:
-                logger.warning(f"Redis lock error (continuing without lock): {lock_error}")
-                # Continue without lock (fail-open for availability)
 
             settings = self._load_settings(db)
 
@@ -599,14 +583,6 @@ class AutoTrader:
         except Exception as e:
             logger.error(f"Error evaluating signal: {e}")
             return {'execute': False, 'reason': str(e)}
-        finally:
-            # Release Redis lock if we acquired it
-            if lock_acquired:
-                try:
-                    self.redis.redis_client.delete(lock_key)
-                    logger.debug(f"🔓 Released position check lock for {signal.symbol} {signal.timeframe}")
-                except Exception as e:
-                    logger.error(f"Failed to release Redis lock: {e}")
 
     def _validate_tp_sl(self, signal: TradingSignal, adjusted_sl: float) -> bool:
         """
@@ -917,11 +893,39 @@ class AutoTrader:
 
             # Process new/updated signals
             for signal in signals_to_process:
+                # 🔒 CRITICAL FIX: Acquire Redis lock BEFORE position checks and hold until trade command created
+                # This prevents race conditions where multiple workers open duplicate positions
+                lock_key = f"position_check:{signal.account_id}:{signal.symbol}:{signal.timeframe}"
+                lock_acquired = False
+
+                try:
+                    # Try to acquire lock with 60-second timeout (longer to cover entire trade creation)
+                    lock_acquired = self.redis.redis_client.set(
+                        lock_key, "1", nx=True, ex=60
+                    )
+
+                    if not lock_acquired:
+                        # Another worker is processing this symbol+timeframe - skip
+                        logger.info(f"⏭️  Skipping signal #{signal.id} ({signal.symbol} {signal.timeframe}): Another worker is processing")
+                        continue
+
+                    logger.debug(f"🔒 Acquired lock for {signal.symbol} {signal.timeframe}")
+
+                except Exception as lock_error:
+                    logger.warning(f"Redis lock error for {signal.symbol} {signal.timeframe}: {lock_error}")
+                    # Continue without lock (fail-open for availability)
 
                 # Check if should execute
                 should_exec = self.should_execute_signal(signal, db)
                 if not should_exec['execute']:
                     logger.info(f"⏭️  Skipping signal #{signal.id} ({signal.symbol} {signal.timeframe}): {should_exec['reason']}")
+                    # Release lock before continuing
+                    if lock_acquired:
+                        try:
+                            self.redis.redis_client.delete(lock_key)
+                            logger.debug(f"🔓 Released lock for {signal.symbol} {signal.timeframe} (signal rejected)")
+                        except Exception as e:
+                            logger.error(f"Failed to release lock: {e}")
                     
                     # Log decision to AI Decision Log
                     from ai_decision_log import AIDecisionLogger
@@ -1052,9 +1056,19 @@ class AutoTrader:
                 # Create trade command
                 command = self.create_trade_command(db, signal, volume)
 
+                # 🔓 CRITICAL: Release lock IMMEDIATELY after trade command created
+                # This prevents holding the lock unnecessarily and allows other workers to proceed
+                if lock_acquired:
+                    try:
+                        self.redis.redis_client.delete(lock_key)
+                        logger.debug(f"🔓 Released lock for {signal.symbol} {signal.timeframe} (trade command created)")
+                        lock_acquired = False  # Mark as released
+                    except Exception as e:
+                        logger.error(f"Failed to release lock: {e}")
+
                 if command:
                     logger.info(f"🚀 Auto-Trade executed: Signal #{signal.id} → Command {command.id}")
-                    
+
                     # Log successful trade command to AI Decision Log
                     from ai_decision_log import AIDecisionLogger
                     decision_logger = AIDecisionLogger()

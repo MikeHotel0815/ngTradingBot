@@ -57,14 +57,46 @@ class SignalGenerator:
             # Aggregate signals
             signal = self._aggregate_signals(pattern_signals, indicator_signals)
 
-            # Minimum confidence threshold for signal generation (40%)
+            # ✅ INCREASED: Minimum confidence threshold for signal generation (50%)
             # Note: This is NOT the display/auto-trade threshold
             # - Trading Signals slider controls which signals are SHOWN in UI
             # - Auto-Trade slider controls which signals are AUTO-TRADED
             # This just ensures we don't generate completely weak signals
-            MIN_GENERATION_CONFIDENCE = 40
+            # RAISED from 40% to 50% to filter out weak signals
+            MIN_GENERATION_CONFIDENCE = 50
 
             if signal and signal['confidence'] >= MIN_GENERATION_CONFIDENCE:
+                # ✅ NEW: Ensemble validation BEFORE multi-timeframe check
+                from indicator_ensemble import get_indicator_ensemble
+
+                ensemble = get_indicator_ensemble(self.account_id, self.symbol, self.timeframe)
+                ensemble_result = ensemble.validate_signal(signal['signal_type'])
+
+                if not ensemble_result['valid']:
+                    logger.warning(
+                        f"⚠️ Ensemble validation FAILED for {self.symbol} {self.timeframe} "
+                        f"{signal['signal_type']}: {', '.join(ensemble_result['reasons'])}"
+                    )
+                    self._expire_active_signals(
+                        f"ensemble validation failed: {ensemble_result['reasons'][0]}"
+                    )
+                    return None
+
+                # Apply ensemble confidence (weighted average with original)
+                original_confidence = signal['confidence']
+                signal['confidence'] = (original_confidence * 0.6 + ensemble_result['confidence'] * 0.4)
+
+                # Add ensemble info to reasons
+                signal['reasons'].append(
+                    f"Ensemble: {ensemble_result['indicators_agreeing']}/{ensemble_result['indicators_total']} agree"
+                )
+
+                logger.info(
+                    f"✅ Ensemble validation PASSED: {self.symbol} {self.timeframe} "
+                    f"{signal['signal_type']} | Confidence: {original_confidence:.1f}% → "
+                    f"{signal['confidence']:.1f}% | Agreement: {ensemble_result['indicators_agreeing']}/{ensemble_result['indicators_total']}"
+                )
+
                 # ✅ NEW: Check multi-timeframe alignment BEFORE calculating TP/SL
                 from multi_timeframe_analyzer import check_multi_timeframe_conflict
 
@@ -157,16 +189,22 @@ class SignalGenerator:
             elif sig['type'] == 'SELL':
                 sell_signals.append(sig)
 
-        # Determine dominant signal
+        # ✅ ENHANCED: Require stronger consensus for BUY signals
+        # BUY needs 2+ more signals than SELL to account for downward bias
+        buy_count = len(buy_signals)
+        sell_count = len(sell_signals)
+
         signal_type = None
-        if len(buy_signals) > len(sell_signals):
+        if buy_count >= sell_count + 2:
+            # BUY: Need at least 2 more BUY signals than SELL
             signal_type = 'BUY'
             signals = buy_signals
-        elif len(sell_signals) > len(buy_signals):
+        elif sell_count > buy_count:
+            # SELL: Just need majority
             signal_type = 'SELL'
             signals = sell_signals
         else:
-            # Conflicting signals - no clear direction
+            # Not enough consensus or conflicting signals
             return None
 
         # Calculate confidence score
@@ -288,8 +326,16 @@ class SignalGenerator:
         ]
         strength_score = sum(strength_scores) / len(strength_scores) if strength_scores else 10
 
-        # Total confidence
+        # Total confidence (before direction adjustment)
         confidence = pattern_score + indicator_score + strength_score
+
+        # ✅ ASYMMETRIC ADJUSTMENT: Penalize BUY signals slightly to account for market bias
+        # BUY signals are historically less profitable, so we require higher confidence
+        signal_type = signals[0]['type'] if signals else 'UNKNOWN'
+        if signal_type == 'BUY':
+            # Reduce BUY confidence by 5% to make them harder to trigger
+            confidence = max(0, confidence - 5.0)
+            logger.debug(f"Applied BUY penalty: confidence reduced by 5%")
 
         return round(min(100, confidence), 2)
 

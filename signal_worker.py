@@ -178,8 +178,12 @@ class SignalWorker:
                     logger.debug(f"Skipping signal generation for {symbol_name} (no tick data)")
                     continue
 
+                # ✅ FIX: Extract tick data immediately to avoid detached instance errors
+                tick_tradeable = latest_tick.tradeable
+                tick_timestamp = latest_tick.timestamp
+
                 # Skip signal generation for non-tradeable symbols
-                if not latest_tick.tradeable:
+                if not tick_tradeable:
                     logger.debug(f"Skipping signal generation for {symbol_name} (outside trading hours)")
                     continue
 
@@ -195,7 +199,7 @@ class SignalWorker:
                     }
 
                     max_tick_age = STALE_TOLERANCE.get(timeframe, timedelta(minutes=5))
-                    tick_age = datetime.utcnow() - latest_tick.timestamp
+                    tick_age = datetime.utcnow() - tick_timestamp
 
                     if tick_age > max_tick_age:
                         logger.debug(f"Skipping {symbol_name} {timeframe} (stale data: {tick_age.total_seconds():.0f}s > {max_tick_age.total_seconds():.0f}s)")

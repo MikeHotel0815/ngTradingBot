@@ -60,6 +60,9 @@ services:
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
       - BACKUP_SCRIPT=/app/backup_to_github.sh
       - BACKUP_DIR=/app/backups
+      # Telegram notifications
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
     depends_on:
       postgres:
         condition: service_healthy
