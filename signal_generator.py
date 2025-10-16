@@ -333,9 +333,9 @@ class SignalGenerator:
         # BUY signals are historically less profitable, so we require higher confidence
         signal_type = signals[0]['type'] if signals else 'UNKNOWN'
         if signal_type == 'BUY':
-            # Reduce BUY confidence by 5% to make them harder to trigger
-            confidence = max(0, confidence - 5.0)
-            logger.debug(f"Applied BUY penalty: confidence reduced by 5%")
+            # Reduce BUY confidence by 3% to make them harder to trigger (reduced from 5%)
+            confidence = max(0, confidence - 3.0)
+            logger.debug(f"Applied BUY penalty: confidence reduced by 3%")
 
         return round(min(100, confidence), 2)
 

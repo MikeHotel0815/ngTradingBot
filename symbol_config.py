@@ -17,12 +17,13 @@ class SymbolConfig:
     """
 
     # Default parameters per symbol category
+    # ✅ UPDATED 2025-10-16: Lowered min_confidence across all categories to allow more quality signals
     INDEX_CONFIG = {
         'sl_multiplier': 1.0,  # Use full SL
         'breakeven_trigger_percent': 30.0,
         'partial_trailing_trigger_percent': 50.0,
         'aggressive_trailing_trigger_percent': 75.0,
-        'min_confidence': 55.0,  # Lower confidence OK for indices
+        'min_confidence': 45.0,  # ✅ LOWERED from 55% - allow quality signals
         'risk_per_trade_percent': 0.02,  # 2% risk
     }
 
@@ -31,7 +32,7 @@ class SymbolConfig:
         'breakeven_trigger_percent': 15.0,  # Earlier break-even
         'partial_trailing_trigger_percent': 35.0,  # Earlier partial trailing
         'aggressive_trailing_trigger_percent': 60.0,  # Earlier aggressive trailing
-        'min_confidence': 65.0,  # Higher confidence needed for forex
+        'min_confidence': 50.0,  # ✅ LOWERED from 65% - allow quality forex signals
         'risk_per_trade_percent': 0.015,  # 1.5% risk
     }
 
@@ -40,7 +41,7 @@ class SymbolConfig:
         'breakeven_trigger_percent': 20.0,
         'partial_trailing_trigger_percent': 40.0,
         'aggressive_trailing_trigger_percent': 70.0,
-        'min_confidence': 60.0,
+        'min_confidence': 55.0,  # ✅ LOWERED from 60% - crypto needs slightly higher due to volatility
         'risk_per_trade_percent': 0.025,  # 2.5% risk (more volatile)
     }
 
@@ -49,7 +50,7 @@ class SymbolConfig:
         'breakeven_trigger_percent': 25.0,
         'partial_trailing_trigger_percent': 45.0,
         'aggressive_trailing_trigger_percent': 70.0,
-        'min_confidence': 60.0,
+        'min_confidence': 50.0,  # ✅ LOWERED from 60% - allow quality commodity signals
         'risk_per_trade_percent': 0.02,
     }
 
@@ -60,19 +61,19 @@ class SymbolConfig:
             'breakeven_trigger_percent': 12.0,  # Very early break-even
             'partial_trailing_trigger_percent': 25.0,
             'aggressive_trailing_trigger_percent': 50.0,
-            'min_confidence': 60.0,  # Lowered from 70 to allow more trades
+            'min_confidence': 48.0,  # ✅ LOWERED from 60% - allow quality signals through
             'risk_per_trade_percent': 0.01,  # Lower risk
         },
         'EURUSD': {
             'sl_multiplier': 0.5,
             'breakeven_trigger_percent': 15.0,
-            'min_confidence': 60.0,  # Lowered from 70 to allow more trades
+            'min_confidence': 48.0,  # ✅ LOWERED from 60% - allow quality signals through
             'risk_per_trade_percent': 0.015,
         },
         'GBPUSD': {
             'sl_multiplier': 0.6,
             'breakeven_trigger_percent': 18.0,
-            'min_confidence': 65.0,  # Good performer (87.5% win-rate)
+            'min_confidence': 52.0,  # ✅ LOWERED from 65% (good performer, keep slightly higher)
             'risk_per_trade_percent': 0.018,
         },
         'BTCUSD': {
@@ -81,21 +82,21 @@ class SymbolConfig:
             'breakeven_trigger_percent': 15.0,  # Early break-even
             'partial_trailing_trigger_percent': 30.0,
             'aggressive_trailing_trigger_percent': 55.0,
-            'min_confidence': 70.0,  # Lowered from 75 to 70 (still strict but allows good signals)
+            'min_confidence': 62.0,  # ✅ LOWERED from 70% - still strict due to poor performance
             'risk_per_trade_percent': 0.015,  # Lower risk (was 2.5%)
         },
         'XAUUSD': {
-            # ✅ UPDATED 2025-10-10: Performance dropped to 33% WR after SL hits - adjusting params
-            'sl_multiplier': 0.9,           # ✅ Slightly increased from 0.8 to allow more room
-            'breakeven_trigger_percent': 15.0,  # ✅ FIXED: Reduced from 25% to 15% (earlier break-even)
-            'min_confidence': 65.0,         # ✅ Increased from 60% to 65% (higher quality trades)
-            'risk_per_trade_percent': 0.015,  # ✅ Reduced risk from 2% to 1.5%
+            # ✅ UPDATED 2025-10-16: Lowering confidence to allow more quality signals
+            'sl_multiplier': 0.9,           # Slightly increased from 0.8 to allow more room
+            'breakeven_trigger_percent': 15.0,  # Reduced from 25% to 15% (earlier break-even)
+            'min_confidence': 52.0,         # ✅ LOWERED from 65% to 52% (balance quality vs quantity)
+            'risk_per_trade_percent': 0.015,  # Reduced risk from 2% to 1.5%
         },
         'DE40.c': {
             # PERFORMANCE: 100% win-rate, €0.97 avg → PERFECT, keep aggressive
             'sl_multiplier': 1.0,
             'breakeven_trigger_percent': 30.0,
-            'min_confidence': 55.0,  # Lower confidence OK
+            'min_confidence': 45.0,  # ✅ LOWERED from 55% (perfect performer, allow more trades)
             'risk_per_trade_percent': 0.02,
         },
     }
