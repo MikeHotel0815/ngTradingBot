@@ -91,6 +91,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - DATABASE_URL=postgresql://trader:${DB_PASSWORD:-tradingbot_secret_2025}@postgres:5432/ngtradingbot
+      - REDIS_URL=redis://redis:6379/0
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_NAME=ngtradingbot
@@ -103,6 +104,7 @@ services:
       - STRATEGY_VALIDATION_CHECK_INTERVAL=${STRATEGY_VALIDATION_CHECK_INTERVAL:-300}  # 5 minutes
       - DRAWDOWN_CHECK_INTERVAL=${DRAWDOWN_CHECK_INTERVAL:-60}  # 1 minute
       - PARTIAL_CLOSE_CHECK_INTERVAL=${PARTIAL_CLOSE_CHECK_INTERVAL:-60}  # 1 minute
+      - AUTO_TRADER_CHECK_INTERVAL=${AUTO_TRADER_CHECK_INTERVAL:-60}  # 1 minute
       # Trade timeout settings
       - TRADE_TIMEOUT_HOURS=${TRADE_TIMEOUT_HOURS:-48}
       - TRADE_TIMEOUT_ENABLED=${TRADE_TIMEOUT_ENABLED:-true}

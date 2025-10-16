@@ -297,6 +297,26 @@ def import_worker_functions():
     except Exception as e:
         logger.error(f"Failed to import partial_close_worker: {e}")
     
+    try:
+        # Auto Trader Worker
+        logger.info("📦 Importing auto_trader_worker...")
+        from auto_trader import get_auto_trader
+        from database import ScopedSession
+        
+        def run_auto_trader():
+            """Execute auto-trading logic"""
+            auto_trader = get_auto_trader()
+            db = ScopedSession()
+            try:
+                auto_trader.process_new_signals(db)
+            finally:
+                db.close()
+        
+        workers['auto_trader'] = run_auto_trader
+        
+    except Exception as e:
+        logger.error(f"Failed to import auto_trader_worker: {e}")
+    
     return workers
 
 
@@ -373,6 +393,10 @@ def main():
         'partial_close': {
             'function': worker_functions.get('partial_close'),
             'interval': int(os.getenv('PARTIAL_CLOSE_CHECK_INTERVAL', 60)),  # 1 minute
+        },
+        'auto_trader': {
+            'function': worker_functions.get('auto_trader'),
+            'interval': int(os.getenv('AUTO_TRADER_CHECK_INTERVAL', 60)),  # 1 minute
         },
     }
     

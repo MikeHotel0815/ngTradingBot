@@ -361,10 +361,10 @@ class AutoTrader:
                     # Position size = Risk Amount / SL Distance
                     volume = risk_amount / sl_distance
                     volume = round(volume, 2)  # Round to 2 decimals
-                    return max(0.01, min(volume, 1.0))  # Min 0.01, Max 1.0
+                    return max(0.01, min(volume, 0.01))  # Min 0.01, Max 0.01 (TEST MODE)
 
             # Fallback: use percentage of balance
-            return round(float(balance) * float(settings.position_size_percent) / float(signal.entry_price), 2)
+            return 0.01  # FIXED: Always use 0.01 for testing
 
         except Exception as e:
             logger.error(f"Error calculating position size: {e}")
