@@ -480,11 +480,43 @@ def get_commands(account, db):
 
         # STEP 2: Pop up to 10 commands from Redis queue for delivery
         commands_data = []
+        processed_command_ids = set()  # Track which commands we're sending
+        
         for _ in range(10):
             cmd = redis.pop_command(account.id)
             if not cmd:
                 break
-            commands_data.append(cmd)
+            
+            cmd_id = cmd.get('id')
+            
+            # ✅ CRITICAL: Mark command as 'processing' in database to prevent duplicate execution
+            if cmd_id:
+                try:
+                    db_command = db.query(Command).filter_by(id=cmd_id).first()
+                    if db_command:
+                        # Only send if not already completed or failed
+                        if db_command.status in ['pending', 'executing']:
+                            # Check if we already sent this command in this batch
+                            if cmd_id not in processed_command_ids:
+                                db_command.status = 'processing'
+                                db.commit()
+                                commands_data.append(cmd)
+                                processed_command_ids.add(cmd_id)
+                                logger.info(f"✅ Delivering command {cmd_id} to EA (status: processing)")
+                            else:
+                                logger.warning(f"⚠️ Skipping duplicate command {cmd_id} in same batch")
+                        else:
+                            logger.warning(f"⚠️ Skipping already {db_command.status} command {cmd_id}")
+                    else:
+                        # Command not in DB (shouldn't happen, but send it anyway)
+                        commands_data.append(cmd)
+                except Exception as e:
+                    logger.error(f"Error checking command {cmd_id} status: {e}")
+                    # Send it anyway to avoid blocking
+                    commands_data.append(cmd)
+            else:
+                # No ID (shouldn't happen)
+                commands_data.append(cmd)
 
         return jsonify({
             'status': 'success',
