@@ -2,6 +2,8 @@ services:
   postgres:
     image: postgres:15
     container_name: ngtradingbot_db
+    env_file:
+      - .env.telegram
     ports:
       - "9904:5432"
     volumes:
@@ -39,6 +41,8 @@ services:
   server:
     build: .
     container_name: ngtradingbot_server
+    env_file:
+      - .env.telegram
     ports:
       - "9900:9900"
       - "9901:9901"
@@ -61,8 +65,8 @@ services:
       - BACKUP_SCRIPT=/app/backup_to_github.sh
       - BACKUP_DIR=/app/backups
       # Telegram notifications
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
-      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - TELEGRAM_BOT_TOKEN=8454891267:AAHKrGTcGCVfXjb0LNjq6QAC816Un9ig7VA
+      - TELEGRAM_CHAT_ID=557944459
     depends_on:
       postgres:
         condition: service_healthy
@@ -81,6 +85,8 @@ services:
   workers:
     build: .
     container_name: ngtradingbot_workers
+    env_file:
+      - .env.telegram
     command: python unified_workers.py
     environment:
       - PYTHONUNBUFFERED=1

@@ -174,6 +174,71 @@ class TelegramNotifier:
 
         return self.send_message(message, silent=True)
 
+    def send_trade_closed_alert(self, trade_info: Dict, account_balance: float) -> bool:
+        """Send trade closed notification with current account balance"""
+        
+        ticket = trade_info.get('ticket')
+        symbol = trade_info.get('symbol')
+        direction = trade_info.get('direction', '').upper()
+        volume = trade_info.get('volume', 0)
+        open_price = trade_info.get('open_price', 0)
+        close_price = trade_info.get('close_price', 0)
+        profit = trade_info.get('profit', 0)
+        swap = trade_info.get('swap', 0)
+        commission = trade_info.get('commission', 0)
+        close_reason = trade_info.get('close_reason', 'Unknown')
+        duration = trade_info.get('duration', '')
+        
+        # Calculate total P&L
+        total_pnl = float(profit or 0) + float(swap or 0) + float(commission or 0)
+        
+        # Choose emoji based on profit
+        if total_pnl > 0:
+            pnl_emoji = '💚✅'
+            result_text = 'WIN'
+        elif total_pnl < 0:
+            pnl_emoji = '❤️❌'
+            result_text = 'LOSS'
+        else:
+            pnl_emoji = '💛'
+            result_text = 'BREAKEVEN'
+        
+        # Format close reason
+        reason_map = {
+            'TP_HIT': '🎯 Take Profit',
+            'SL_HIT': '🛑 Stop Loss',
+            'MANUAL': '👤 Manual Close',
+            'TRAILING_STOP': '📈 Trailing Stop'
+        }
+        close_reason_formatted = reason_map.get(close_reason, close_reason)
+        
+        message = f"""
+{pnl_emoji} <b>TRADE CLOSED - {result_text}</b>
+
+<b>#{ticket}</b> | {symbol} {direction} {volume}
+
+<b>Entry:</b> {open_price:.5f}
+<b>Exit:</b> {close_price:.5f}
+<b>Reason:</b> {close_reason_formatted}
+{f'<b>Duration:</b> {duration}' if duration else ''}
+
+<b>━━━━━━━━━━━━━━━━━</b>
+<b>Profit:</b> €{profit:.2f}
+<b>Swap:</b> €{swap:.2f}
+<b>Commission:</b> €{commission:.2f}
+<b>━━━━━━━━━━━━━━━━━</b>
+<b>Total P&L:</b> €{total_pnl:+.2f}
+
+<b>💰 Current Balance: €{account_balance:.2f}</b>
+
+<i>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</i>
+"""
+        
+        # Don't silence if it's a loss (so you notice)
+        silent = (total_pnl >= 0)
+        
+        return self.send_message(message, silent=silent)
+
     def send_daily_summary(self, stats: Dict) -> bool:
         """Send daily performance summary"""
 

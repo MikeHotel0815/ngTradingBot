@@ -2224,6 +2224,40 @@ def update_trade(account, db):
             db.commit()
             logger.info(f"🔄 Trade #{ticket} updated from EA: profit={trade.profit}, swap={trade.swap}, commission={trade.commission}, total={float(trade.profit or 0) + float(trade.swap or 0) + float(trade.commission or 0):.2f}")
 
+            # Send Telegram notification for closed trades
+            if trade.status == 'closed':
+                try:
+                    from telegram_notifier import get_telegram_notifier
+                    telegram = get_telegram_notifier()
+                    
+                    # Calculate trade duration
+                    duration = ""
+                    if trade.open_time and trade.close_time:
+                        duration_delta = trade.close_time - trade.open_time
+                        hours = int(duration_delta.total_seconds() // 3600)
+                        minutes = int((duration_delta.total_seconds() % 3600) // 60)
+                        duration = f"{hours}h {minutes}m"
+                    
+                    telegram.send_trade_closed_alert(
+                        trade_info={
+                            'ticket': ticket,
+                            'symbol': trade.symbol,
+                            'direction': trade.direction,
+                            'volume': float(trade.volume) if trade.volume else 0,
+                            'open_price': float(trade.open_price) if trade.open_price else 0,
+                            'close_price': float(trade.close_price) if trade.close_price else 0,
+                            'profit': float(trade.profit) if trade.profit else 0,
+                            'swap': float(trade.swap) if trade.swap else 0,
+                            'commission': float(trade.commission) if trade.commission else 0,
+                            'close_reason': trade.close_reason or 'Unknown',
+                            'duration': duration
+                        },
+                        account_balance=float(account.balance) if account.balance else 0.0
+                    )
+                    logger.info(f"📱 Telegram notification sent for closed trade #{ticket}")
+                except Exception as tg_error:
+                    logger.warning(f"Failed to send Telegram notification for trade #{ticket}: {tg_error}")
+
             # Update indicator scores if trade was closed
             if trade.status == 'closed' and trade.signal_id:
                 try:
