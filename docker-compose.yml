@@ -72,10 +72,16 @@ services:
       - tradingbot_network
     restart: unless-stopped
 
-  decision_cleanup:
+  # ============================================================================
+  # UNIFIED WORKERS - All background workers in one container
+  # Consolidates: decision_cleanup, news_fetch, trade_timeout, 
+  #               strategy_validation, drawdown_protection, partial_close
+  # Saves: ~250 MB RAM, faster deployment, easier maintenance
+  # ============================================================================
+  workers:
     build: .
-    container_name: ngtradingbot_decision_cleanup
-    command: python decision_cleanup_worker.py
+    container_name: ngtradingbot_workers
+    command: python unified_workers.py
     environment:
       - PYTHONUNBUFFERED=1
       - DATABASE_URL=postgresql://trader:${DB_PASSWORD:-tradingbot_secret_2025}@postgres:5432/ngtradingbot
@@ -84,99 +90,39 @@ services:
       - DB_NAME=ngtradingbot
       - DB_USER=trader
       - DB_PASSWORD=${DB_PASSWORD:-tradingbot_secret_2025}
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks:
-      - tradingbot_network
-    restart: unless-stopped
-
-  news_fetch:
-    build: .
-    container_name: ngtradingbot_news_fetch
-    command: python news_fetch_worker.py
-    environment:
-      - PYTHONUNBUFFERED=1
-      - DATABASE_URL=postgresql://trader:${DB_PASSWORD:-tradingbot_secret_2025}@postgres:5432/ngtradingbot
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks:
-      - tradingbot_network
-    restart: unless-stopped
-
-  trade_timeout:
-    build: .
-    container_name: ngtradingbot_trade_timeout
-    command: python workers/trade_timeout_worker.py
-    environment:
-      - PYTHONUNBUFFERED=1
-      - DATABASE_URL=postgresql://trader:${DB_PASSWORD:-tradingbot_secret_2025}@postgres:5432/ngtradingbot
+      # Worker intervals (seconds)
+      - CLEANUP_INTERVAL_SECONDS=${CLEANUP_INTERVAL_SECONDS:-3600}  # 1 hour
+      - NEWS_FETCH_INTERVAL_SECONDS=${NEWS_FETCH_INTERVAL_SECONDS:-3600}  # 1 hour
+      - TRADE_TIMEOUT_CHECK_INTERVAL=${TRADE_TIMEOUT_CHECK_INTERVAL:-300}  # 5 minutes
+      - STRATEGY_VALIDATION_CHECK_INTERVAL=${STRATEGY_VALIDATION_CHECK_INTERVAL:-300}  # 5 minutes
+      - DRAWDOWN_CHECK_INTERVAL=${DRAWDOWN_CHECK_INTERVAL:-60}  # 1 minute
+      - PARTIAL_CLOSE_CHECK_INTERVAL=${PARTIAL_CLOSE_CHECK_INTERVAL:-60}  # 1 minute
+      # Trade timeout settings
       - TRADE_TIMEOUT_HOURS=${TRADE_TIMEOUT_HOURS:-48}
       - TRADE_TIMEOUT_ENABLED=${TRADE_TIMEOUT_ENABLED:-true}
-      - TRADE_TIMEOUT_ACTION=${TRADE_TIMEOUT_ACTION:-alert}  # Nur warnen, nicht schließen!
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks:
-      - tradingbot_network
-    restart: unless-stopped
-
-  strategy_validation:
-    build: .
-    container_name: ngtradingbot_strategy_validation
-    command: python workers/strategy_validation_worker.py
-    environment:
-      - PYTHONUNBUFFERED=1
-      - DATABASE_URL=postgresql://trader:${DB_PASSWORD:-tradingbot_secret_2025}@postgres:5432/ngtradingbot
+      - TRADE_TIMEOUT_ACTION=${TRADE_TIMEOUT_ACTION:-alert}
+      # Strategy validation settings
       - STRATEGY_VALIDATION_ENABLED=${STRATEGY_VALIDATION_ENABLED:-true}
-      - STRATEGY_VALIDATION_CHECK_INTERVAL=${STRATEGY_VALIDATION_CHECK_INTERVAL:-300}  # 5 minutes
-      - MIN_LOSS_TO_CHECK=${MIN_LOSS_TO_CHECK:--5.0}  # Only check trades losing >5 EUR
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks:
-      - tradingbot_network
-    restart: unless-stopped
-
-  drawdown_protection:
-    build: .
-    container_name: ngtradingbot_drawdown_protection
-    command: python workers/drawdown_protection_worker.py
-    environment:
-      - PYTHONUNBUFFERED=1
-      - DATABASE_URL=postgresql://trader:${DB_PASSWORD:-tradingbot_secret_2025}@postgres:5432/ngtradingbot
+      - MIN_LOSS_TO_CHECK=${MIN_LOSS_TO_CHECK:--5.0}
+      # Drawdown protection settings
       - DRAWDOWN_PROTECTION_ENABLED=${DRAWDOWN_PROTECTION_ENABLED:-true}
-      - DRAWDOWN_CHECK_INTERVAL=${DRAWDOWN_CHECK_INTERVAL:-60}  # Check every minute
-      - DAILY_LOSS_LIMIT=${DAILY_LOSS_LIMIT:--30.0}  # EUR
-      - DAILY_LOSS_WARNING=${DAILY_LOSS_WARNING:--20.0}  # EUR
-      - ACCOUNT_EMERGENCY_LIMIT=${ACCOUNT_EMERGENCY_LIMIT:--50.0}  # EUR
+      - DAILY_LOSS_LIMIT=${DAILY_LOSS_LIMIT:--30.0}
+      - DAILY_LOSS_WARNING=${DAILY_LOSS_WARNING:--20.0}
+      - ACCOUNT_EMERGENCY_LIMIT=${ACCOUNT_EMERGENCY_LIMIT:--50.0}
       - MAX_POSITIONS_SAME_CURRENCY=${MAX_POSITIONS_SAME_CURRENCY:-2}
       - MAX_POSITIONS_PER_SYMBOL=${MAX_POSITIONS_PER_SYMBOL:-1}
       - MAX_TOTAL_OPEN_POSITIONS=${MAX_TOTAL_OPEN_POSITIONS:-5}
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks:
-      - tradingbot_network
-    restart: unless-stopped
-
-  partial_close:
-    build: .
-    container_name: ngtradingbot_partial_close
-    command: python workers/partial_close_worker.py
-    environment:
-      - PYTHONUNBUFFERED=1
-      - DATABASE_URL=postgresql://trader:${DB_PASSWORD:-tradingbot_secret_2025}@postgres:5432/ngtradingbot
+      # Partial close settings
       - PARTIAL_CLOSE_ENABLED=${PARTIAL_CLOSE_ENABLED:-true}
-      - PARTIAL_CLOSE_CHECK_INTERVAL=${PARTIAL_CLOSE_CHECK_INTERVAL:-60}  # Check every minute
-      - FIRST_PARTIAL_PERCENT=${FIRST_PARTIAL_PERCENT:-50.0}  # Close 50% at 50% TP
+      - FIRST_PARTIAL_PERCENT=${FIRST_PARTIAL_PERCENT:-50.0}
       - FIRST_PARTIAL_CLOSE=${FIRST_PARTIAL_CLOSE:-0.50}
-      - SECOND_PARTIAL_PERCENT=${SECOND_PARTIAL_PERCENT:-75.0}  # Close 25% at 75% TP
+      - SECOND_PARTIAL_PERCENT=${SECOND_PARTIAL_PERCENT:-75.0}
       - SECOND_PARTIAL_CLOSE=${SECOND_PARTIAL_CLOSE:-0.25}
       - MIN_LOT_FOR_PARTIAL=${MIN_LOT_FOR_PARTIAL:-0.02}
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     networks:
       - tradingbot_network
