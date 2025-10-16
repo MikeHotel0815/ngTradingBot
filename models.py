@@ -51,15 +51,17 @@ class Account(Base):
 
 
 class BrokerSymbol(Base):
-    """Available symbols at broker (sent by EA on connect)"""
+    """Available symbols at broker (sent by EA on connect) - GLOBAL
+
+    NOTE: BrokerSymbols are now GLOBAL (no account_id). Broker symbol specs are the same for all.
+    Database migration completed to remove account_id column.
+    """
     __tablename__ = 'broker_symbols'
-    __table_args__ = (
-        Index('idx_account_broker_symbol', 'account_id', 'symbol'),
-    )
+    __table_args__ = tuple()
 
     id = Column(Integer, primary_key=True)
-    account_id = Column(Integer, ForeignKey('accounts.id'), nullable=False)
-    symbol = Column(String(20), nullable=False)
+    # account_id removed - broker symbols are global (database migration completed)
+    symbol = Column(String(20), nullable=False, unique=True)
     description = Column(String(100))
 
     # Trading parameters from MT5
@@ -73,9 +75,6 @@ class BrokerSymbol(Base):
     point_value = Column(Numeric(20, 10))  # Point size
 
     last_updated = Column(DateTime, default=datetime.utcnow)
-
-    # Relationships
-    account = relationship("Account", foreign_keys=[account_id])
 
     def __repr__(self):
         return f"<BrokerSymbol(symbol={self.symbol}, vol_min={self.volume_min}, vol_max={self.volume_max})>"
@@ -103,14 +102,17 @@ class SubscribedSymbol(Base):
 
 
 class Tick(Base):
-    """Tick data with spread tracking - 7 day retention (cleaned up daily)"""
+    """Tick data with spread tracking - 7 day retention (cleaned up daily)
+
+    NOTE: Ticks are now GLOBAL (no account_id). A EURUSD tick is the same for everyone.
+    """
     __tablename__ = 'ticks'
     __table_args__ = (
         Index('idx_symbol_timestamp', 'symbol', 'timestamp'),
     )
 
     id = Column(Integer, primary_key=True)
-    account_id = Column(Integer, ForeignKey('accounts.id'), nullable=False)
+    # account_id removed - ticks are global (database migration completed)
     symbol = Column(String(20), nullable=False, index=True)
     bid = Column(Numeric(20, 5), nullable=False)
     ask = Column(Numeric(20, 5), nullable=False)
@@ -124,14 +126,18 @@ class Tick(Base):
 
 
 class OHLCData(Base):
-    """OHLC aggregated data"""
+    """OHLC aggregated data - GLOBAL (no account_id)
+
+    NOTE: OHLC data is now GLOBAL (no account_id). Candles are the same for everyone.
+    Database migration completed to remove account_id column.
+    """
     __tablename__ = 'ohlc_data'
     __table_args__ = (
         Index('idx_symbol_timeframe_timestamp', 'symbol', 'timeframe', 'timestamp', unique=True),
     )
 
     id = Column(Integer, primary_key=True)
-    account_id = Column(Integer, ForeignKey('accounts.id'), nullable=False)
+    # account_id removed - OHLC data is global (database migration completed)
     symbol = Column(String(20), nullable=False)
     timeframe = Column(String(10), nullable=False)  # M1, M5, M15, H1, H4, D1
     open = Column(Numeric(20, 5), nullable=False)
@@ -1013,3 +1019,149 @@ class DailyBacktestSchedule(Base):
 
     def __repr__(self):
         return f"<DailyBacktestSchedule(date={self.scheduled_date}, status={self.status}, symbols={self.total_symbols_evaluated})>"
+
+
+# ========================================
+# SYMBOL-SPECIFIC DYNAMIC TRADING CONFIG
+# ========================================
+
+class SymbolTradingConfig(Base):
+    """
+    Per-symbol dynamic trading configuration with auto-adjusting risk management.
+
+    This model enables each symbol+direction combination to learn independently:
+    - Adjusts confidence thresholds based on performance
+    - Scales risk up/down dynamically
+    - Auto-pauses after consecutive losses
+    - Learns market regime preferences
+    - Tracks rolling 20-trade performance window
+    """
+    __tablename__ = 'symbol_trading_config'
+    __table_args__ = (
+        Index('idx_symbol_config_account_symbol', 'account_id', 'symbol'),
+        Index('idx_symbol_config_status', 'status'),
+        Index('idx_symbol_config_active', 'account_id', 'symbol', 'direction', postgresql_where=text("status = 'active'")),
+        Index('idx_symbol_config_paused', 'account_id', 'symbol', postgresql_where=text("status = 'paused'")),
+        Index('idx_symbol_config_performance', 'rolling_winrate', 'rolling_profit'),
+    )
+
+    id = Column(Integer, primary_key=True)
+    account_id = Column(Integer, ForeignKey('accounts.id'), nullable=False)
+    symbol = Column(String(20), nullable=False)
+    direction = Column(String(10))  # NULL = both directions, 'BUY', 'SELL'
+
+    # Dynamic Confidence Thresholds
+    min_confidence_threshold = Column(Numeric(5, 2), default=50.0, nullable=False)
+    confidence_adjustment_factor = Column(Numeric(5, 2), default=1.0, nullable=False)
+
+    # Dynamic Risk Management
+    risk_multiplier = Column(Numeric(5, 2), default=1.0, nullable=False)
+    position_size_multiplier = Column(Numeric(5, 2), default=1.0, nullable=False)
+    sl_multiplier = Column(Numeric(5, 2), default=1.0, nullable=False)
+    tp_multiplier = Column(Numeric(5, 2), default=1.0, nullable=False)
+
+    # Status & Auto-Pause
+    status = Column(String(20), default='active', nullable=False)  # active, reduced_risk, paused, disabled
+    auto_pause_enabled = Column(Boolean, default=True, nullable=False)
+    pause_after_consecutive_losses = Column(Integer, default=3, nullable=False)
+    resume_after_cooldown_hours = Column(Integer, default=24, nullable=False)
+    paused_at = Column(DateTime)
+    pause_reason = Column(Text)
+
+    # Consecutive Performance Tracking
+    consecutive_losses = Column(Integer, default=0, nullable=False)
+    consecutive_wins = Column(Integer, default=0, nullable=False)
+    last_trade_result = Column(String(10))  # WIN, LOSS, BREAKEVEN
+
+    # Rolling Performance Window (Last 20 Trades)
+    rolling_window_size = Column(Integer, default=20, nullable=False)
+    rolling_trades_count = Column(Integer, default=0, nullable=False)
+    rolling_wins = Column(Integer, default=0, nullable=False)
+    rolling_losses = Column(Integer, default=0, nullable=False)
+    rolling_breakeven = Column(Integer, default=0, nullable=False)
+    rolling_profit = Column(Numeric(15, 2), default=0.0)
+    rolling_winrate = Column(Numeric(5, 2))
+    rolling_avg_profit = Column(Numeric(15, 2))
+    rolling_profit_factor = Column(Numeric(10, 4))
+
+    # Market Regime Preference Learning
+    preferred_regime = Column(String(20))  # TRENDING, RANGING, ANY
+    regime_performance_trending = Column(Numeric(5, 2))
+    regime_performance_ranging = Column(Numeric(5, 2))
+    regime_trades_trending = Column(Integer, default=0)
+    regime_trades_ranging = Column(Integer, default=0)
+    regime_wins_trending = Column(Integer, default=0)
+    regime_wins_ranging = Column(Integer, default=0)
+
+    # Session Performance (Daily Reset)
+    session_trades_today = Column(Integer, default=0)
+    session_profit_today = Column(Numeric(15, 2), default=0.0)
+    session_date = Column(DateTime)
+
+    # Performance History Snapshot
+    performance_history = Column(JSONB)
+
+    # Metadata
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_trade_at = Column(DateTime)
+    last_updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_adjustment_at = Column(DateTime)
+    updated_by = Column(String(50), default='system')
+
+    # Relationships
+    account = relationship("Account", foreign_keys=[account_id])
+
+    def __repr__(self):
+        return (f"<SymbolTradingConfig({self.symbol} {self.direction or 'BOTH'}: "
+                f"status={self.status}, conf={self.min_confidence_threshold}%, "
+                f"risk={self.risk_multiplier}x, wr={self.rolling_winrate}%)>")
+
+    @classmethod
+    def get_or_create(cls, db, account_id: int, symbol: str, direction: str = None):
+        """Get existing config or create new one with default values"""
+        config = db.query(cls).filter_by(
+            account_id=account_id,
+            symbol=symbol,
+            direction=direction
+        ).first()
+
+        if not config:
+            config = cls(
+                account_id=account_id,
+                symbol=symbol,
+                direction=direction
+            )
+            db.add(config)
+            db.commit()
+
+        return config
+
+    def should_trade(self, signal_confidence: float, market_regime: str = None) -> tuple[bool, str]:
+        """
+        Determine if this symbol+direction should trade given current conditions
+
+        Returns:
+            (should_trade, reason)
+        """
+        # Check status
+        if self.status == 'disabled':
+            return False, "symbol_disabled"
+
+        if self.status == 'paused':
+            # Check if cooldown period has passed
+            if self.paused_at:
+                hours_paused = (datetime.utcnow() - self.paused_at).total_seconds() / 3600
+                if hours_paused < self.resume_after_cooldown_hours:
+                    return False, f"paused_cooldown_{int(self.resume_after_cooldown_hours - hours_paused)}h_remaining"
+
+        # Check confidence threshold
+        if signal_confidence < float(self.min_confidence_threshold):
+            return False, f"confidence_too_low_{signal_confidence:.1f}<{self.min_confidence_threshold}"
+
+        # Check market regime preference
+        if market_regime and self.preferred_regime and self.preferred_regime != 'ANY':
+            if market_regime != self.preferred_regime:
+                # Allow trading in non-preferred regime but log it
+                return True, f"regime_non_preferred_{market_regime}_vs_{self.preferred_regime}"
+
+        return True, "approved"

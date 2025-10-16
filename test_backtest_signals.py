@@ -7,11 +7,10 @@ from database import ScopedSession
 from models import OHLCData
 from sqlalchemy import and_
 
-# Get historical bars
+# Get historical bars (OHLC is global - no account_id)
 db = ScopedSession()
 historical_bars = db.query(OHLCData).filter(
     and_(
-        OHLCData.account_id == 1,
         OHLCData.symbol == 'BTCUSD',
         OHLCData.timeframe == 'H1',
         OHLCData.timestamp >= '2025-09-28'

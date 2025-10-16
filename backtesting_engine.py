@@ -345,10 +345,9 @@ class BacktestingEngine:
                     progress_pct,
                     f"Checking {symbol} {timeframe} data ({current_check}/{total_checks})..."
                 )
-                # Check what data we have in DB
+                # Check what data we have in DB (OHLC is global - no account_id)
                 existing_data = self.db.query(OHLCData).filter(
                     and_(
-                        OHLCData.account_id == self.account_id,
                         OHLCData.symbol == symbol,
                         OHLCData.timeframe == timeframe,
                         OHLCData.timestamp >= lookback_start,
@@ -480,10 +479,9 @@ class BacktestingEngine:
         self._update_progress(base_progress, f"Waiting for {symbol} {timeframe} data from EA...")
 
         while waited < timeout:
-            # Check current bar count
+            # Check current bar count (OHLC is global - no account_id)
             count = self.db.query(OHLCData).filter(
                 and_(
-                    OHLCData.account_id == self.account_id,
                     OHLCData.symbol == symbol,
                     OHLCData.timeframe == timeframe,
                     OHLCData.timestamp >= start_date,
@@ -513,10 +511,9 @@ class BacktestingEngine:
             time.sleep(check_interval)
             waited += check_interval
 
-        # Timeout reached
+        # Timeout reached (OHLC is global - no account_id)
         final_count = self.db.query(OHLCData).filter(
             and_(
-                OHLCData.account_id == self.account_id,
                 OHLCData.symbol == symbol,
                 OHLCData.timeframe == timeframe,
                 OHLCData.timestamp >= start_date,
@@ -557,7 +554,6 @@ class BacktestingEngine:
 
                 bars = self.db.query(OHLCData).filter(
                     and_(
-                        OHLCData.account_id == self.account_id,
                         OHLCData.symbol == symbol,
                         OHLCData.timeframe == timeframe,
                         OHLCData.timestamp >= lookback_start,

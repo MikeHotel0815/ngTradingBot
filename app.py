@@ -229,22 +229,25 @@ def connect():
             # Update last heartbeat
             account.last_heartbeat = datetime.utcnow()
 
-            # Store available symbols from EA
+            # Store available symbols from EA (BrokerSymbols are now global)
             available_symbols = data.get('available_symbols', [])
             if available_symbols:
-                # Delete old broker symbols for this account
-                db.query(BrokerSymbol).filter_by(account_id=account.id).delete()
-
-                # Add new broker symbols (just names for now, specs come later)
+                # Upsert broker symbols (no account_id - symbols are global now)
                 for symbol in available_symbols:
-                    broker_symbol = BrokerSymbol(
-                        account_id=account.id,
-                        symbol=symbol,
-                        last_updated=datetime.utcnow()
-                    )
-                    db.add(broker_symbol)
+                    # Check if symbol already exists
+                    existing = db.query(BrokerSymbol).filter_by(symbol=symbol).first()
+                    if existing:
+                        # Update last_updated timestamp
+                        existing.last_updated = datetime.utcnow()
+                    else:
+                        # Create new broker symbol
+                        broker_symbol = BrokerSymbol(
+                            symbol=symbol,
+                            last_updated=datetime.utcnow()
+                        )
+                        db.add(broker_symbol)
 
-                logger.info(f"Stored {len(available_symbols)} available symbols for account {account_number}")
+                logger.info(f"Updated {len(available_symbols)} broker symbols (global)")
 
             db.commit()
 
@@ -306,10 +309,11 @@ def heartbeat(account, db):
         month_start_date = now.replace(day=1).date()
         year_start_date = now.replace(month=1, day=1).date()
 
-        # Calculate actual profit from closed trades (profit + commission + swap)
+        # Calculate actual profit from closed trades
         # Use DATE comparison to avoid timezone issues (close_time is in broker time, not UTC)
+        # Note: profit field already includes commission and swap
         actual_profit_today = db.query(
-            func.coalesce(func.sum(Trade.profit + Trade.commission + Trade.swap), 0)
+            func.coalesce(func.sum(Trade.profit), 0)
         ).filter(
             Trade.account_id == account.id,
             Trade.status == 'closed',
@@ -317,7 +321,7 @@ def heartbeat(account, db):
         ).scalar() or 0.0
 
         actual_profit_week = db.query(
-            func.coalesce(func.sum(Trade.profit + Trade.commission + Trade.swap), 0)
+            func.coalesce(func.sum(Trade.profit), 0)
         ).filter(
             Trade.account_id == account.id,
             Trade.status == 'closed',
@@ -325,7 +329,7 @@ def heartbeat(account, db):
         ).scalar() or 0.0
 
         actual_profit_month = db.query(
-            func.coalesce(func.sum(Trade.profit + Trade.commission + Trade.swap), 0)
+            func.coalesce(func.sum(Trade.profit), 0)
         ).filter(
             Trade.account_id == account.id,
             Trade.status == 'closed',
@@ -333,19 +337,15 @@ def heartbeat(account, db):
         ).scalar() or 0.0
 
         actual_profit_year = db.query(
-            func.coalesce(func.sum(Trade.profit + Trade.commission + Trade.swap), 0)
+            func.coalesce(func.sum(Trade.profit), 0)
         ).filter(
             Trade.account_id == account.id,
             Trade.status == 'closed',
             cast(Trade.close_time, Date) >= year_start_date
         ).scalar() or 0.0
 
-        # Correct profits by removing deposits/withdrawals
-        from profit_calculator import calculate_corrected_profits
-        corrected_today, corrected_week, corrected_month, corrected_year = calculate_corrected_profits(
-            db, account.id, actual_profit_today, actual_profit_week, actual_profit_month, actual_profit_year
-        )
-
+        # Don't subtract deposits/withdrawals - just use raw profit from trades
+        # The initial balance is not a withdrawal, it's starting capital
         # Update last heartbeat and account data
         account.last_heartbeat = datetime.utcnow()
         if balance is not None:
@@ -357,15 +357,15 @@ def heartbeat(account, db):
         if free_margin is not None:
             account.free_margin = free_margin
 
-        # Use corrected profits calculated from database instead of raw EA values
-        account.profit_today = corrected_today
-        account.profit_week = corrected_week
-        account.profit_month = corrected_month
-        account.profit_year = corrected_year
+        # Use profits calculated directly from database trades
+        account.profit_today = actual_profit_today
+        account.profit_week = actual_profit_week
+        account.profit_month = actual_profit_month
+        account.profit_year = actual_profit_year
         
         db.commit()
 
-        logger.info(f"Heartbeat from {account.mt5_account_number} - Balance: {balance}, Equity: {equity}, Profit Today (corrected): {corrected_today}")
+        logger.info(f"Heartbeat from {account.mt5_account_number} - Balance: {balance}, Equity: {equity}, Profit Today: {actual_profit_today}")
 
         # ✅ NEW: Auto TP/SL for manual MT5 trades without protection
         try:
@@ -619,8 +619,8 @@ def get_symbols(account, db):
             active=True
         ).all()
 
-        # Get available broker symbols
-        broker_symbols = db.query(BrokerSymbol).filter_by(account_id=account.id).all()
+        # Get available broker symbols (global - no account_id)
+        broker_symbols = db.query(BrokerSymbol).all()
         valid_symbols = {bs.symbol for bs in broker_symbols}
 
         # Filter subscribed symbols to only include valid ones
@@ -679,9 +679,8 @@ def update_symbol_specs(account, db):
             if not symbol_name:
                 continue
 
-            # Find existing broker symbol
+            # Find existing broker symbol (global - no account_id)
             broker_symbol = db.query(BrokerSymbol).filter_by(
-                account_id=account.id,
                 symbol=symbol_name
             ).first()
 
@@ -727,8 +726,8 @@ def subscribe(account, db):
         if not symbols:
             return jsonify({'status': 'error', 'message': 'No symbols provided'}), 400
 
-        # Validate symbols against broker's available symbols
-        broker_symbols = db.query(BrokerSymbol).filter_by(account_id=account.id).all()
+        # Validate symbols against broker's available symbols (global - no account_id)
+        broker_symbols = db.query(BrokerSymbol).all()
         valid_symbols = {bs.symbol for bs in broker_symbols}
 
         added = []
@@ -1537,9 +1536,8 @@ def receive_ticks(account, db):
                 ask = tick_data.get('ask', 0)
                 spread = tick_data.get('spread', ask - bid if ask and bid else None)
 
-                # Add account_id to tick data
-                tick_with_account = {
-                    'account_id': account_id,
+                # Prepare tick data for buffering (Ticks are global - no account_id)
+                tick_buffer_data = {
                     'symbol': tick_data.get('symbol'),
                     'bid': bid,
                     'ask': ask,
@@ -1547,7 +1545,7 @@ def receive_ticks(account, db):
                     'volume': tick_data.get('volume', 0),
                     'timestamp': tick_data.get('timestamp') or datetime.utcnow().timestamp()
                 }
-                buffered_ticks.append(tick_with_account)
+                buffered_ticks.append(tick_buffer_data)
 
                 # Keep only the latest price per symbol for WebSocket
                 symbol = tick_data.get('symbol')
@@ -1566,11 +1564,10 @@ def receive_ticks(account, db):
 
         except Exception as e:
             logger.error(f"Failed to buffer ticks in Redis: {e}")
-            # Fallback: Write directly to PostgreSQL
+            # Fallback: Write directly to PostgreSQL (Ticks are global - no account_id)
             tick_objects = []
             for tick_data in ticks:
                 tick = Tick(
-                    account_id=account_id,
                     symbol=tick_data.get('symbol'),
                     bid=tick_data.get('bid'),
                     ask=tick_data.get('ask'),
@@ -1982,9 +1979,14 @@ def sync_trades(account, db):
                 existing_trade.profit = trade_data.get('profit')
                 existing_trade.commission = trade_data.get('commission')
                 existing_trade.swap = trade_data.get('swap')
+                # ✅ FIX: Update SL/TP from heartbeat (critical for trailing stop tracking!)
+                if trade_data.get('sl') is not None:
+                    existing_trade.sl = trade_data.get('sl')
+                if trade_data.get('tp') is not None:
+                    existing_trade.tp = trade_data.get('tp')
                 existing_trade.updated_at = datetime.utcnow()
                 updated_count += 1
-                logger.info(f"🔄 Trade sync update: {existing_trade.symbol} #{ticket} profit={existing_trade.profit}")
+                logger.info(f"🔄 Trade sync update: {existing_trade.symbol} #{ticket} profit={existing_trade.profit} SL={existing_trade.sl} TP={existing_trade.tp}")
             else:
                 # Create new trade record
                 # ✅ FIX: Find command_id by matching ticket in command responses
@@ -2533,13 +2535,55 @@ def dashboard_status():
     try:
         db = ScopedSession()
         try:
+            from sqlalchemy import func, cast, Date
+            from models import Trade
+
             # Get the most recently active account (latest heartbeat)
             account = db.query(Account).order_by(Account.last_heartbeat.desc()).first()
 
             if not account:
                 return jsonify({'status': 'error', 'message': 'No account found'}), 404
 
-            # Profits are already adjusted in DB when heartbeat/tick updates come in
+            # Calculate profits directly from database (don't rely on heartbeat)
+            now = datetime.utcnow()
+            today_date = now.date()
+            week_start_date = (now - timedelta(days=now.weekday())).date()  # Monday
+            month_start_date = now.replace(day=1).date()
+            year_start_date = now.replace(month=1, day=1).date()
+
+            # Calculate actual profit from closed trades
+            profit_today = db.query(
+                func.coalesce(func.sum(Trade.profit), 0)
+            ).filter(
+                Trade.account_id == account.id,
+                Trade.status == 'closed',
+                cast(Trade.close_time, Date) == today_date
+            ).scalar() or 0.0
+
+            profit_week = db.query(
+                func.coalesce(func.sum(Trade.profit), 0)
+            ).filter(
+                Trade.account_id == account.id,
+                Trade.status == 'closed',
+                cast(Trade.close_time, Date) >= week_start_date
+            ).scalar() or 0.0
+
+            profit_month = db.query(
+                func.coalesce(func.sum(Trade.profit), 0)
+            ).filter(
+                Trade.account_id == account.id,
+                Trade.status == 'closed',
+                cast(Trade.close_time, Date) >= month_start_date
+            ).scalar() or 0.0
+
+            profit_year = db.query(
+                func.coalesce(func.sum(Trade.profit), 0)
+            ).filter(
+                Trade.account_id == account.id,
+                Trade.status == 'closed',
+                cast(Trade.close_time, Date) >= year_start_date
+            ).scalar() or 0.0
+
             return jsonify({
                 'status': 'success',
                 'account': {
@@ -2550,10 +2594,10 @@ def dashboard_status():
                     'equity': float(account.equity) if account.equity else 0.0,
                     'margin': float(account.margin) if account.margin else 0.0,
                     'free_margin': float(account.free_margin) if account.free_margin else 0.0,
-                    'profit_today': float(account.profit_today or 0.0),
-                    'profit_week': float(account.profit_week or 0.0),
-                    'profit_month': float(account.profit_month or 0.0),
-                    'profit_year': float(account.profit_year or 0.0),
+                    'profit_today': float(profit_today),
+                    'profit_week': float(profit_week),
+                    'profit_month': float(profit_month),
+                    'profit_year': float(profit_year),
                     'last_heartbeat': account.last_heartbeat.isoformat() if account.last_heartbeat else None
                 }
             }), 200
@@ -4884,6 +4928,12 @@ if __name__ == '__main__':
     from auto_trader import start_auto_trader
     auto_trader = start_auto_trader(enabled=True)  # ✅ ENABLED BY DEFAULT
     logger.info("🤖 Auto-Trader initialized (ENABLED)")
+
+    # Start connection watchdog (monitors MT5 connection health)
+    from connection_watchdog import get_connection_watchdog
+    watchdog = get_connection_watchdog()
+    watchdog.start()
+    logger.info("🔍 Connection Watchdog started (monitors MT5 health)")
 
     # Start daily backtest scheduler for auto-optimization
     from daily_backtest_scheduler import start_scheduler as start_backtest_scheduler

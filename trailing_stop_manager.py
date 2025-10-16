@@ -65,24 +65,25 @@ class TrailingStopManager:
         # ✅ NEW: Symbol-specific trailing stop configuration
         self.symbol_specific_settings = {
             'BTCUSD': {
-                'max_sl_move_per_update': 50000.0,  # ✅ BTC needs MASSIVE movements (50k pips = 500 price points)
+                'max_sl_move_per_update': 500000.0,  # ✅ BTC needs MASSIVE movements (500k pips = 5000 price points at 0.01 point)
                 'min_trailing_pips': 100.0,          # Minimum 100 pip trail for BTC
                 'breakeven_trigger_percent': 20.0,  # Earlier breakeven for volatile asset
                 'aggressive_trailing_trigger_percent': 60.0,  # More aggressive
             },
             'ETHUSD': {
-                'max_sl_move_per_update': 2000.0,
-                'min_trailing_pips': 30.0,
+                'max_sl_move_per_update': 200000.0,  # ✅ ETH needs large movements (200k pips = 2000 price points at 0.01 point)
+                'min_trailing_pips': 50.0,
                 'breakeven_trigger_percent': 20.0,
             },
             'XAUUSD': {
-                'max_sl_move_per_update': 500.0,   # Gold needs larger movements
+                'max_sl_move_per_update': 10000.0,  # ✅ Gold uses 0.01 point, 10k pips = 100 price points
                 'min_trailing_pips': 20.0,
                 'breakeven_trigger_percent': 25.0,
             },
             'DE40.c': {
-                'max_sl_move_per_update': 300.0,   # Index needs larger movements
-                'min_trailing_pips': 25.0,
+                'max_sl_move_per_update': 50000.0,  # ✅ DAX Index needs large movements (50k pips = 500 price points at 0.01 point)
+                'min_trailing_pips': 50.0,
+                'breakeven_trigger_percent': 25.0,
             },
             'EURUSD': {
                 'max_sl_move_per_update': 100.0,   # Standard FOREX
@@ -135,10 +136,9 @@ class TrailingStopManager:
             return self.default_settings
 
     def get_symbol_info(self, db: Session, symbol: str, account_id: int) -> Dict:
-        """Get symbol specifications from BrokerSymbol table"""
+        """Get symbol specifications from BrokerSymbol table (broker_symbols is global - no account_id)"""
         try:
             broker_symbol = db.query(BrokerSymbol).filter_by(
-                account_id=account_id,
                 symbol=symbol
             ).first()
 
@@ -161,10 +161,9 @@ class TrailingStopManager:
             return {'digits': 5, 'point': 0.00001, 'stops_level': 10}
 
     def get_current_spread(self, db: Session, symbol: str, account_id: int) -> float:
-        """Get current spread from latest tick"""
+        """Get current spread from latest tick (ticks are global - no account_id)"""
         try:
             latest_tick = db.query(Tick).filter_by(
-                account_id=account_id,
                 symbol=symbol
             ).order_by(Tick.timestamp.desc()).first()
 
@@ -539,18 +538,19 @@ class TrailingStopManager:
             True if command created successfully
         """
         try:
-            # Create modify command
+            # Create modify command (EA expects MODIFY_TRADE with both SL and TP)
             import uuid
             command = Command(
                 id=str(uuid.uuid4()),
                 account_id=trade.account_id,
-                command_type='modify_sl',
+                command_type='MODIFY_TRADE',
                 status='pending',
                 created_at=datetime.utcnow(),
                 payload={
                     'ticket': trade.ticket,
                     'symbol': trade.symbol,
                     'sl': float(new_sl),
+                    'tp': float(trade.tp) if trade.tp else 0.0,  # EA requires TP field
                 }
             )
 
@@ -746,9 +746,9 @@ class TrailingStopManager:
             from sqlalchemy import desc
             eurusd_rate = 1.0  # Fallback
             try:
+                # Ticks are global - no account_id
                 eurusd_tick_bid = db.query(Tick.bid).filter(
-                    Tick.symbol == 'EURUSD',
-                    Tick.account_id == trade.account_id
+                    Tick.symbol == 'EURUSD'
                 ).order_by(desc(Tick.timestamp)).first()
                 if eurusd_tick_bid and eurusd_tick_bid[0]:
                     eurusd_rate = float(eurusd_tick_bid[0])

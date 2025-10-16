@@ -14,6 +14,10 @@ from database import ScopedSession
 from models import Trade, Account, Tick, GlobalSettings
 from redis_client import get_redis
 from trailing_stop_manager import get_trailing_stop_manager
+# ✅ NEW: Import unified trailing stop system
+from unified_trailing_final import get_unified_trailing
+# ✅ NEW: Import symbol dynamic manager for post-trade updates
+from symbol_dynamic_manager import update_symbol_after_trade
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,13 +34,17 @@ class TradeMonitor:
         self.monitor_interval = 1  # Check every 1 second for real-time updates
         self.running = False
         self.trailing_stop_manager = get_trailing_stop_manager()
+        # ✅ NEW: Add unified trailing stop manager
+        self.unified_trailing = get_unified_trailing()
         self.trailing_stops_processed = 0
+        self.last_trailing_check = None
+        self.trailing_check_interval = 10  # Run unified trailing every 10 seconds
 
     def get_current_price(self, db: Session, account_id: int, symbol: str) -> Optional[Dict]:
-        """Get current bid/ask prices for symbol"""
+        """Get current bid/ask prices for symbol (account_id kept for compatibility but not used)"""
         try:
+            # Ticks are now global - no account_id filter needed
             latest_tick = db.query(Tick).filter_by(
-                account_id=account_id,
                 symbol=symbol
             ).order_by(Tick.timestamp.desc()).first()
 
@@ -51,11 +59,11 @@ class TradeMonitor:
             logger.error(f"Error getting price for {symbol}: {e}")
             return None
 
-    def get_eurusd_rate(self, db: Session, account_id: int) -> float:
-        """Get current EUR/USD exchange rate for currency conversion"""
+    def get_eurusd_rate(self, db: Session, account_id: int = None) -> float:
+        """Get current EUR/USD exchange rate for currency conversion (account_id kept for compatibility but not used)"""
         try:
+            # Ticks are now global - no account_id filter needed
             eurusd_tick = db.query(Tick).filter_by(
-                account_id=account_id,
                 symbol='EURUSD'
             ).order_by(Tick.timestamp.desc()).first()
 
@@ -497,15 +505,74 @@ class TradeMonitor:
             logger.error(f"Error monitoring trades: {e}")
 
     def monitor_loop(self):
-        """Main monitoring loop"""
+        """Main monitoring loop with unified trailing stop and post-trade updates"""
         logger.info(f"Trade Monitor started (interval: {self.monitor_interval}s)")
+        logger.info(f"✅ Unified Trailing Stop enabled (check interval: {self.trailing_check_interval}s)")
 
         self.running = True
+        self.last_trailing_check = datetime.utcnow()
 
         while self.running:
             try:
                 db = ScopedSession()
+
+                # Monitor positions
                 self.monitor_open_trades(db)
+
+                # ✅ NEW: Run unified trailing stop periodically
+                now = datetime.utcnow()
+                if (now - self.last_trailing_check).total_seconds() >= self.trailing_check_interval:
+                    logger.debug("🔄 Running unified trailing stop check...")
+                    try:
+                        stats = self.unified_trailing.process_all(db)
+                        if stats['trailed'] > 0 or stats['extended'] > 0:
+                            logger.info(
+                                f"🎯 Unified Trailing: {stats['trailed']} SL adjusted, "
+                                f"{stats['extended']} TP extended"
+                            )
+                    except Exception as e:
+                        logger.error(f"Error in unified trailing: {e}")
+
+                    self.last_trailing_check = now
+
+                # ✅ NEW: Check for recently closed trades and update symbol configs
+                try:
+                    closed_trades = db.query(Trade).filter(
+                        Trade.status == 'closed',
+                        Trade.close_time >= datetime.utcnow() - timedelta(minutes=2)
+                    ).all()
+
+                    for trade in closed_trades:
+                        # Check if we've already processed this trade
+                        if not hasattr(self, '_processed_closed_trades'):
+                            self._processed_closed_trades = set()
+
+                        if trade.ticket not in self._processed_closed_trades:
+                            logger.info(
+                                f"📊 Processing closed trade for symbol config update: "
+                                f"{trade.symbol} {trade.direction} #{trade.ticket}"
+                            )
+
+                            try:
+                                # Update symbol dynamic config
+                                config = update_symbol_after_trade(trade, market_regime=None)
+                                self._processed_closed_trades.add(trade.ticket)
+
+                                logger.info(
+                                    f"✅ Symbol config updated: {config.symbol} {config.direction} - "
+                                    f"status={config.status}, conf≥{config.min_confidence_threshold}%, "
+                                    f"risk={config.risk_multiplier}x"
+                                )
+                            except Exception as e:
+                                logger.error(f"Error updating symbol config for trade {trade.ticket}: {e}")
+
+                    # Clean up old processed trades (keep last 100)
+                    if hasattr(self, '_processed_closed_trades') and len(self._processed_closed_trades) > 100:
+                        self._processed_closed_trades = set(list(self._processed_closed_trades)[-100:])
+
+                except Exception as e:
+                    logger.error(f"Error processing closed trades: {e}")
+
                 db.close()
 
                 time.sleep(self.monitor_interval)

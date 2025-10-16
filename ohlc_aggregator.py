@@ -15,9 +15,12 @@ def aggregate_ticks_to_m1(db, account_id, symbol, start_time, end_time):
     """
     Aggregate ticks to M1 (1-minute) OHLC candles
 
+    NOTE: account_id parameter kept for backwards compatibility but not used
+    Ticks are now global (no account_id column)
+
     Args:
         db: Database session
-        account_id: Account ID
+        account_id: Account ID (not used, ticks are global)
         symbol: Trading symbol
         start_time: Start timestamp
         end_time: End timestamp
@@ -25,9 +28,8 @@ def aggregate_ticks_to_m1(db, account_id, symbol, start_time, end_time):
     Returns:
         Number of M1 candles created
     """
-    # Query ticks for the given time range
+    # Query ticks for the given time range (ticks are now global, no account_id)
     ticks = db.query(Tick).filter(
-        Tick.account_id == account_id,
         Tick.symbol == symbol,
         Tick.timestamp >= start_time,
         Tick.timestamp < end_time
@@ -59,9 +61,8 @@ def aggregate_ticks_to_m1(db, account_id, symbol, start_time, end_time):
         prices = [t['price'] for t in tick_group]
         volumes = [t['volume'] for t in tick_group]
 
-        # Check if candle already exists
+        # Check if candle already exists (OHLC is now global too)
         existing = db.query(OHLCData).filter(
-            OHLCData.account_id == account_id,
             OHLCData.symbol == symbol,
             OHLCData.timeframe == 'M1',
             OHLCData.timestamp == minute_time
@@ -69,7 +70,6 @@ def aggregate_ticks_to_m1(db, account_id, symbol, start_time, end_time):
 
         if not existing:
             ohlc = OHLCData(
-                account_id=account_id,
                 symbol=symbol,
                 timeframe='M1',
                 open=tick_group[0]['price'],  # First tick price
@@ -90,6 +90,8 @@ def aggregate_ticks_to_m1(db, account_id, symbol, start_time, end_time):
 def aggregate_m1_to_higher_timeframes(db, account_id, symbol):
     """
     Aggregate M1 candles to higher timeframes: M5, M15, H1, H4, D1
+
+    NOTE: account_id kept for compatibility but not used (OHLC is global now)
     """
     timeframes = {
         'M5': 5,      # 5 minutes
@@ -102,9 +104,8 @@ def aggregate_m1_to_higher_timeframes(db, account_id, symbol):
     total_created = 0
 
     for tf_name, minutes in timeframes.items():
-        # Get latest M1 candles
+        # Get latest M1 candles (OHLC is now global)
         m1_candles = db.query(OHLCData).filter(
-            OHLCData.account_id == account_id,
             OHLCData.symbol == symbol,
             OHLCData.timeframe == 'M1'
         ).order_by(OHLCData.timestamp.desc()).limit(minutes * 2).all()  # Get enough data
@@ -135,9 +136,8 @@ def aggregate_m1_to_higher_timeframes(db, account_id, symbol):
 
         # Create higher timeframe candles
         for period_time, candle_group in groups.items():
-            # Check if already exists
+            # Check if already exists (OHLC is global)
             existing = db.query(OHLCData).filter(
-                OHLCData.account_id == account_id,
                 OHLCData.symbol == symbol,
                 OHLCData.timeframe == tf_name,
                 OHLCData.timestamp == period_time
@@ -145,7 +145,6 @@ def aggregate_m1_to_higher_timeframes(db, account_id, symbol):
 
             if not existing and len(candle_group) >= (minutes // 5):  # Need at least some candles
                 ohlc = OHLCData(
-                    account_id=account_id,
                     symbol=symbol,
                     timeframe=tf_name,
                     open=candle_group[0].open,
@@ -164,16 +163,16 @@ def aggregate_m1_to_higher_timeframes(db, account_id, symbol):
     return total_created
 
 
-def cleanup_ticks_with_aggregation(db, account_id, minutes=1):
+def cleanup_ticks_with_aggregation(db, account_id=None, minutes=1):
     """
     Aggregate old ticks to OHLC before deleting them
+
+    NOTE: account_id kept for compatibility but not used (ticks are global now)
     """
     from datetime import datetime, timedelta
 
-    # Get the latest tick timestamp from the database to handle timezone issues
-    latest_tick_time = db.query(func.max(Tick.timestamp)).filter(
-        Tick.account_id == account_id
-    ).scalar()
+    # Get the latest tick timestamp from the database (ticks are global)
+    latest_tick_time = db.query(func.max(Tick.timestamp)).scalar()
 
     if not latest_tick_time:
         return 0, 0  # No ticks to process
@@ -181,9 +180,8 @@ def cleanup_ticks_with_aggregation(db, account_id, minutes=1):
     # Calculate cutoff relative to latest tick (not server time)
     cutoff_time = latest_tick_time - timedelta(minutes=minutes)
 
-    # Get symbols with old ticks
+    # Get symbols with old ticks (ticks are global, no account_id)
     symbols_with_ticks = db.query(Tick.symbol).filter(
-        Tick.account_id == account_id,
         Tick.timestamp < cutoff_time
     ).distinct().all()
 
@@ -191,15 +189,14 @@ def cleanup_ticks_with_aggregation(db, account_id, minutes=1):
     total_deleted = 0
 
     for (symbol,) in symbols_with_ticks:
-        # Get time range of old ticks
+        # Get time range of old ticks (no account_id filter)
         oldest_tick = db.query(func.min(Tick.timestamp)).filter(
-            Tick.account_id == account_id,
             Tick.symbol == symbol,
             Tick.timestamp < cutoff_time
         ).scalar()
 
         if oldest_tick:
-            # Aggregate to M1
+            # Aggregate to M1 (account_id passed but not used)
             candles = aggregate_ticks_to_m1(
                 db, account_id, symbol,
                 oldest_tick, cutoff_time
@@ -209,9 +206,8 @@ def cleanup_ticks_with_aggregation(db, account_id, minutes=1):
             # Aggregate to higher timeframes
             aggregate_m1_to_higher_timeframes(db, account_id, symbol)
 
-    # Delete old ticks
+    # Delete old ticks (global, no account_id)
     deleted = db.query(Tick).filter(
-        Tick.account_id == account_id,
         Tick.timestamp < cutoff_time
     ).delete()
 
