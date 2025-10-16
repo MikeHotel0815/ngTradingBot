@@ -343,7 +343,7 @@ def heartbeat(account, db):
         
         db.commit()
 
-        logger.info(f"Heartbeat from {account.mt5_account_number} - Balance: {balance}, Equity: {equity}, Profit Today: {actual_profit_today}")
+        logger.info(f"Heartbeat from {account.mt5_account_number} - Balance: {balance}, Equity: {equity}, Profit: Today={actual_profit_today} Month={actual_profit_month}, Deposits: Month={actual_deposits_month}")
 
         # ✅ NEW: Auto TP/SL for manual MT5 trades without protection
         try:
