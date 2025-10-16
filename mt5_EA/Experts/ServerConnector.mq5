@@ -9,7 +9,7 @@
 #property strict
 
 // MANUAL: Update this date when code is modified!
-#define CODE_LAST_MODIFIED "2025-10-16 16:15:00"  // OPTIMIZATION: Smart OHLC data sending - checks server coverage before upload
+#define CODE_LAST_MODIFIED "2025-10-16 17:25:00 - ERROR_4756_FIX_APPLIED"  // FIX: request.price = 0 for TRADE_ACTION_DEAL
 
 // Input parameters
 input string ServerURL = "http://100.97.100.50:9900";  // Python server URL (Tailscale)
