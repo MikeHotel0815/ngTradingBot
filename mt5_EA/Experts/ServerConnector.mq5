@@ -9,7 +9,7 @@
 #property strict
 
 // MANUAL: Update this date when code is modified!
-#define CODE_LAST_MODIFIED "2025-10-16 17:25:00 - ERROR_4756_FIX_APPLIED"  // FIX: request.price = 0 for TRADE_ACTION_DEAL
+#define CODE_LAST_MODIFIED "2025-10-16 17:32:00 - ERROR_4756_FINAL_FIX"  // FIX: request.sl/tp = 0, set via modify after
 
 // Input parameters
 input string ServerURL = "http://100.97.100.50:9900";  // Python server URL (Tailscale)
@@ -1383,8 +1383,8 @@ void ExecuteOpenTrade(string commandId, string cmdObj)
    request.volume = volume;
    request.type = orderType;
    request.price = 0;  // ✅ CRITICAL FIX: Must be 0 for TRADE_ACTION_DEAL (market orders)
-   request.sl = sl;
-   request.tp = tp;
+   request.sl = 0;     // ✅ FIX: Don't set SL/TP in initial order - set via modify after
+   request.tp = 0;     // ✅ FIX: Prevents error 4756 "Wrong request structure"
    request.deviation = 10;
    request.magic = MagicNumber;
    request.comment = comment;
