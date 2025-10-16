@@ -537,34 +537,56 @@ class TradeMonitor:
 
                 # ✅ NEW: Check for recently closed trades and update symbol configs
                 try:
-                    closed_trades = db.query(Trade).filter(
+                    # Query closed trades and IMMEDIATELY materialize the results
+                    # Using .all() to avoid lazy-loading issues
+                    closed_trades_list = db.query(Trade).filter(
                         Trade.status == 'closed',
                         Trade.close_time >= datetime.utcnow() - timedelta(minutes=2)
                     ).all()
-
-                    for trade in closed_trades:
+                    
+                    # CRITICAL: Extract ALL data immediately while session is active
+                    # This ensures no lazy-loading happens after the loop
+                    closed_tickets = []
+                    for t in closed_trades_list:
+                        # Force all attributes to be loaded NOW
+                        closed_tickets.append({
+                            'ticket': int(t.ticket),      # Force int conversion
+                            'symbol': str(t.symbol),      # Force str conversion
+                            'direction': str(t.direction) # Force str conversion
+                        })
+                    
+                    # Delete the query result reference to help garbage collection
+                    del closed_trades_list
+                    
+                    # Process the extracted data
+                    for trade_data in closed_tickets:
+                        ticket = trade_data['ticket']
+                        symbol = trade_data['symbol']
+                        direction = trade_data['direction']
+                        
                         # Check if we've already processed this trade
                         if not hasattr(self, '_processed_closed_trades'):
                             self._processed_closed_trades = set()
 
-                        if trade.ticket not in self._processed_closed_trades:
+                        if ticket not in self._processed_closed_trades:
                             logger.info(
                                 f"📊 Processing closed trade for symbol config update: "
-                                f"{trade.symbol} {trade.direction} #{trade.ticket}"
+                                f"{symbol} {direction} #{ticket}"
                             )
 
                             try:
-                                # Update symbol dynamic config
-                                config = update_symbol_after_trade(trade, market_regime=None)
-                                self._processed_closed_trades.add(trade.ticket)
+                                # Update symbol dynamic config (returns dict to avoid session issues)
+                                config = update_symbol_after_trade(ticket, market_regime=None)
+                                self._processed_closed_trades.add(ticket)
 
+                                # Log config update (config is now a dict)
                                 logger.info(
-                                    f"✅ Symbol config updated: {config.symbol} {config.direction} - "
-                                    f"status={config.status}, conf≥{config.min_confidence_threshold}%, "
-                                    f"risk={config.risk_multiplier}x"
+                                    f"✅ Symbol config updated: {config['symbol']} {config['direction']} - "
+                                    f"status={config['status']}, conf≥{config['min_confidence_threshold']}%, "
+                                    f"risk={config['risk_multiplier']}x"
                                 )
                             except Exception as e:
-                                logger.error(f"Error updating symbol config for trade {trade.ticket}: {e}")
+                                logger.error(f"Error updating symbol config for trade #{ticket}: {e}")
 
                     # Clean up old processed trades (keep last 100)
                     if hasattr(self, '_processed_closed_trades') and len(self._processed_closed_trades) > 100:

@@ -78,8 +78,8 @@ class PatternRecognizer:
         """
         db = ScopedSession()
         try:
+            # OHLC data is now global (no account_id column)
             ohlc = db.query(OHLCData).filter_by(
-                account_id=self.account_id,
                 symbol=self.symbol,
                 timeframe=self.timeframe
             ).order_by(OHLCData.timestamp.desc()).limit(limit).all()
@@ -321,8 +321,8 @@ class PatternRecognizer:
         db = ScopedSession()
         try:
             # Get latest OHLC snapshot (last 5 candles)
+            # OHLC data is now global (no account_id column)
             ohlc = db.query(OHLCData).filter_by(
-                account_id=self.account_id,
                 symbol=self.symbol,
                 timeframe=self.timeframe
             ).order_by(OHLCData.timestamp.desc()).limit(5).all()
@@ -371,7 +371,7 @@ class PatternRecognizer:
         patterns = self.detect_patterns()
         signals = []
 
-        logger.info(f"📊 Converting {len(patterns)} detected patterns to signals (reliability threshold: > 50%)")
+        logger.info(f"📊 Converting {len(patterns)} detected patterns to signals (reliability threshold: > 40%)")
 
         # Pattern categorization by strategy type
         # Mean-Reversion: Reversal patterns that work in ranging markets
@@ -390,8 +390,8 @@ class PatternRecognizer:
         ]
 
         for pattern in patterns:
-            # Only consider patterns with reliability > 50%
-            if pattern['reliability'] > 50:
+            # Only consider patterns with reliability > 40%
+            if pattern['reliability'] > 40:
                 signal_type = 'BUY' if pattern['type'] == 'bullish' else 'SELL'
 
                 # Determine strength based on reliability

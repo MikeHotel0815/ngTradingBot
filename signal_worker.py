@@ -168,8 +168,8 @@ class SignalWorker:
                 from models import Tick
                 from datetime import datetime, timedelta
 
+                # NOTE: Ticks are now GLOBAL (no account_id) - a EURUSD tick is the same for everyone
                 latest_tick = db.query(Tick).filter_by(
-                    account_id=account_id,
                     symbol=symbol_name
                 ).order_by(Tick.timestamp.desc()).first()
 

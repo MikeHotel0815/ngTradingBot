@@ -57,13 +57,13 @@ class SignalGenerator:
             # Aggregate signals
             signal = self._aggregate_signals(pattern_signals, indicator_signals)
 
-            # ✅ INCREASED: Minimum confidence threshold for signal generation (50%)
+            # ✅ UPDATED: Minimum confidence threshold for signal generation (40%)
             # Note: This is NOT the display/auto-trade threshold
             # - Trading Signals slider controls which signals are SHOWN in UI
             # - Auto-Trade slider controls which signals are AUTO-TRADED
             # This just ensures we don't generate completely weak signals
-            # RAISED from 40% to 50% to filter out weak signals
-            MIN_GENERATION_CONFIDENCE = 50
+            # LOWERED from 50% to 40% to match active symbol configs
+            MIN_GENERATION_CONFIDENCE = 40
 
             if signal and signal['confidence'] >= MIN_GENERATION_CONFIDENCE:
                 # ✅ NEW: Ensemble validation BEFORE multi-timeframe check
@@ -353,16 +353,14 @@ class SignalGenerator:
         from models import Tick
         db = ScopedSession()
         try:
-            # Get latest tick for current market price
+            # Get latest tick for current market price (ticks are global - no account_id)
             latest_tick = db.query(Tick).filter_by(
-                account_id=self.account_id,
                 symbol=self.symbol
             ).order_by(Tick.timestamp.desc()).first()
 
             if not latest_tick:
-                # Fallback to OHLC if no tick available
+                # Fallback to OHLC if no tick available (OHLC is global - no account_id)
                 latest_ohlc = db.query(OHLCData).filter_by(
-                    account_id=self.account_id,
                     symbol=self.symbol,
                     timeframe=self.timeframe
                 ).order_by(OHLCData.timestamp.desc()).first()
@@ -456,9 +454,8 @@ class SignalGenerator:
         """
         from models import Tick
         try:
-            # Get last 100 ticks for this symbol
+            # Get last 100 ticks for this symbol (ticks are global - no account_id)
             recent_ticks = db.query(Tick).filter_by(
-                account_id=self.account_id,
                 symbol=self.symbol
             ).order_by(Tick.timestamp.desc()).limit(100).all()
 
@@ -477,68 +474,53 @@ class SignalGenerator:
 
     def _save_signal(self, signal: Dict):
         """
-        Save or update signal to database using PostgreSQL UPSERT (INSERT ... ON CONFLICT).
-
-        This prevents race conditions by using database-level atomic operations.
-        The unique constraint on (account_id, symbol, timeframe) WHERE status='active'
-        ensures only ONE active signal exists at a time.
+        Save signal to database.
+        
+        First expires any existing active signals for this symbol/timeframe,
+        then inserts the new signal.
 
         Args:
             signal: Signal dictionary
         """
         db = ScopedSession()
         try:
-            from sqlalchemy import text
-            import json
-
-            # Use PostgreSQL UPSERT (INSERT ... ON CONFLICT DO UPDATE)
-            # This is atomic and prevents race conditions
-            upsert_sql = text("""
-                INSERT INTO trading_signals
-                    (account_id, symbol, timeframe, signal_type, confidence,
-                     entry_price, sl_price, tp_price, indicators_used,
-                     patterns_detected, reasons, status, created_at, expires_at)
-                VALUES
-                    (:account_id, :symbol, :timeframe, :signal_type, :confidence,
-                     :entry_price, :sl_price, :tp_price, CAST(:indicators AS jsonb),
-                     CAST(:patterns AS jsonb), CAST(:reasons AS jsonb), 'active', NOW(), NOW() + INTERVAL '24 hours')
-                ON CONFLICT (account_id, symbol, timeframe)
-                    WHERE status = 'active'
-                DO UPDATE SET
-                    signal_type = EXCLUDED.signal_type,
-                    confidence = EXCLUDED.confidence,
-                    entry_price = EXCLUDED.entry_price,
-                    sl_price = EXCLUDED.sl_price,
-                    tp_price = EXCLUDED.tp_price,
-                    indicators_used = EXCLUDED.indicators_used,
-                    patterns_detected = EXCLUDED.patterns_detected,
-                    reasons = EXCLUDED.reasons,
-                    expires_at = NOW() + INTERVAL '24 hours'
-                RETURNING id, created_at;
-            """)
-
-            result = db.execute(upsert_sql, {
-                'account_id': self.account_id,
-                'symbol': self.symbol,
-                'timeframe': self.timeframe,
-                'signal_type': signal['signal_type'],
-                'confidence': float(signal['confidence']),
-                'entry_price': float(signal.get('entry_price', 0)),
-                'sl_price': float(signal.get('sl_price', 0)),
-                'tp_price': float(signal.get('tp_price', 0)),
-                'indicators': json.dumps(signal.get('indicators_used', {})),
-                'patterns': json.dumps(signal.get('patterns_detected', [])),
-                'reasons': json.dumps(signal.get('reasons', []))
-            })
-
+            from models import TradingSignal
+            from datetime import datetime, timedelta
+            
+            # Expire any existing active signals for this symbol/timeframe
+            existing = db.query(TradingSignal).filter_by(
+                account_id=self.account_id,
+                symbol=self.symbol,
+                timeframe=self.timeframe,
+                status='active'
+            ).all()
+            
+            for sig in existing:
+                sig.status = 'expired'
+            
+            # Create new signal
+            new_signal = TradingSignal(
+                account_id=self.account_id,
+                symbol=self.symbol,
+                timeframe=self.timeframe,
+                signal_type=signal['signal_type'],
+                confidence=float(signal['confidence']),
+                entry_price=float(signal.get('entry_price', 0)),
+                sl_price=float(signal.get('sl_price', 0)),
+                tp_price=float(signal.get('tp_price', 0)),
+                indicators_used=signal.get('indicators_used', {}),
+                patterns_detected=signal.get('patterns_detected', []),
+                reasons=signal.get('reasons', []),
+                status='active',
+                created_at=datetime.utcnow(),
+                expires_at=datetime.utcnow() + timedelta(hours=24)
+            )
+            
+            db.add(new_signal)
             db.commit()
 
-            # Get returned signal ID
-            row = result.fetchone()
-            signal_id = row[0] if row else None
-
             logger.info(
-                f"✓ Signal {'updated' if row else 'created'} [ID:{signal_id}]: "
+                f"✓ Signal created [ID:{new_signal.id}]: "
                 f"{signal['signal_type']} {self.symbol} {self.timeframe} "
                 f"(confidence: {signal['confidence']}%, entry: {signal.get('entry_price', 0):.5f})"
             )
@@ -706,9 +688,8 @@ class SignalGenerator:
 
             non_tradeable_expired = 0
             for signal in active_signals:
-                # Check if symbol is tradeable
+                # Check if symbol is tradeable (ticks are global - no account_id)
                 latest_tick = db.query(Tick).filter_by(
-                    account_id=signal.account_id,
                     symbol=signal.symbol
                 ).order_by(Tick.timestamp.desc()).first()
 

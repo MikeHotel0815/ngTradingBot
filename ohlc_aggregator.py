@@ -143,7 +143,9 @@ def aggregate_m1_to_higher_timeframes(db, account_id, symbol):
                 OHLCData.timestamp == period_time
             ).first()
 
-            if not existing and len(candle_group) >= (minutes // 5):  # Need at least some candles
+            # Require at least 1 M1 candle to create higher timeframe candle
+            # (Previously required minutes//5 which was too restrictive - 12 for H1, 48 for H4)
+            if not existing and len(candle_group) >= 1:
                 ohlc = OHLCData(
                     symbol=symbol,
                     timeframe=tf_name,

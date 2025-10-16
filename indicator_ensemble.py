@@ -58,9 +58,9 @@ class IndicatorEnsemble:
                 indicators, signal_type, agreement
             )
 
-            # Minimum requirements - INCREASED for better signal quality
-            min_agreeing = 4 if signal_type == 'BUY' else 4  # Both need 4/7 indicators
-            min_confidence = 70.0 if signal_type == 'BUY' else 65.0  # BUY needs higher confidence
+            # Minimum requirements - LOWERED to allow more signals (matching 40% config threshold)
+            min_agreeing = 2 if signal_type == 'BUY' else 2  # Both need 2/7 indicators (simple majority)
+            min_confidence = 45.0 if signal_type == 'BUY' else 40.0  # Match symbol config thresholds
 
             is_valid = (
                 agreement['agreeing'] >= min_agreeing and

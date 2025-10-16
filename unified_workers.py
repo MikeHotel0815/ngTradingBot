@@ -24,6 +24,7 @@ import time
 import logging
 import threading
 import signal
+import json
 from datetime import datetime
 from typing import Dict, Callable
 
@@ -37,6 +38,22 @@ logger = logging.getLogger(__name__)
 # Global shutdown flag
 shutdown_event = threading.Event()
 
+# Redis connection for metrics export
+redis_client = None
+
+def get_redis_client():
+    """Get or create Redis client for metrics"""
+    global redis_client
+    if redis_client is None:
+        try:
+            import redis
+            redis_url = os.getenv('REDIS_URL', 'redis://redis:6379/0')
+            redis_client = redis.from_url(redis_url, decode_responses=True)
+            logger.info("✅ Redis client connected for metrics export")
+        except Exception as e:
+            logger.warning(f"⚠️  Redis metrics export disabled: {e}")
+    return redis_client
+
 
 class WorkerThread(threading.Thread):
     """
@@ -47,9 +64,40 @@ class WorkerThread(threading.Thread):
         self.target_func = target
         self.interval_seconds = interval_seconds
         self.last_run = None
+        self.last_success = None
         self.error_count = 0
         self.success_count = 0
         self.is_healthy = True
+        self.started_at = datetime.utcnow()
+        
+    def get_metrics(self) -> Dict:
+        """Get current worker metrics"""
+        uptime_seconds = (datetime.utcnow() - self.started_at).total_seconds()
+        
+        return {
+            'name': self.name,
+            'interval_seconds': self.interval_seconds,
+            'is_healthy': self.is_healthy,
+            'is_alive': self.is_alive(),
+            'success_count': self.success_count,
+            'error_count': self.error_count,
+            'last_run': self.last_run.isoformat() if self.last_run else None,
+            'last_success': self.last_success.isoformat() if self.last_success else None,
+            'started_at': self.started_at.isoformat(),
+            'uptime_seconds': int(uptime_seconds),
+            'uptime_hours': round(uptime_seconds / 3600, 1)
+        }
+    
+    def export_metrics(self):
+        """Export metrics to Redis"""
+        try:
+            redis = get_redis_client()
+            if redis:
+                key = f"worker:metrics:{self.name}"
+                metrics = self.get_metrics()
+                redis.setex(key, 300, json.dumps(metrics))  # Expire after 5 minutes
+        except Exception as e:
+            logger.debug(f"Failed to export metrics for {self.name}: {e}")
         
     def run(self):
         """Run worker in loop with error recovery"""
@@ -63,9 +111,13 @@ class WorkerThread(threading.Thread):
                 
                 # Update status
                 self.last_run = datetime.utcnow()
+                self.last_success = datetime.utcnow()
                 self.success_count += 1
                 self.is_healthy = True
                 self.error_count = 0  # Reset error count on success
+                
+                # Export metrics
+                self.export_metrics()
                 
                 # Sleep for interval (check shutdown flag every second)
                 for _ in range(self.interval_seconds):
@@ -76,11 +128,15 @@ class WorkerThread(threading.Thread):
             except Exception as e:
                 self.error_count += 1
                 self.is_healthy = (self.error_count < 5)  # Unhealthy after 5 consecutive errors
+                self.last_run = datetime.utcnow()
                 
                 logger.error(
                     f"❌ {self.name}: Error in iteration (consecutive errors: {self.error_count}): {e}",
                     exc_info=True
                 )
+                
+                # Export metrics even on error
+                self.export_metrics()
                 
                 # Exponential backoff on errors (max 5 minutes)
                 backoff = min(60 * self.error_count, 300)

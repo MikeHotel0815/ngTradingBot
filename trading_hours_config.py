@@ -45,15 +45,18 @@ TRADING_SCHEDULES = {
         'description': 'Gold 24/5 (Sun 23:00 - Fri 22:00 UTC)'
     },
 
-    # DAX (DE40) - German index
-    # Xetra: 07:00-17:30 UTC (09:00-19:30 Berlin summer, 08:00-18:30 winter)
-    # Extended hours with derivatives: 01:00-22:00 UTC
+    # DAX (DE40) - German index (Xetra)
+    # Xetra Haupthandel: 09:00-17:30 MESZ = 07:00-15:30 UTC
+    # Eröffnungsauktion: ab 08:50 MESZ = 06:50 UTC
+    # Schlussauktion: ab 17:30 MESZ = 15:30 UTC
+    # Hinweis: Zertifikate/Optionsscheine (Börse Frankfurt) bis 22:00 MESZ = 20:00 UTC
     'DE40.c': {
         'type': 'index',
         'days': [0, 1, 2, 3, 4],  # Monday-Friday
-        'hours_utc': list(range(1, 22)),  # 01:00-21:59 UTC (extended hours)
-        'core_hours_utc': list(range(7, 18)),  # 07:00-17:59 UTC (main session)
-        'description': 'DAX Mon-Fri 01:00-22:00 UTC (core: 07:00-18:00)'
+        'hours_utc': list(range(7, 16)),  # 07:00-15:59 UTC (Xetra Haupthandel)
+        'premarket_from': 6,  # Eröffnungsauktion ab 06:50 UTC (08:50 MESZ)
+        'core_hours_utc': list(range(7, 16)),  # 07:00-15:59 UTC (Haupthandel)
+        'description': 'DAX Xetra Mon-Fri 07:00-16:00 UTC (09:00-17:30 MESZ)'
     },
 
     # Bitcoin - Trades 24/7

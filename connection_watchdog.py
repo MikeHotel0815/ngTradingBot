@@ -76,6 +76,9 @@ class ConnectionWatchdog:
         db = ScopedSession()
         try:
             now = datetime.utcnow()
+            if now.tzinfo is None:
+                now = pytz.UTC.localize(now)
+                
             accounts = db.query(Account).all()
 
             for account in accounts:
@@ -94,13 +97,22 @@ class ConnectionWatchdog:
 
                 # Check heartbeat age
                 if account.last_heartbeat:
-                    age = (now - account.last_heartbeat).total_seconds()
+                    # Ensure last_heartbeat is timezone-aware
+                    last_heartbeat = account.last_heartbeat
+                    if last_heartbeat.tzinfo is None:
+                        last_heartbeat = pytz.UTC.localize(last_heartbeat)
+                    
+                    age = (now - last_heartbeat).total_seconds()
 
                     # Connection is healthy
                     if age < self.heartbeat_timeout:
                         if not state['online']:
                             # Connection was restored!
-                            offline_duration = (now - state['last_offline']).total_seconds()
+                            last_offline = state['last_offline']
+                            if last_offline and last_offline.tzinfo is None:
+                                last_offline = pytz.UTC.localize(last_offline)
+                            
+                            offline_duration = (now - last_offline).total_seconds() if last_offline else 0
 
                             logger.info(
                                 f"✅ MT5 #{mt5_number} CONNECTION RESTORED "
@@ -160,7 +172,10 @@ class ConnectionWatchdog:
         try:
             from models import SubscribedSymbol
 
+            # Ensure now is timezone-aware from the start
             now = datetime.utcnow()
+            if now.tzinfo is None:
+                now = pytz.UTC.localize(now)
 
             # Get subscribed symbols for active accounts
             subscribed = db.query(SubscribedSymbol).filter_by(active=True).all()
@@ -190,9 +205,8 @@ class ConnectionWatchdog:
 
                     age = (now - tick_time).total_seconds()
 
-                    # Check if market should be open right now
-                    now_utc = pytz.UTC.localize(now) if now.tzinfo is None else now
-                    market_open, close_reason = is_market_open(symbol, now_utc)
+                    # Check if market should be open right now (now is already timezone-aware)
+                    market_open, close_reason = is_market_open(symbol, now)
 
                     # Tick flow is healthy
                     if age < self.tick_timeout:
@@ -220,7 +234,7 @@ class ConnectionWatchdog:
                         if not state['alerted'] and age > 600 and market_open:  # 10 minutes + market open
                             logger.error(f"🚨 {symbol} tick data STALE for {age:.0f}s (MARKET SHOULD BE OPEN)")
 
-                            next_open = get_next_open_time(symbol, now_utc)
+                            next_open = get_next_open_time(symbol, now)
 
                             self.telegram.send_alert(
                                 title=f"{symbol} Data Flow Problem",

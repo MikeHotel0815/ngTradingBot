@@ -20,6 +20,7 @@ from backup_scheduler import start_backup_scheduler, get_scheduler
 from redis_client import init_redis, get_redis
 from tick_batch_writer import start_batch_writer, get_batch_writer
 from command_helper import create_command
+from worker_status_api import worker_status_bp
 
 # Configure logging
 logging.basicConfig(
@@ -35,6 +36,9 @@ app_trades = Flask('trades')  # Port 9902
 app_logs = Flask('logs')  # Port 9903
 app_webui = Flask('webui', template_folder='templates')  # Port 9905
 socketio = SocketIO(app_webui, cors_allowed_origins="*")
+
+# Register worker status API blueprint
+app_webui.register_blueprint(worker_status_bp)
 
 # Enable CORS for all apps (allow cross-port requests)
 def add_cors_headers(response):
@@ -384,12 +388,12 @@ def heartbeat(account, db):
             'free_margin': float(free_margin) if free_margin else 0.0
         })
 
-        # Broadcast profit update via WebSocket (with corrected values)
+        # Broadcast profit update via WebSocket (with actual values from trades)
         socketio.emit('profit_update', {
-            'today': float(corrected_today),
-            'week': float(corrected_week),
-            'month': float(corrected_month),
-            'year': float(corrected_year)
+            'today': float(actual_profit_today),
+            'week': float(actual_profit_week),
+            'month': float(actual_profit_month),
+            'year': float(actual_profit_year)
         })
 
         return jsonify({'status': 'success'}), 200
@@ -1536,6 +1540,14 @@ def receive_ticks(account, db):
                 ask = tick_data.get('ask', 0)
                 spread = tick_data.get('spread', ask - bid if ask and bid else None)
 
+                # FIX: MT5 EA sends local time (GMT+3), convert to UTC
+                tick_timestamp = tick_data.get('timestamp')
+                if tick_timestamp:
+                    # Subtract 3 hours to convert from GMT+3 to UTC
+                    tick_timestamp = tick_timestamp - (3 * 3600)
+                else:
+                    tick_timestamp = datetime.utcnow().timestamp()
+
                 # Prepare tick data for buffering (Ticks are global - no account_id)
                 tick_buffer_data = {
                     'symbol': tick_data.get('symbol'),
@@ -1543,7 +1555,7 @@ def receive_ticks(account, db):
                     'ask': ask,
                     'spread': spread,
                     'volume': tick_data.get('volume', 0),
-                    'timestamp': tick_data.get('timestamp') or datetime.utcnow().timestamp()
+                    'timestamp': tick_timestamp
                 }
                 buffered_ticks.append(tick_buffer_data)
 
@@ -1554,7 +1566,7 @@ def receive_ticks(account, db):
                     'bid': float(bid),
                     'ask': float(ask),
                     'spread': float(spread) if spread else None,
-                    'timestamp': tick_data.get('timestamp')
+                    'timestamp': tick_timestamp
                 }
 
             # Buffer all ticks in Redis at once (fast!)
@@ -1567,12 +1579,20 @@ def receive_ticks(account, db):
             # Fallback: Write directly to PostgreSQL (Ticks are global - no account_id)
             tick_objects = []
             for tick_data in ticks:
+                # FIX: MT5 EA sends local time (GMT+3), convert to UTC
+                tick_timestamp = tick_data.get('timestamp')
+                if tick_timestamp:
+                    # Subtract 3 hours to convert from GMT+3 to UTC
+                    tick_dt = datetime.fromtimestamp(tick_timestamp - (3 * 3600))
+                else:
+                    tick_dt = datetime.utcnow()
+                
                 tick = Tick(
                     symbol=tick_data.get('symbol'),
                     bid=tick_data.get('bid'),
                     ask=tick_data.get('ask'),
                     volume=tick_data.get('volume', 0),
-                    timestamp=datetime.fromtimestamp(tick_data.get('timestamp')) if tick_data.get('timestamp') else datetime.utcnow()
+                    timestamp=tick_dt
                 )
                 tick_objects.append(tick)
 
@@ -2670,21 +2690,20 @@ def dashboard_symbols():
 
             symbols_data = []
             for sub in subscribed:
+                # NOTE: Ticks are now GLOBAL (no account_id)
                 latest_tick = db.query(Tick).filter_by(
-                    account_id=account.id,
                     symbol=sub.symbol
                 ).order_by(Tick.timestamp.desc()).first()
 
                 tick_count = db.query(Tick).filter_by(
-                    account_id=account.id,
                     symbol=sub.symbol
                 ).count()
 
                 # Calculate trends for different timeframes
                 trends = {}
                 for tf in ['M5', 'M15', 'H1', 'H4']:
+                    # NOTE: OHLCData is GLOBAL (no account_id)
                     ohlc_data = db.query(OHLCData).filter_by(
-                        account_id=account.id,
                         symbol=sub.symbol,
                         timeframe=tf
                     ).order_by(OHLCData.timestamp.desc()).limit(2).all()

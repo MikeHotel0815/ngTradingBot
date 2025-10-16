@@ -140,7 +140,6 @@ class SmartTPSLCalculator:
         
         try:
             broker_symbol = db.query(BrokerSymbol).filter_by(
-                account_id=self.account_id,
                 symbol=self.symbol
             ).first()
             
@@ -333,9 +332,8 @@ class SmartTPSLCalculator:
         """
         db = next(get_db())
         try:
-            # Get last 50 candles
+            # Get last 50 candles (OHLC is global - no account_id)
             candles = db.query(OHLCData).filter_by(
-                account_id=self.account_id,
                 symbol=self.symbol,
                 timeframe=self.timeframe
             ).order_by(OHLCData.timestamp.desc()).limit(50).all()

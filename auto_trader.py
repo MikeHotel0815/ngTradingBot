@@ -900,7 +900,7 @@ class AutoTrader:
 
                 try:
                     # Try to acquire lock with 60-second timeout (longer to cover entire trade creation)
-                    lock_acquired = self.redis.redis_client.set(
+                    lock_acquired = self.redis.client.set(
                         lock_key, "1", nx=True, ex=60
                     )
 
@@ -922,7 +922,7 @@ class AutoTrader:
                     # Release lock before continuing
                     if lock_acquired:
                         try:
-                            self.redis.redis_client.delete(lock_key)
+                            self.redis.client.delete(lock_key)
                             logger.debug(f"🔓 Released lock for {signal.symbol} {signal.timeframe} (signal rejected)")
                         except Exception as e:
                             logger.error(f"Failed to release lock: {e}")
@@ -1060,7 +1060,7 @@ class AutoTrader:
                 # This prevents holding the lock unnecessarily and allows other workers to proceed
                 if lock_acquired:
                     try:
-                        self.redis.redis_client.delete(lock_key)
+                        self.redis.client.delete(lock_key)
                         logger.debug(f"🔓 Released lock for {signal.symbol} {signal.timeframe} (trade command created)")
                         lock_acquired = False  # Mark as released
                     except Exception as e:
@@ -1324,9 +1324,8 @@ class AutoTrader:
         try:
             from models import Tick
 
-            # Get latest tick for spread
+            # Get latest tick for spread (NOTE: Ticks are now GLOBAL)
             latest_tick = db.query(Tick).filter_by(
-                account_id=signal.account_id,
                 symbol=signal.symbol
             ).order_by(Tick.timestamp.desc()).first()
 
@@ -1347,7 +1346,6 @@ class AutoTrader:
 
             # Get average spread from recent ticks
             recent_ticks = db.query(Tick).filter_by(
-                account_id=signal.account_id,
                 symbol=signal.symbol
             ).order_by(Tick.timestamp.desc()).limit(100).all()
 

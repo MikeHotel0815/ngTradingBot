@@ -78,8 +78,8 @@ class TechnicalIndicators:
         """
         db = ScopedSession()
         try:
+            # OHLC data is now global (no account_id column)
             ohlc = db.query(OHLCData).filter_by(
-                account_id=self.account_id,
                 symbol=self.symbol,
                 timeframe=self.timeframe
             ).order_by(OHLCData.timestamp.desc()).limit(limit).all()

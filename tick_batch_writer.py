@@ -91,8 +91,8 @@ class TickBatchWriter:
                         elif timestamp is None:
                             timestamp = datetime.utcnow()
 
+                        # NOTE: Ticks are now GLOBAL (no account_id)
                         tick = Tick(
-                            account_id=tick_data.get('account_id', account_id),
                             symbol=tick_data.get('symbol'),
                             bid=tick_data.get('bid'),
                             ask=tick_data.get('ask'),
@@ -105,16 +105,38 @@ class TickBatchWriter:
 
                         # Batch size limit
                         if len(tick_objects) >= self.batch_size:
-                            db.bulk_save_objects(tick_objects)
-                            db.commit()
-                            total_ticks += len(tick_objects)
+                            try:
+                                db.bulk_save_objects(tick_objects)
+                                db.commit()
+                                total_ticks += len(tick_objects)
+                            except Exception as batch_error:
+                                # Handle duplicates gracefully - insert one by one
+                                db.rollback()
+                                for tick in tick_objects:
+                                    try:
+                                        db.merge(tick)  # Updates if exists, inserts if new
+                                        db.commit()
+                                        total_ticks += 1
+                                    except:
+                                        db.rollback()  # Skip duplicates silently
                             tick_objects = []
 
                 # Write remaining ticks
                 if tick_objects:
-                    db.bulk_save_objects(tick_objects)
-                    db.commit()
-                    total_ticks += len(tick_objects)
+                    try:
+                        db.bulk_save_objects(tick_objects)
+                        db.commit()
+                        total_ticks += len(tick_objects)
+                    except Exception as batch_error:
+                        # Handle duplicates gracefully - insert one by one
+                        db.rollback()
+                        for tick in tick_objects:
+                            try:
+                                db.merge(tick)  # Updates if exists, inserts if new
+                                db.commit()
+                                total_ticks += 1
+                            except:
+                                db.rollback()  # Skip duplicates silently
 
             if total_ticks > 0:
                 self.total_written += total_ticks

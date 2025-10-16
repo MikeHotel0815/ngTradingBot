@@ -146,7 +146,7 @@ class SymbolDynamicManager:
     def _update_rolling_window(self, db: Session, config: SymbolTradingConfig, trade: Trade):
         """Update rolling 20-trade performance window"""
         # Get last N trades for this symbol+direction
-        recent_trades = db.query(Trade).filter(
+        recent_trades_query = db.query(Trade).filter(
             Trade.account_id == self.account_id,
             Trade.symbol == config.symbol,
             Trade.direction == config.direction.lower() if config.direction else Trade.direction,
@@ -154,17 +154,25 @@ class SymbolDynamicManager:
             Trade.profit != None
         ).order_by(Trade.close_time.desc()).limit(config.rolling_window_size).all()
 
-        if not recent_trades:
+        if not recent_trades_query:
             return
+
+        # CRITICAL: Extract ALL trade data to scalars IMMEDIATELY while session is active
+        # This prevents DetachedInstanceError when accessing attributes later
+        recent_trades = []
+        for t in recent_trades_query:
+            recent_trades.append({
+                'profit': float(t.profit) if t.profit is not None else 0.0
+            })
 
         # Calculate rolling metrics
         config.rolling_trades_count = len(recent_trades)
-        config.rolling_wins = sum(1 for t in recent_trades if t.profit and float(t.profit) > 0)
-        config.rolling_losses = sum(1 for t in recent_trades if t.profit and float(t.profit) < 0)
-        config.rolling_breakeven = sum(1 for t in recent_trades if t.profit and float(t.profit) == 0)
+        config.rolling_wins = sum(1 for t in recent_trades if t['profit'] > 0)
+        config.rolling_losses = sum(1 for t in recent_trades if t['profit'] < 0)
+        config.rolling_breakeven = sum(1 for t in recent_trades if t['profit'] == 0)
 
         # Calculate profit metrics
-        total_profit = sum(float(t.profit) for t in recent_trades if t.profit)
+        total_profit = sum(t['profit'] for t in recent_trades)
         config.rolling_profit = Decimal(str(total_profit))
 
         # Win rate
@@ -180,8 +188,8 @@ class SymbolDynamicManager:
             ).quantize(Decimal('0.01'))
 
         # Profit factor
-        gross_profit = sum(float(t.profit) for t in recent_trades if t.profit and float(t.profit) > 0)
-        gross_loss = abs(sum(float(t.profit) for t in recent_trades if t.profit and float(t.profit) < 0))
+        gross_profit = sum(t['profit'] for t in recent_trades if t['profit'] > 0)
+        gross_loss = abs(sum(t['profit'] for t in recent_trades if t['profit'] < 0))
         if gross_loss > 0:
             config.rolling_profit_factor = Decimal(str(gross_profit / gross_loss)).quantize(Decimal('0.01'))
 
@@ -464,23 +472,46 @@ class SymbolDynamicManager:
 # Convenience functions for easy access
 # ========================================
 
-def update_symbol_after_trade(trade: Trade, market_regime: str = None) -> SymbolTradingConfig:
+def update_symbol_after_trade(ticket: int, market_regime: str = None) -> dict:
     """
     Convenience function to update symbol config after trade closes
+    
+    IMPORTANT: Takes ticket as scalar to avoid SQLAlchemy session binding issues.
+    Will re-query the Trade internally with its own session.
+    Returns dict instead of ORM object to completely avoid session issues.
 
     Args:
-        trade: Closed trade
+        ticket: Trade ticket number
         market_regime: Market regime at time of trade
 
     Returns:
-        Updated SymbolTradingConfig
+        Dict with config data (symbol, direction, status, etc.)
     """
     db = ScopedSession()
     try:
+        # Re-query trade with this session to avoid detachment issues
+        trade = db.query(Trade).filter_by(ticket=ticket).first()
+        if not trade:
+            raise ValueError(f"Trade #{ticket} not found")
+        
         manager = SymbolDynamicManager(account_id=trade.account_id)
-        return manager.update_after_trade(db, trade, market_regime)
+        config = manager.update_after_trade(db, trade, market_regime)
+        
+        # Build performance streak string
+        streak = 'W' * config.consecutive_wins if config.consecutive_wins else 'L' * config.consecutive_losses
+        
+        # Return dict to completely avoid session issues
+        return {
+            'symbol': config.symbol,
+            'direction': config.direction,
+            'status': config.status,
+            'min_confidence_threshold': config.min_confidence_threshold,
+            'risk_multiplier': config.risk_multiplier,
+            'streak': streak
+        }
     finally:
         db.close()
+
 
 
 def get_symbol_config(account_id: int, symbol: str, direction: str = None) -> SymbolTradingConfig:
