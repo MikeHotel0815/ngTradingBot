@@ -1012,11 +1012,15 @@ def set_risk_profile():
         trader = get_auto_trader()
         trader.set_risk_profile(risk_profile)
         
-        logger.info(f"Risk Profile set to: {risk_profile}")
+        # Get the new min_confidence after setting risk profile
+        min_confidence = trader.min_autotrade_confidence
+        
+        logger.info(f"Risk Profile set to: {risk_profile} (min_confidence: {min_confidence}%)")
         return jsonify({
             'status': 'success',
             'message': f'Risk Profile set to: {risk_profile.upper()}',
-            'risk_profile': risk_profile
+            'risk_profile': risk_profile,
+            'min_confidence': min_confidence
         }), 200
     except Exception as e:
         logger.error(f"Error setting risk profile: {e}")
