@@ -7,6 +7,8 @@
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
     <title>ngTradingBot Dashboard</title>
+    <!-- Inline SVG favicon to avoid 404 -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>🤖</text></svg>">
     <style>
         * {
             margin: 0;
@@ -1630,8 +1632,6 @@
         // AutoTrade checkbox and slider handling
         const autotradeEnabled = document.getElementById('autotrade-enabled');
         const autotradeSettings = document.getElementById('autotrade-settings');
-        const autotradeSlider = document.getElementById('autotrade-confidence-slider');
-        const autotradeValue = document.getElementById('autotrade-confidence-value');
 
         // Load AutoTrade status from server (not localStorage!)
         async function loadAutoTradeStatus() {
@@ -1643,12 +1643,26 @@
                 if (response.ok) {
                     // Update UI based on server status
                     autotradeEnabled.checked = data.enabled;
-                    autotradeSlider.value = data.min_confidence;
-                    autotradeValue.textContent = data.min_confidence;
+                    
+                    // Store min_confidence globally for auto-trade logic
+                    window.autoTradeMinConfidence = data.min_confidence || 50;
+                    
+                    // Update risk profile if available
+                    if (data.risk_profile) {
+                        const currentProfile = data.risk_profile.toLowerCase();
+                        document.querySelectorAll('.risk-profile-btn').forEach(btn => {
+                            const profile = btn.getAttribute('data-profile');
+                            if (profile === currentProfile) {
+                                btn.classList.add('active');
+                            } else {
+                                btn.classList.remove('active');
+                            }
+                        });
+                        localStorage.setItem('risk_profile', data.risk_profile);
+                    }
 
                     // Sync localStorage with server state
                     localStorage.setItem('autotrade_enabled', data.enabled);
-                    localStorage.setItem('autotrade_confidence', data.min_confidence);
 
                     if (data.enabled) {
                         autotradeSettings.style.display = 'block';
@@ -1657,24 +1671,16 @@
                     console.log('✅ Auto-Trade status loaded from server:', data);
                 } else {
                     console.error('❌ Failed to load auto-trade status:', data);
-                    // Fallback to localStorage if server fails
                     const savedAutotradeEnabled = localStorage.getItem('autotrade_enabled') === 'true';
-                    const savedAutotradeConfidence = localStorage.getItem('autotrade_confidence') || '40';
                     autotradeEnabled.checked = savedAutotradeEnabled;
-                    autotradeSlider.value = savedAutotradeConfidence;
-                    autotradeValue.textContent = savedAutotradeConfidence;
                     if (savedAutotradeEnabled) {
                         autotradeSettings.style.display = 'block';
                     }
                 }
             } catch (error) {
                 console.error('❌ Error loading auto-trade status:', error);
-                // Fallback to localStorage if server fails
                 const savedAutotradeEnabled = localStorage.getItem('autotrade_enabled') === 'true';
-                const savedAutotradeConfidence = localStorage.getItem('autotrade_confidence') || '40';
                 autotradeEnabled.checked = savedAutotradeEnabled;
-                autotradeSlider.value = savedAutotradeConfidence;
-                autotradeValue.textContent = savedAutotradeConfidence;
                 if (savedAutotradeEnabled) {
                     autotradeSettings.style.display = 'block';
                 }
@@ -1684,91 +1690,29 @@
         // Load status from server on page load
         loadAutoTradeStatus();
 
-        // Toggle AutoTrade settings visibility
-        autotradeEnabled.addEventListener('change', function() {
-            const isEnabled = this.checked;
-            localStorage.setItem('autotrade_enabled', isEnabled);
-
-            if (isEnabled) {
-                // Show settings and sync confidence slider value
-                autotradeSettings.style.display = 'block';
-                const mainConfidence = document.getElementById('signal-confidence-slider').value;
-                autotradeSlider.value = mainConfidence;
-                autotradeValue.textContent = mainConfidence;
-                localStorage.setItem('autotrade_confidence', mainConfidence);
-            } else {
-                // Hide settings
-                autotradeSettings.style.display = 'none';
-            }
-        });
-
-        // Handle AutoTrade confidence slider changes
-        // Track the initial value when user starts dragging
-        let autotradeInitialValue = autotradeSlider.value;
-
-        autotradeSlider.addEventListener('mousedown', function() {
-            autotradeInitialValue = this.value;
-        });
-
-        autotradeSlider.addEventListener('touchstart', function() {
-            autotradeInitialValue = this.value;
-        });
-
-        autotradeSlider.addEventListener('input', function() {
-            const value = this.value;
-            autotradeValue.textContent = value;
-        });
-
-        autotradeSlider.addEventListener('change', function() {
-            const value = this.value;
-
-            // If auto-trade is enabled and confidence is being LOWERED past initial value, ask for confirmation
-            if (autotradeEnabled.checked && parseInt(value) < parseInt(autotradeInitialValue)) {
-                const confirmed = confirm(
-                    `⚠️ Warning: You are lowering the Auto-Trade confidence from ${autotradeInitialValue}% to ${value}%.\n\n` +
-                    `This means MORE signals will be auto-traded (potentially riskier signals).\n\n` +
-                    `Are you sure you want to continue?`
-                );
-
-                if (!confirmed) {
-                    // Revert slider to initial value (before drag started)
-                    this.value = autotradeInitialValue;
-                    autotradeValue.textContent = autotradeInitialValue;
-                    return;
-                }
-            }
-
-            // Update initial value for next drag
-            autotradeInitialValue = value;
-            localStorage.setItem('autotrade_confidence', value);
-
-            // If auto-trade is enabled, update the confidence setting on the server
-            if (autotradeEnabled.checked) {
-                enableAutoTrade(value);
-            }
-        });
-
-        // Auto-trade checkbox event listener
+        // Toggle AutoTrade settings and sync with server
         autotradeEnabled.addEventListener('change', async function() {
             const isEnabled = this.checked;
-            const minConfidence = autotradeSlider.value;
             localStorage.setItem('autotrade_enabled', isEnabled);
 
             if (isEnabled) {
-                await enableAutoTrade(minConfidence);
+                autotradeSettings.style.display = 'block';
+                // Enable auto-trade on server (uses current risk profile)
+                await enableAutoTrade();
             } else {
+                autotradeSettings.style.display = 'none';
                 await disableAutoTrade();
             }
         });
 
-        // Enable auto-trade with confidence threshold
-        async function enableAutoTrade(minConfidence) {
+        // Enable auto-trade
+        async function enableAutoTrade() {
             try {
                 const apiBase = window.location.protocol + '//' + window.location.hostname + ':9900';
                 const response = await fetch(apiBase + '/api/auto-trade/enable', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ min_confidence: parseInt(minConfidence) })
+                    body: JSON.stringify({ min_confidence: 50 }) // Legacy compatibility
                 });
                 const data = await response.json();
                 if (response.ok) {
@@ -2267,9 +2211,10 @@
 
                         // Check if AutoTrade should execute this signal
                         if (!existing && autotradeEnabled.checked && !autoTradedSignals.has(signal.id)) {
-                            const autotradeConfidence = parseFloat(autotradeSlider.value);
+                            // Get min_confidence from server (loaded in loadAutoTradeStatus)
+                            const autotradeConfidence = window.autoTradeMinConfidence || 50;
                             if (signal.confidence >= autotradeConfidence) {
-                                console.log(`AutoTrade: Executing ${signal.signal_type} ${signal.symbol} (confidence: ${signal.confidence}%)`);
+                                console.log(`AutoTrade: Executing ${signal.signal_type} ${signal.symbol} (confidence: ${signal.confidence}% >= ${autotradeConfidence}%)`);
                                 // Mark signal as auto-traded immediately to prevent duplicates
                                 autoTradedSignals.add(signal.id);
                                 localStorage.setItem('autoTradedSignals', JSON.stringify([...autoTradedSignals]));
