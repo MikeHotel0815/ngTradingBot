@@ -2194,14 +2194,37 @@ def sync_trades(account, db):
                 db.add(new_trade)
                 synced_count += 1
 
+        # ✅ CRITICAL FIX: Close trades that are open in DB but not in MT5's list (MT5 is source of truth!)
+        closed_count = 0
+        if trades:  # Only reconcile if MT5 sent a trade list
+            synced_tickets = set(t.get('ticket') for t in trades if t.get('ticket'))
+            
+            # Find all trades marked as 'open' in DB for this account
+            db_open_trades = db.query(Trade).filter_by(
+                account_id=account.id,
+                status='open'
+            ).all()
+            
+            for db_trade in db_open_trades:
+                # If trade is open in DB but NOT in MT5's list, it must have been closed
+                if db_trade.ticket not in synced_tickets:
+                    db_trade.status = 'closed'
+                    db_trade.close_time = datetime.utcnow()
+                    db_trade.close_reason = 'SYNC_RECONCILIATION'
+                    # Keep the last known profit/swap/commission
+                    db_trade.updated_at = datetime.utcnow()
+                    closed_count += 1
+                    logger.warning(f"🔄 Reconciliation: Closed trade #{db_trade.ticket} (not in MT5 position list)")
+
         db.commit()
 
-        logger.info(f"Trade sync for account {account.mt5_account_number}: {synced_count} new, {updated_count} updated")
+        logger.info(f"Trade sync for account {account.mt5_account_number}: {synced_count} new, {updated_count} updated, {closed_count} reconciled/closed")
 
         return jsonify({
             'status': 'success',
             'synced': synced_count,
-            'updated': updated_count
+            'updated': updated_count,
+            'reconciled': closed_count
         }), 200
 
     except Exception as e:
@@ -2413,21 +2436,26 @@ def update_trade(account, db):
                 # ✅ NEW: If no match by ticket, try to match by symbol/volume/time window
                 if not matching_command:
                     # Look for recently created commands (last 30 seconds) with matching symbol and volume
-                    from datetime import datetime, timedelta
-                    recent_threshold = datetime.utcnow() - timedelta(seconds=30)
+                    # ✅ FIX: Extract symbol, volume, direction from data first
+                    trade_symbol = data.get('symbol')
+                    trade_volume = data.get('volume')
+                    trade_direction = data.get('direction')
                     
-                    matching_command = db.query(Command).filter(
-                        Command.account_id == account.id,
-                        Command.command_type == 'OPEN_TRADE',
-                        Command.created_at >= recent_threshold,
-                        Command.payload['symbol'].astext == symbol,
-                        Command.payload['volume'].astext == str(float(volume)),
-                        Command.payload['order_type'].astext == signal_type,
-                        Command.response['ticket'].astext.is_(None)  # No ticket assigned yet
-                    ).order_by(Command.created_at.desc()).first()
-                    
-                    if matching_command:
-                        logger.info(f"🔗 Matched trade #{ticket} to command #{matching_command.id} by symbol/volume/time")
+                    if trade_symbol and trade_volume and trade_direction:
+                        recent_threshold = datetime.utcnow() - timedelta(seconds=30)
+                        
+                        matching_command = db.query(Command).filter(
+                            Command.account_id == account.id,
+                            Command.command_type == 'OPEN_TRADE',
+                            Command.created_at >= recent_threshold,
+                            Command.payload['symbol'].astext == trade_symbol,
+                            Command.payload['volume'].astext == str(float(trade_volume)),
+                            Command.payload['order_type'].astext == trade_direction,
+                            Command.response['ticket'].astext.is_(None)  # No ticket assigned yet
+                        ).order_by(Command.created_at.desc()).first()
+                        
+                        if matching_command:
+                            logger.info(f"🔗 Matched trade #{ticket} to command #{matching_command.id} by symbol/volume/time")
 
                 if matching_command:
                     command_id = matching_command.id

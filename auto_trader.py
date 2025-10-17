@@ -470,12 +470,26 @@ class AutoTrader:
                 )
             ).count()
 
-            logger.info(f"🔍 Position check: {signal.symbol} {signal.timeframe} - Found {existing_positions} open positions (max: {settings.max_positions_per_symbol_timeframe})")
+            # ✅ CRITICAL FIX: Also count pending/processing commands to prevent race conditions
+            from models import Command
+            pending_commands = db.query(Command).filter(
+                and_(
+                    Command.account_id == signal.account_id,
+                    Command.command_type == 'OPEN_TRADE',
+                    Command.status.in_(['pending', 'processing']),
+                    Command.payload['symbol'].astext == signal.symbol,
+                    Command.payload['timeframe'].astext == signal.timeframe
+                )
+            ).count()
 
-            if existing_positions >= settings.max_positions_per_symbol_timeframe:
+            total_exposure = existing_positions + pending_commands
+
+            logger.info(f"🔍 Position check: {signal.symbol} {signal.timeframe} - Found {existing_positions} open trades + {pending_commands} pending commands = {total_exposure} total (max: {settings.max_positions_per_symbol_timeframe})")
+
+            if total_exposure >= settings.max_positions_per_symbol_timeframe:
                 return {
                     'execute': False,
-                    'reason': f'Max positions per symbol+timeframe reached: {existing_positions}/{settings.max_positions_per_symbol_timeframe} ({signal.symbol} {signal.timeframe})'
+                    'reason': f'Max positions per symbol+timeframe reached: {total_exposure}/{settings.max_positions_per_symbol_timeframe} ({signal.symbol} {signal.timeframe})'
                 }
 
             # Check signal age (don't execute old signals)
@@ -759,8 +773,8 @@ class AutoTrader:
             volume = float(volume)
             entry_price = float(signal.entry_price) if signal.entry_price else None
 
-            # 🛑 CRITICAL FAILSAFE: Double-check for duplicate positions before creating command
-            duplicate_check = db.query(Trade).filter(
+            # 🛑 CRITICAL FAILSAFE: Double-check for duplicate positions AND pending commands before creating command
+            duplicate_trades = db.query(Trade).filter(
                 and_(
                     Trade.account_id == signal.account_id,
                     Trade.symbol == signal.symbol,
@@ -769,11 +783,24 @@ class AutoTrader:
                 )
             ).count()
 
+            # ✅ CRITICAL: Also check for pending commands (race condition prevention)
+            duplicate_commands = db.query(Command).filter(
+                and_(
+                    Command.account_id == signal.account_id,
+                    Command.command_type == 'OPEN_TRADE',
+                    Command.status.in_(['pending', 'processing']),
+                    Command.payload['symbol'].astext == signal.symbol,
+                    Command.payload['timeframe'].astext == signal.timeframe
+                )
+            ).count()
+
+            duplicate_check = duplicate_trades + duplicate_commands
+
             if duplicate_check > 0:
-                logger.error(f"🚨 FAILSAFE TRIGGERED: Prevented duplicate trade! {signal.symbol} {signal.timeframe} already has {duplicate_check} open position(s)")
+                logger.error(f"🚨 FAILSAFE TRIGGERED: Prevented duplicate trade! {signal.symbol} {signal.timeframe} already has {duplicate_trades} open trade(s) + {duplicate_commands} pending command(s)")
                 return  # ABORT command creation
 
-            logger.info(f"✓ Duplicate check passed: No open {signal.symbol} {signal.timeframe} positions")
+            logger.info(f"✓ Duplicate check passed: No open {signal.symbol} {signal.timeframe} positions or pending commands")
 
             # Store signal_id and timeframe in payload for trade linking
             payload_data = {

@@ -310,6 +310,21 @@ class TradeMonitor:
                         trade, close_price, db
                     )
 
+                # Get opening reason for display
+                opening_reason = None
+                if trade.entry_reason:
+                    opening_reason = trade.entry_reason
+                elif trade.signal_id:
+                    opening_reason = f"Signal #{trade.signal_id}"
+                    if trade.timeframe:
+                        opening_reason += f" ({trade.timeframe})"
+                elif trade.source == 'autotrade':
+                    opening_reason = "Auto-trade"
+                elif trade.source == 'ea_command':
+                    opening_reason = "Dashboard Trade"
+                else:
+                    opening_reason = "Manual (MT5)"
+
                 position_info = {
                     'ticket': trade.ticket,
                     'symbol': trade.symbol,
@@ -327,6 +342,7 @@ class TradeMonitor:
                     'open_time': trade.open_time.isoformat() if trade.open_time else None,
                     'has_trailing_stop': has_trailing_stop,
                     'trailing_stop_info': trailing_stop_info,
+                    'opening_reason': opening_reason,  # ✅ FIX: Add opening_reason for dashboard
                 }
                 positions_data.append(position_info)
 
@@ -348,10 +364,33 @@ class TradeMonitor:
     def monitor_open_trades(self, db: Session):
         """Monitor all open trades for an account"""
         try:
+            # ✅ RECONCILIATION: Get last update time for each trade
+            # Trades not updated in last 90 seconds are likely closed in MT5
+            from datetime import timedelta
+            stale_threshold = datetime.utcnow() - timedelta(seconds=90)
+            
             # Get all open trades
             open_trades = db.query(Trade).filter(
                 Trade.status == 'open'
             ).all()
+
+            if not open_trades:
+                return
+
+            # ✅ RECONCILIATION: Auto-close stale trades (not updated by MT5 in 90+ seconds)
+            stale_closed_count = 0
+            for trade in open_trades[:]:  # Use slice copy to allow removal during iteration
+                if trade.updated_at < stale_threshold:
+                    trade.status = 'closed'
+                    trade.close_time = datetime.utcnow()
+                    trade.close_reason = 'STALE_RECONCILIATION'
+                    stale_closed_count += 1
+                    logger.warning(f"🔄 Auto-closed stale trade #{trade.ticket} {trade.symbol} (last update: {trade.updated_at})")
+                    open_trades.remove(trade)  # Remove from list so we don't try to monitor it
+            
+            if stale_closed_count > 0:
+                db.commit()
+                logger.info(f"✅ Reconciliation: Closed {stale_closed_count} stale trade(s)")
 
             if not open_trades:
                 return
@@ -397,6 +436,21 @@ class TradeMonitor:
                     if trade.signal.reasons:
                         entry_reason = ', '.join(trade.signal.reasons) if isinstance(trade.signal.reasons, list) else str(trade.signal.reasons)
 
+                # Get opening reason for display (used by dashboard)
+                opening_reason = None
+                if trade.entry_reason:
+                    opening_reason = trade.entry_reason
+                elif trade.signal_id:
+                    opening_reason = f"Signal #{trade.signal_id}"
+                    if trade.timeframe:
+                        opening_reason += f" ({trade.timeframe})"
+                elif trade.source == 'autotrade':
+                    opening_reason = "Auto-trade"
+                elif trade.source == 'ea_command':
+                    opening_reason = "Dashboard Trade"
+                else:
+                    opening_reason = "Manual (MT5)"
+
                 # Get trailing stop info for display
                 trailing_stop_info = None
                 if has_trailing_stop:
@@ -429,6 +483,7 @@ class TradeMonitor:
                     'signal_id': trade.signal_id,
                     'timeframe': trade.timeframe,
                     'reason': entry_reason,
+                    'opening_reason': opening_reason,  # ✅ FIX: Add opening_reason for dashboard
                     'trailing_stop_info': trailing_stop_info,
                 }
 
