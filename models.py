@@ -298,6 +298,7 @@ class TradingSignal(Base):
     reasons = Column(JSONB)  # ['RSI Oversold Bounce', 'MACD Bullish Crossover']
     status = Column(String(20), default='active')  # active, expired, executed, ignored
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)  # ✅ NEW: Track signal updates
     expires_at = Column(DateTime)
     executed_at = Column(DateTime)
 

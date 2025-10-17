@@ -474,10 +474,13 @@ class SignalGenerator:
 
     def _save_signal(self, signal: Dict):
         """
-        Save signal to database.
+        Save or update signal in database.
         
-        First expires any existing active signals for this symbol/timeframe,
-        then inserts the new signal.
+        ✅ NEW LOGIC:
+        - If signal exists with SAME direction → UPDATE (confidence, prices, indicators)
+        - If signal exists with DIFFERENT direction → EXPIRE old + CREATE new
+        - If no signal exists → CREATE new
+        - If confidence drops below minimum → EXPIRE signal
 
         Args:
             signal: Signal dictionary
@@ -487,18 +490,62 @@ class SignalGenerator:
             from models import TradingSignal
             from datetime import datetime, timedelta
             
-            # Expire any existing active signals for this symbol/timeframe
-            existing = db.query(TradingSignal).filter_by(
+            # Check for existing active signal
+            existing_signal = db.query(TradingSignal).filter_by(
                 account_id=self.account_id,
                 symbol=self.symbol,
                 timeframe=self.timeframe,
                 status='active'
-            ).all()
+            ).first()
             
-            for sig in existing:
-                sig.status = 'expired'
+            MIN_CONFIDENCE_THRESHOLD = 40  # Expire signals below this
             
-            # Create new signal
+            # Case 1: Signal exists with SAME direction → UPDATE
+            if existing_signal and existing_signal.signal_type == signal['signal_type']:
+                old_confidence = float(existing_signal.confidence)
+                new_confidence = float(signal['confidence'])
+                
+                # Check if confidence dropped below minimum
+                if new_confidence < MIN_CONFIDENCE_THRESHOLD:
+                    existing_signal.status = 'expired'
+                    db.commit()
+                    logger.warning(
+                        f"❌ Signal EXPIRED [ID:{existing_signal.id}]: {self.symbol} {self.timeframe} "
+                        f"{signal['signal_type']} - Confidence dropped to {new_confidence:.1f}% (min: {MIN_CONFIDENCE_THRESHOLD}%)"
+                    )
+                    return
+                
+                # Update existing signal
+                existing_signal.confidence = new_confidence
+                existing_signal.entry_price = float(signal.get('entry_price', 0))
+                existing_signal.sl_price = float(signal.get('sl_price', 0))
+                existing_signal.tp_price = float(signal.get('tp_price', 0))
+                existing_signal.indicators_used = signal.get('indicators_used', {})
+                existing_signal.patterns_detected = signal.get('patterns_detected', [])
+                existing_signal.reasons = signal.get('reasons', [])
+                existing_signal.updated_at = datetime.utcnow()
+                
+                db.commit()
+                
+                confidence_change = new_confidence - old_confidence
+                change_emoji = "📈" if confidence_change > 0 else "📉" if confidence_change < 0 else "➡️"
+                
+                logger.info(
+                    f"🔄 Signal UPDATED [ID:{existing_signal.id}]: {self.symbol} {self.timeframe} "
+                    f"{signal['signal_type']} | Confidence: {old_confidence:.1f}% → {new_confidence:.1f}% "
+                    f"{change_emoji} ({confidence_change:+.1f}%)"
+                )
+                return
+            
+            # Case 2: Signal exists with DIFFERENT direction → EXPIRE old + CREATE new
+            elif existing_signal:
+                existing_signal.status = 'expired'
+                logger.info(
+                    f"🔄 Signal direction changed: {existing_signal.signal_type} → {signal['signal_type']}, "
+                    f"expiring old signal [ID:{existing_signal.id}]"
+                )
+            
+            # Case 3: Create new signal
             new_signal = TradingSignal(
                 account_id=self.account_id,
                 symbol=self.symbol,
@@ -520,13 +567,13 @@ class SignalGenerator:
             db.commit()
 
             logger.info(
-                f"✓ Signal created [ID:{new_signal.id}]: "
+                f"✨ Signal CREATED [ID:{new_signal.id}]: "
                 f"{signal['signal_type']} {self.symbol} {self.timeframe} "
-                f"(confidence: {signal['confidence']}%, entry: {signal.get('entry_price', 0):.5f})"
+                f"(confidence: {signal['confidence']:.1f}%, entry: {signal.get('entry_price', 0):.5f})"
             )
 
         except Exception as e:
-            logger.error(f"Error saving signal: {e}", exc_info=True)
+            logger.error(f"Error saving/updating signal: {e}", exc_info=True)
             db.rollback()
         finally:
             db.close()
