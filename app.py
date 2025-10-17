@@ -2261,6 +2261,8 @@ def sync_trades(account, db):
                     close_time=datetime.fromisoformat(trade_data['close_time']) if trade_data.get('close_time') else None,
                     sl=trade_data.get('sl'),
                     tp=trade_data.get('tp'),
+                    original_tp=trade_data.get('tp'),  # 🎯 NEW: Store original TP for extension tracking
+                    tp_extended_count=0,  # 🎯 NEW: Initialize extension counter
                     profit=trade_data.get('profit'),
                     commission=trade_data.get('commission'),
                     swap=trade_data.get('swap'),
@@ -2595,6 +2597,8 @@ def update_trade(account, db):
                 close_time=close_time,
                 sl=data.get('sl'),
                 tp=data.get('tp'),
+                original_tp=data.get('tp'),  # 🎯 NEW: Store original TP for extension tracking
+                tp_extended_count=0,  # 🎯 NEW: Initialize extension counter
                 profit=data.get('profit'),
                 commission=data.get('commission'),
                 swap=data.get('swap'),

@@ -3096,13 +3096,15 @@
                                         }
                                     })()}
 
-                                    <!-- Stage markers -->
-                                    <div style="position: absolute; top: 0; left: 0; width: 3px; height: 100%; background: rgba(255,255,255,0.6); border-radius: 1px;" title="0% - Entry"></div>
-                                    <div style="position: absolute; top: 0; left: 10%; width: 2px; height: 100%; background: rgba(255,255,255,0.3);" title="10% - Break-Even"></div>
-                                    <div style="position: absolute; top: 0; left: 30%; width: 2px; height: 100%; background: rgba(255,255,255,0.3);" title="30% - Partial"></div>
-                                    <div style="position: absolute; top: 0; left: 60%; width: 2px; height: 100%; background: rgba(255,255,255,0.3);" title="60% - Aggressive"></div>
-                                    <div style="position: absolute; top: 0; left: 85%; width: 2px; height: 100%; background: rgba(255,255,255,0.3);" title="85% - Near TP"></div>
-                                    <div style="position: absolute; top: 0; left: 100%; width: 3px; height: 100%; background: rgba(255,215,0,0.5); margin-left: -3px;" title="100% - Take Profit"></div>
+                                    <!-- Stage markers - only show when in profit -->
+                                    ${pos.trailing_stop_info.profit_percent >= 0 ? `
+                                        <div style="position: absolute; top: 0; left: 0; width: 3px; height: 100%; background: rgba(255,255,255,0.6); border-radius: 1px;" title="0% - Entry"></div>
+                                        <div style="position: absolute; top: 0; left: 10%; width: 2px; height: 100%; background: rgba(255,255,255,0.3);" title="10% - Break-Even"></div>
+                                        <div style="position: absolute; top: 0; left: 30%; width: 2px; height: 100%; background: rgba(255,255,255,0.3);" title="30% - Partial"></div>
+                                        <div style="position: absolute; top: 0; left: 60%; width: 2px; height: 100%; background: rgba(255,255,255,0.3);" title="60% - Aggressive"></div>
+                                        <div style="position: absolute; top: 0; left: 85%; width: 2px; height: 100%; background: rgba(255,215,0,0.3);" title="85% - Near TP"></div>
+                                        <div style="position: absolute; top: 0; left: 100%; width: 3px; height: 100%; background: rgba(255,215,0,0.5); margin-left: -3px;" title="100% - Take Profit"></div>
+                                    ` : ''}
 
                                     <!-- Current position indicator -->
                                     ${pos.trailing_stop_info.profit_percent !== 0 ? `

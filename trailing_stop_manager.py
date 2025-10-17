@@ -39,22 +39,27 @@ class TrailingStopManager:
         self.default_settings = {
             'trailing_stop_enabled': True,
 
-            # Stage 1: Break-even
+            # Stage 1: Break-even - 🚀 EARLIER & MORE AGGRESSIVE
             'breakeven_enabled': True,
-            'breakeven_trigger_percent': 30.0,  # Move to BE at 30% of TP distance
+            'breakeven_trigger_percent': 20.0,  # 🚀 Move to BE at 20% (was 30%)
             'breakeven_offset_pips': 2.0,       # Offset above/below entry (covers spread)
 
-            # Stage 2: Partial trailing
-            'partial_trailing_trigger_percent': 50.0,  # Start at 50% of TP distance
-            'partial_trailing_distance_percent': 40.0,  # Trail 40% behind current price
+            # Stage 2: Partial trailing - 🚀 EARLIER START
+            'partial_trailing_trigger_percent': 40.0,  # 🚀 Start at 40% (was 50%)
+            'partial_trailing_distance_percent': 30.0,  # 🚀 Trail 30% behind (was 40%)
 
-            # Stage 3: Aggressive trailing
-            'aggressive_trailing_trigger_percent': 75.0,  # Start at 75% of TP distance
-            'aggressive_trailing_distance_percent': 25.0,  # Trail 25% behind current price
+            # Stage 3: Aggressive trailing - 🚀 MUCH EARLIER & TIGHTER
+            'aggressive_trailing_trigger_percent': 60.0,  # 🚀 Start at 60% (was 75%)
+            'aggressive_trailing_distance_percent': 15.0,  # 🚀 Trail 15% behind (was 25%)
 
-            # Stage 4: Near TP protection
-            'near_tp_trigger_percent': 90.0,    # Start at 90% of TP distance
-            'near_tp_trailing_distance_percent': 15.0,  # Trail 15% behind current price
+            # Stage 4: Near TP protection - 🚀 EARLIER & SUPER TIGHT
+            'near_tp_trigger_percent': 80.0,    # 🚀 Start at 80% (was 90%)
+            'near_tp_trailing_distance_percent': 10.0,  # 🚀 Trail 10% behind (was 15%)
+
+            # Stage 5: Dynamic TP Extension - 🎯 NEW!
+            'dynamic_tp_enabled': True,         # 🎯 Enable dynamic TP raising
+            'tp_extension_trigger_percent': 80.0,  # 🎯 Raise TP at 80% progress
+            'tp_extension_multiplier': 1.5,     # 🎯 Extend by 50% of original distance
 
             # Safety settings
             'min_sl_distance_points': 10.0,     # Never set SL closer than this
@@ -67,37 +72,41 @@ class TrailingStopManager:
             'BTCUSD': {
                 'max_sl_move_per_update': 500000.0,  # ✅ BTC needs MASSIVE movements (500k pips = 5000 price points at 0.01 point)
                 'min_trailing_pips': 100.0,          # Minimum 100 pip trail for BTC
-                'breakeven_trigger_percent': 20.0,  # Earlier breakeven for volatile asset
-                'aggressive_trailing_trigger_percent': 60.0,  # More aggressive
+                'breakeven_trigger_percent': 15.0,  # 🚀 Even earlier breakeven for volatile asset
+                'aggressive_trailing_trigger_percent': 50.0,  # 🚀 More aggressive
             },
             'ETHUSD': {
                 'max_sl_move_per_update': 200000.0,  # ✅ ETH needs large movements (200k pips = 2000 price points at 0.01 point)
                 'min_trailing_pips': 50.0,
-                'breakeven_trigger_percent': 20.0,
+                'breakeven_trigger_percent': 15.0,
+                'aggressive_trailing_trigger_percent': 50.0,
             },
             'XAUUSD': {
                 'max_sl_move_per_update': 10000.0,  # ✅ Gold uses 0.01 point, 10k pips = 100 price points
                 'min_trailing_pips': 20.0,
-                'breakeven_trigger_percent': 25.0,
+                'breakeven_trigger_percent': 20.0,
+                'aggressive_trailing_trigger_percent': 55.0,
             },
             'DE40.c': {
                 'max_sl_move_per_update': 50000.0,  # ✅ DAX Index needs large movements (50k pips = 500 price points at 0.01 point)
                 'min_trailing_pips': 50.0,
-                'breakeven_trigger_percent': 25.0,
+                'breakeven_trigger_percent': 20.0,
+                'aggressive_trailing_trigger_percent': 55.0,
             },
             'EURUSD': {
                 'max_sl_move_per_update': 100.0,   # Standard FOREX
                 'min_trailing_pips': 10.0,
-                'aggressive_trailing_trigger_percent': 70.0,  # ✅ More aggressive for EURUSD
+                'aggressive_trailing_trigger_percent': 60.0,  # ✅ Aggressive for EURUSD
             },
             'GBPUSD': {
                 'max_sl_move_per_update': 100.0,
                 'min_trailing_pips': 12.0,
+                'aggressive_trailing_trigger_percent': 60.0,
             },
             'USDJPY': {
                 'max_sl_move_per_update': 100.0,
                 'min_trailing_pips': 10.0,
-                'aggressive_trailing_trigger_percent': 65.0,  # ✅ More aggressive
+                'aggressive_trailing_trigger_percent': 60.0,  # ✅ Aggressive
             },
         }
 
@@ -361,6 +370,13 @@ class TrailingStopManager:
             if not new_sl:
                 return None
 
+            # 🎯 DYNAMIC TP EXTENSION - Check if TP should be raised
+            tp_extension_result = None
+            if settings.get('dynamic_tp_enabled', True):
+                tp_extension_result = self._check_and_extend_tp(
+                    trade, profit_percent, is_buy, entry_price, tp_price, current_price, settings, db
+                )
+
             # Validate new SL
             if not self._validate_new_sl(is_buy, new_sl, current_sl, current_price, settings):
                 return None
@@ -383,12 +399,20 @@ class TrailingStopManager:
                 f"Moving SL from {current_sl:.5f} to {new_sl:.5f} ({reason})"
             )
 
-            return {
+            result = {
                 'new_sl': round(new_sl, 5),
                 'stage': stage,
                 'reason': reason,
                 'profit_percent': round(profit_percent, 1)
             }
+
+            # 🎯 Add TP extension info if it happened
+            if tp_extension_result:
+                result['tp_extended'] = True
+                result['new_tp'] = tp_extension_result['new_tp']
+                result['tp_extension_reason'] = tp_extension_result['reason']
+
+            return result
 
         except Exception as e:
             logger.error(f"Error calculating trailing stop for trade {trade.ticket}: {e}")
@@ -482,6 +506,119 @@ class TrailingStopManager:
             new_sl = current_price + trail_distance
 
         return new_sl, f"Near-TP protection {near_tp_pips:.1f} pips"
+
+    def _check_and_extend_tp(
+        self,
+        trade: Trade,
+        profit_percent: float,
+        is_buy: bool,
+        entry_price: float,
+        current_tp: float,
+        current_price: float,
+        settings: Dict,
+        db: Session
+    ) -> Optional[Dict]:
+        """
+        🎯 DYNAMIC TP EXTENSION
+        
+        Extends TP when trade reaches 80%+ progress towards current TP.
+        This allows trades to "ride the trend" and maximize profits.
+        
+        Logic:
+        - Trigger at 80% of distance to current TP (configurable)
+        - Extend TP by 50% of ORIGINAL distance (not current)
+        - Can extend multiple times for strong trends
+        - Safety: Track extensions to prevent runaway TPs
+        
+        Returns:
+        - Dict with new_tp and reason if extended
+        - None if no extension needed
+        """
+        try:
+            trigger_percent = settings.get('tp_extension_trigger_percent', 80.0)
+            extension_multiplier = settings.get('tp_extension_multiplier', 1.5)
+            max_extensions = 5  # Safety: Max 5 extensions per trade
+            
+            # Only extend if we've reached trigger threshold
+            if profit_percent < trigger_percent:
+                return None
+                
+            # Get original TP (stored when trade opened)
+            original_tp = float(trade.original_tp) if trade.original_tp else float(current_tp)
+            
+            # Safety check: Don't extend too many times
+            extension_count = trade.tp_extended_count if trade.tp_extended_count else 0
+            if extension_count >= max_extensions:
+                logger.debug(f"Trade {trade.ticket}: Max TP extensions ({max_extensions}) reached")
+                return None
+            
+            # Calculate original TP distance
+            if is_buy:
+                original_distance = original_tp - entry_price
+            else:
+                original_distance = entry_price - original_tp
+                
+            # Calculate new extended TP
+            # Extension = original_distance * (multiplier - 1.0)
+            # Example: 50 pips original * (1.5 - 1.0) = 25 pips extension
+            extension_distance = original_distance * (extension_multiplier - 1.0)
+            
+            if is_buy:
+                new_tp = current_tp + extension_distance
+                # Safety: TP must be above current price
+                if new_tp <= current_price:
+                    return None
+            else:
+                new_tp = current_tp - extension_distance
+                # Safety: TP must be below current price
+                if new_tp >= current_price:
+                    return None
+            
+            # 🎯 Update trade in database
+            if not trade.original_tp:
+                trade.original_tp = current_tp  # Store original TP first time
+                
+            trade.tp = new_tp
+            trade.tp_extended_count = extension_count + 1
+            db.commit()
+            
+            # 🎯 Create modify_tp command for MT5
+            from models import Command
+            import uuid
+            
+            command_id = str(uuid.uuid4())
+            modify_command = Command(
+                id=command_id,
+                account_id=trade.account_id,
+                command_type='MODIFY_TRADE',  # ✅ Use MODIFY_TRADE (supports both SL and TP)
+                payload={
+                    'ticket': int(trade.ticket),
+                    'sl': round(float(trade.sl), 5),  # ✅ Keep current SL
+                    'tp': round(new_tp, 5),  # ✅ New extended TP
+                    'reason': f'dynamic_extension_{extension_count + 1}',
+                    'original_tp': round(float(original_tp), 5),
+                    'extension_pips': round(extension_distance / settings.get('symbol_point', 0.00001), 1)
+                },
+                status='pending'
+            )
+            db.add(modify_command)
+            db.commit()
+            
+            logger.info(
+                f"🚀 TP EXTENDED: Trade {trade.ticket} ({trade.symbol}) - "
+                f"Extension #{extension_count + 1}: TP {current_tp:.5f} → {new_tp:.5f} "
+                f"(+{extension_distance / settings.get('symbol_point', 0.00001):.1f} pips)"
+            )
+            
+            return {
+                'new_tp': round(new_tp, 5),
+                'reason': f'Extended by {extension_distance / settings.get("symbol_point", 0.00001):.1f} pips (#{extension_count + 1})',
+                'extension_count': extension_count + 1
+            }
+            
+        except Exception as e:
+            logger.error(f"Error extending TP for trade {trade.ticket}: {e}")
+            return None
 
     def _validate_new_sl(
         self,

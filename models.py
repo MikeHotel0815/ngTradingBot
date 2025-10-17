@@ -177,6 +177,8 @@ class Trade(Base):
     close_time = Column(DateTime)
     sl = Column(Numeric(20, 5))
     tp = Column(Numeric(20, 5))
+    original_tp = Column(Numeric(20, 5))  # 🎯 NEW: Original TP for tracking extensions
+    tp_extended_count = Column(Integer, default=0)  # 🎯 NEW: How many times TP was extended
     profit = Column(Numeric(15, 2))
     commission = Column(Numeric(15, 2))
     swap = Column(Numeric(15, 2))
