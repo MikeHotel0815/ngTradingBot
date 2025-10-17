@@ -14,8 +14,8 @@ from database import ScopedSession
 from models import Trade, Account, Tick, GlobalSettings
 from redis_client import get_redis
 from trailing_stop_manager import get_trailing_stop_manager
-# ✅ NEW: Import unified trailing stop system
-from unified_trailing_final import get_unified_trailing
+# ✅ NEW: Import Smart Trailing Stop System with ATR-based noise compensation
+from smart_trailing_stop import get_smart_trailing
 # ✅ NEW: Import symbol dynamic manager for post-trade updates
 from symbol_dynamic_manager import update_symbol_after_trade
 
@@ -34,11 +34,11 @@ class TradeMonitor:
         self.monitor_interval = 1  # Check every 1 second for real-time updates
         self.running = False
         self.trailing_stop_manager = get_trailing_stop_manager()
-        # ✅ NEW: Add unified trailing stop manager
-        self.unified_trailing = get_unified_trailing()
+        # ✅ NEW: Smart Trailing Stop with ATR-based market noise compensation
+        self.smart_trailing = get_smart_trailing()
         self.trailing_stops_processed = 0
         self.last_trailing_check = None
-        self.trailing_check_interval = 10  # Run unified trailing every 10 seconds
+        self.trailing_check_interval = 10  # Run smart trailing every 10 seconds
 
     def get_current_price(self, db: Session, account_id: int, symbol: str) -> Optional[Dict]:
         """Get current bid/ask prices for symbol (account_id kept for compatibility but not used)"""
@@ -574,19 +574,20 @@ class TradeMonitor:
                 # Monitor positions
                 self.monitor_open_trades(db)
 
-                # ✅ NEW: Run unified trailing stop periodically
+                # ✅ NEW: Run Smart Trailing Stop periodically with ATR-based noise compensation
                 now = datetime.utcnow()
                 if (now - self.last_trailing_check).total_seconds() >= self.trailing_check_interval:
-                    logger.debug("🔄 Running unified trailing stop check...")
+                    logger.debug("🔄 Running Smart Trailing Stop check with market noise compensation...")
                     try:
-                        stats = self.unified_trailing.process_all(db)
+                        stats = self.smart_trailing.process_all(db)
                         if stats['trailed'] > 0 or stats['extended'] > 0:
                             logger.info(
-                                f"🎯 Unified Trailing: {stats['trailed']} SL adjusted, "
-                                f"{stats['extended']} TP extended"
+                                f"🎯 Smart Trailing: {stats['trailed']} SL adjusted, "
+                                f"{stats['extended']} TP extended | "
+                                f"ATR-based noise compensation active"
                             )
                     except Exception as e:
-                        logger.error(f"Error in unified trailing: {e}")
+                        logger.error(f"Error in smart trailing: {e}")
 
                     self.last_trailing_check = now
 
