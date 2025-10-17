@@ -14,14 +14,14 @@ COPY requirements.txt .
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy application files
 COPY *.py .
-COPY *.sh .
 COPY templates templates/
 COPY workers workers/
+COPY scripts scripts/
 
 # Make scripts executable
-RUN chmod +x *.sh
+RUN chmod +x scripts/*.sh || true
 
 # Create backup directory
 RUN mkdir -p /app/backups

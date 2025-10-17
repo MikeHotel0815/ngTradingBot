@@ -13,15 +13,20 @@ Also considers:
 - News events
 - Market holidays
 - Weekend vs. weekday
+
+TIMEZONE CONTEXT:
+- All sessions defined in UTC
+- Automatically handles broker timezone (EET/EEST)
+- Uses timezone_manager for consistent time handling
 """
 
 import logging
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from typing import Dict, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from models import Tick
-import pytz
+from timezone_manager import tz, log_with_timezone
 
 logger = logging.getLogger(__name__)
 
@@ -68,14 +73,19 @@ class SessionVolatilityAnalyzer:
 
     def get_current_session(self, utc_time: datetime = None) -> Tuple[str, Dict]:
         """
-        Determine current trading session
+        Determine current trading session based on UTC time
+
+        Args:
+            utc_time: Optional datetime in UTC (uses current time if None)
 
         Returns:
             (session_name, session_info)
         """
         if utc_time is None:
-            utc_time = datetime.utcnow()
-
+            utc_time = tz.now_utc()
+        
+        # Ensure we're working with UTC
+        utc_time = tz.to_utc(utc_time)
         current_time = utc_time.time()
 
         # Check for overlap first (highest priority)
@@ -104,27 +114,37 @@ class SessionVolatilityAnalyzer:
 
     def calculate_recent_volatility(
         self,
-        db: Session,
         symbol: str,
-        account_id: int,
+        db: Session,
+        account_id: int = 1,
         lookback_minutes: int = 60
     ) -> float:
         """
-        Calculate recent volatility from tick data
+        Calculate recent volatility multiplier based on tick data
+
+        Args:
+            symbol: Trading symbol
+            db: Database session
+            account_id: Account ID for tick data
+            lookback_minutes: How far back to look for volatility calculation
 
         Returns:
-            Volatility score (0.5 = low, 1.0 = normal, 2.0 = high)
+            Volatility multiplier (0.5 = low, 1.0 = normal, 2.0 = high)
         """
         try:
-            from datetime import timedelta
-
-            cutoff_time = datetime.utcnow() - timedelta(minutes=lookback_minutes)
-
-            # Get ticks from last N minutes (ticks are global - no account_id)
+            # Ensure db is a Session object, not a string
+            if isinstance(db, str):
+                logger.error(f"calculate_recent_volatility received string instead of Session: {db}")
+                return 1.0
+            
+            # Get recent ticks
+            cutoff_time = tz.to_db(tz.now_utc() - timedelta(minutes=lookback_minutes))
+            
             ticks = db.query(Tick).filter(
                 Tick.symbol == symbol,
+                Tick.account_id == account_id,
                 Tick.timestamp >= cutoff_time
-            ).all()
+            ).order_by(Tick.timestamp.desc()).limit(100).all()
 
             if len(ticks) < 10:
                 logger.debug(f"Not enough ticks for {symbol} volatility calculation")
@@ -168,47 +188,55 @@ class SessionVolatilityAnalyzer:
         """
         Calculate trailing distance multiplier based on:
         - Current session
+        - Symbol-specific weights
         - Recent volatility
-        - Symbol-specific session importance
+
+        Args:
+            symbol: Trading symbol
+            db: Database session (optional, for volatility calculation)
+            account_id: Account ID for tick data
+            utc_time: Optional UTC time (uses current if None)
 
         Returns:
-            (multiplier, reason)
+            (multiplier, description)
+            multiplier: Float value to multiply trailing distance
+            description: Human-readable explanation
         """
-        # Get current session
-        session_name, session_info = self.get_current_session(utc_time)
-        base_multiplier = session_info['volatility_multiplier']
-
-        # Get symbol-specific session weight
-        symbol_weights = self.symbol_session_weights.get(symbol, {})
-        session_weight = symbol_weights.get(session_name, 1.0)
-
-        # Combine session base and symbol weight
-        session_multiplier = base_multiplier * session_weight
-
-        # Get recent volatility if DB available
-        if db:
-            volatility_multiplier = self.calculate_recent_volatility(
-                db, symbol, account_id, lookback_minutes=60
-            )
+        if utc_time is None:
+            utc_time = tz.now_utc()
         else:
-            volatility_multiplier = 1.0
+            utc_time = tz.to_utc(utc_time)
 
-        # Final multiplier
-        final_multiplier = session_multiplier * volatility_multiplier
+        # Get session info with timezone context
+        session_info = tz.get_current_session_info()
+        session_name = session_info['session']
+        
+        # Get session multiplier
+        session_data = self.sessions.get(session_name, {})
+        session_mult = session_data.get('volatility_multiplier', 1.0)
 
-        # Clamp to reasonable range (0.5x to 2.5x)
-        final_multiplier = max(0.5, min(final_multiplier, 2.5))
+        # Get symbol weight for this session
+        symbol_weights = self.symbol_session_weights.get(symbol, {})
+        symbol_weight = symbol_weights.get(session_name, 1.0)
 
-        reason = (
-            f"{session_info['description']}: "
-            f"session={session_multiplier:.2f}x, "
-            f"volatility={volatility_multiplier:.2f}x, "
-            f"final={final_multiplier:.2f}x"
+        # Get recent volatility (if db available)
+        volatility_mult = 1.0
+        if db:
+            volatility_mult = self.calculate_recent_volatility(symbol, db, account_id)
+
+        # Combined multiplier
+        final_mult = session_mult * symbol_weight * volatility_mult
+
+        # Build description with timezone info
+        description = (
+            f"{session_name} session "
+            f"[UTC: {session_info['utc_time']} | Broker: {session_info['broker_time']}] "
+            f"| Session: {session_mult:.2f}x | Symbol: {symbol_weight:.2f}x | Vol: {volatility_mult:.2f}x"
         )
 
-        logger.debug(f"{symbol} trailing multiplier: {reason}")
+        logger.debug(f"🎯 Trailing multiplier for {symbol}: {final_mult:.2f}x ({description})")
 
-        return final_multiplier, reason
+        return final_mult, description
 
     def is_high_volatility_period(
         self,

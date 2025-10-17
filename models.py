@@ -590,6 +590,7 @@ class GlobalSettings(Base):
     # Auto-Trading
     autotrade_enabled = Column(Boolean, default=True, nullable=False)  # ✅ NEW: Persist auto-trade status
     autotrade_min_confidence = Column(Numeric(5, 2), default=60.0, nullable=False)  # ✅ NEW: Persist min confidence
+    autotrade_risk_profile = Column(String(20), default='normal', nullable=False)  # ✅ NEW: 'moderate', 'normal', 'aggressive'
 
     # Cooldown Settings
     sl_cooldown_minutes = Column(Integer, default=60, nullable=False)  # 1 hour

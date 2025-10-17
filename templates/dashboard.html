@@ -1233,21 +1233,37 @@
                             <input type="checkbox" id="autotrade-enabled" style="width: 18px; height: 18px; cursor: pointer;">
                             <span style="font-size: 0.9em; color: #888;">AutoTrade</span>
                         </label>
-                        <div style="display: flex; align-items: center; gap: 10px; flex: 1; min-width: 250px;">
-                            <label for="autotrade-confidence-slider" style="white-space: nowrap; font-size: 0.9em; color: #888;">
-                                Confidence ≥ <span id="autotrade-confidence-value" style="color: #4CAF50; font-weight: 600;">40</span>%
-                            </label>
-                            <input type="range" id="autotrade-confidence-slider" min="40" max="100" step="5" value="40"
-                                   style="flex: 1; height: 6px; background: linear-gradient(to right, #f44336 0%, #ff9800 50%, #4CAF50 100%); border-radius: 3px; outline: none; -webkit-appearance: none;">
+                        
+                        <!-- Risk Profile Selector (replaces slider) -->
+                        <div style="display: flex; gap: 8px; flex: 1; min-width: 350px;">
+                            <span style="font-size: 0.85em; color: #888; margin-right: 5px;">Risk:</span>
+                            <button id="risk-moderate" class="risk-profile-btn" data-profile="moderate" 
+                                    style="flex: 1; padding: 6px 12px; border: 2px solid #555; background: #2a2a2a; color: #888; border-radius: 5px; cursor: pointer; font-size: 0.85em; transition: all 0.2s;">
+                                🛡️ MODERATE<br><span style="font-size: 0.7em; opacity: 0.7;">Conservative</span>
+                            </button>
+                            <button id="risk-normal" class="risk-profile-btn active" data-profile="normal"
+                                    style="flex: 1; padding: 6px 12px; border: 2px solid #4CAF50; background: #1a4a1a; color: #4CAF50; border-radius: 5px; cursor: pointer; font-size: 0.85em; font-weight: 600; transition: all 0.2s;">
+                                ⚖️ NORMAL<br><span style="font-size: 0.7em; opacity: 0.7;">Balanced</span>
+                            </button>
+                            <button id="risk-aggressive" class="risk-profile-btn" data-profile="aggressive"
+                                    style="flex: 1; padding: 6px 12px; border: 2px solid #555; background: #2a2a2a; color: #888; border-radius: 5px; cursor: pointer; font-size: 0.85em; transition: all 0.2s;">
+                                🚀 AGGRESSIVE<br><span style="font-size: 0.7em; opacity: 0.7;">Risk-seeking</span>
+                            </button>
                         </div>
+                        
                         <label style="display: flex; align-items: center; gap: 5px; cursor: pointer; white-space: nowrap;">
                             <input type="checkbox" id="autotrade-trailing-stop" checked style="width: 18px; height: 18px; cursor: pointer;">
                             <span style="font-size: 0.9em; color: #888;">Trailing Stop</span>
                         </label>
-                        <label style="display: flex; align-items: center; gap: 5px; cursor: pointer; white-space: nowrap; opacity: 0.3;">
-                            <input type="checkbox" id="autotrade-break-even" disabled style="width: 18px; height: 18px; cursor: not-allowed;">
-                            <span style="font-size: 0.9em; color: #888;">Break Even</span>
-                        </label>
+                    </div>
+                    
+                    <!-- Dynamic Confidence Requirements Display -->
+                    <div id="confidence-requirements" style="margin-top: 10px; padding: 8px; background: #1a1a1a; border-radius: 4px; font-size: 0.8em; color: #888; display: none;">
+                        <div style="margin-bottom: 4px;">
+                            <strong style="color: #4CAF50;">Current Requirements</strong> 
+                            <span id="current-session" style="margin-left: 10px; color: #ff9800;"></span>
+                        </div>
+                        <div id="requirements-list" style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px;"></div>
                     </div>
                 </div>
                 <div id="signals-list"></div>
@@ -1888,6 +1904,9 @@
                     document.getElementById('open-trades-list').innerHTML = '<div style="text-align: center; color: #888; padding: 20px;">No open positions</div>';
                     previousPositions = {};
                 } else {
+                    // Sort positions by profit (descending - highest profit first)
+                    positions.sort((a, b) => b.pnl - a.pnl);
+                    
                     // Check which positions have changed
                     const changedTickets = new Set();
                     positions.forEach(pos => {

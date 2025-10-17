@@ -2,6 +2,13 @@
 """
 Auto-Trading Engine for ngTradingBot
 Automatically executes trades based on trading signals
+
+TIMEZONE HANDLING:
+- All internal timestamps in UTC (timezone-aware via timezone_manager)
+- Database stores naive UTC timestamps
+- Broker/MT5 timestamps converted from EET to UTC
+- Session detection uses UTC time
+- Logging shows both UTC and Broker time for clarity
 """
 
 import logging
@@ -15,12 +22,42 @@ from sqlalchemy import and_, or_
 from database import ScopedSession
 from models import TradingSignal, Trade, Account, Command
 from redis_client import get_redis
+from timezone_manager import tz, log_with_timezone
 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def calculate_max_trades_for_confidence(confidence: float) -> int:
+    """
+    Calculate max trades allowed per symbol+timeframe based on signal confidence.
+    
+    Formula: For every 10% confidence increase above 50%, allow +1 trade
+    
+    Examples:
+        50-59% confidence → 1 trade allowed
+        60-69% confidence → 2 trades allowed
+        70-79% confidence → 3 trades allowed
+        80-89% confidence → 4 trades allowed
+        90-100% confidence → 5 trades allowed (capped at 4)
+    
+    Args:
+        confidence: Signal confidence as percentage (50.0 = 50%)
+    
+    Returns:
+        Max number of trades allowed (0-4)
+    """
+    if confidence < 50.0:
+        return 0  # Below minimum confidence threshold (dashboard slider minimum)
+    
+    # Calculate tier: each 10% jump = +1 trade
+    confidence_tier = int((confidence - 50.0) / 10.0) + 1
+    
+    # Cap at 4 trades maximum
+    return min(confidence_tier, 4)
 
 
 class AutoTrader:
@@ -68,9 +105,10 @@ class AutoTrader:
         # ✅ NEW: Load auto-trade status from database on startup
         self.enabled = True  # Default fallback
         self.min_autotrade_confidence = 60.0  # Default fallback
+        self.risk_profile = 'normal'  # Default: moderate/normal/aggressive
         self._load_autotrade_status_from_db()
 
-        logger.info(f"Auto-Trader initialized (enabled={self.enabled}, min_confidence={self.min_autotrade_confidence}%)")
+        logger.info(f"Auto-Trader initialized (enabled={self.enabled}, risk_profile={self.risk_profile}, min_confidence={self.min_autotrade_confidence}%)")
 
     def _load_settings(self, db: Session):
         """Load global settings from database"""
@@ -86,9 +124,10 @@ class AutoTrader:
                 settings = GlobalSettings.get_settings(db)
                 self.enabled = settings.autotrade_enabled
                 self.min_autotrade_confidence = float(settings.autotrade_min_confidence)
+                self.risk_profile = settings.autotrade_risk_profile or 'normal'
                 logger.info(
                     f"✅ Auto-Trade status loaded from DB: "
-                    f"enabled={self.enabled}, min_confidence={self.min_autotrade_confidence}%"
+                    f"enabled={self.enabled}, risk_profile={self.risk_profile}, min_confidence={self.min_autotrade_confidence}%"
                 )
             finally:
                 db.close()
@@ -105,10 +144,11 @@ class AutoTrader:
                 settings = GlobalSettings.get_settings(db)
                 settings.autotrade_enabled = self.enabled
                 settings.autotrade_min_confidence = self.min_autotrade_confidence
+                settings.autotrade_risk_profile = self.risk_profile
                 db.commit()
                 logger.info(
                     f"✅ Auto-Trade status saved to DB: "
-                    f"enabled={self.enabled}, min_confidence={self.min_autotrade_confidence}%"
+                    f"enabled={self.enabled}, risk_profile={self.risk_profile}, min_confidence={self.min_autotrade_confidence}%"
                 )
             finally:
                 db.close()
@@ -121,11 +161,21 @@ class AutoTrader:
         self._save_autotrade_status_to_db()  # ✅ Persist to DB
         logger.info(f"Auto-Trade min confidence set to {min_confidence}%")
 
+    def set_risk_profile(self, risk_profile: str):
+        """Set risk profile for dynamic confidence calculation"""
+        if risk_profile not in ['moderate', 'normal', 'aggressive']:
+            logger.error(f"Invalid risk profile: {risk_profile}")
+            return
+        
+        self.risk_profile = risk_profile
+        self._save_autotrade_status_to_db()  # ✅ Persist to DB
+        logger.info(f"🎯 Risk Profile set to: {risk_profile.upper()}")
+
     def enable(self):
         """Enable auto-trading"""
         self.enabled = True
         self._save_autotrade_status_to_db()  # ✅ Persist to DB
-        logger.info(f"🤖 Auto-Trading ENABLED (min confidence: {self.min_autotrade_confidence}%)")
+        logger.info(f"🤖 Auto-Trading ENABLED (risk_profile={self.risk_profile}, min confidence: {self.min_autotrade_confidence}%)")
 
     def disable(self):
         """Disable auto-trading (kill-switch)"""
@@ -484,12 +534,18 @@ class AutoTrader:
 
             total_exposure = existing_positions + pending_commands
 
-            logger.info(f"🔍 Position check: {signal.symbol} {signal.timeframe} - Found {existing_positions} open trades + {pending_commands} pending commands = {total_exposure} total (max: {settings.max_positions_per_symbol_timeframe})")
+            # ✅ DYNAMIC LIMIT: Calculate max trades based on signal confidence
+            # Formula: Every 10% confidence jump allows +1 trade (starting at 50%)
+            # 50-59% → 1 trade, 60-69% → 2 trades, 70-79% → 3 trades, 80-89% → 4 trades
+            signal_confidence = float(signal.confidence) if signal.confidence else 50.0
+            max_trades_for_confidence = calculate_max_trades_for_confidence(signal_confidence)
 
-            if total_exposure >= settings.max_positions_per_symbol_timeframe:
+            logger.info(f"🔍 Position check: {signal.symbol} {signal.timeframe} - Found {existing_positions} open trades + {pending_commands} pending commands = {total_exposure} total (max for {signal_confidence:.1f}% confidence: {max_trades_for_confidence})")
+
+            if total_exposure >= max_trades_for_confidence:
                 return {
                     'execute': False,
-                    'reason': f'Max positions per symbol+timeframe reached: {total_exposure}/{settings.max_positions_per_symbol_timeframe} ({signal.symbol} {signal.timeframe})'
+                    'reason': f'Max positions for {signal_confidence:.1f}% confidence reached: {total_exposure}/{max_trades_for_confidence} ({signal.symbol} {signal.timeframe})'
                 }
 
             # Check signal age (don't execute old signals)
@@ -570,6 +626,40 @@ class AutoTrader:
                 # Fallback to legacy symbol_config
                 from symbol_config import get_symbol_min_confidence
                 symbol_min_confidence = max(self.min_autotrade_confidence, get_symbol_min_confidence(signal.symbol))
+
+            # ✅ DYNAMIC CONFIDENCE: Calculate context-aware minimum confidence
+            # Uses: risk profile + symbol + session + volatility
+            try:
+                from dynamic_confidence_calculator import get_confidence_calculator
+                from session_volatility_analyzer import SessionVolatilityAnalyzer
+                
+                calculator = get_confidence_calculator()
+                analyzer = SessionVolatilityAnalyzer()
+                
+                # Get current session and volatility
+                session_name, _ = analyzer.get_current_session()
+                volatility = analyzer.calculate_recent_volatility(db, signal.symbol, signal.account_id)
+                
+                # Calculate required confidence
+                required_conf, breakdown = calculator.calculate_required_confidence(
+                    symbol=signal.symbol,
+                    risk_profile=self.risk_profile,
+                    session=session_name,
+                    volatility=volatility
+                )
+                
+                # Use the higher of: static symbol config OR dynamic calculation
+                symbol_min_confidence = max(symbol_min_confidence, required_conf)
+                
+                logger.debug(
+                    f"🎯 Dynamic Confidence for {signal.symbol}: "
+                    f"Required={required_conf:.1f}% (profile={self.risk_profile}, "
+                    f"session={session_name}, volatility={volatility:.2f}x)"
+                )
+                
+            except Exception as e:
+                logger.debug(f"Dynamic confidence calculation skipped: {e}")
+                # Continue with static symbol_min_confidence
 
             # Check confidence threshold (now using dynamically adjusted threshold)
             if signal.confidence and signal.confidence < symbol_min_confidence:
@@ -1036,17 +1126,26 @@ class AutoTrader:
 
                 # Check for existing open position for same symbol+timeframe
                 # (After potential replacement - there might still be positions we don't want to replace)
-                existing_trade = db.query(Trade).filter(
+                # ✅ DYNAMIC LIMIT: Count existing trades and compare against confidence-based limit
+                existing_trades_count = db.query(Trade).filter(
                     and_(
                         Trade.account_id == signal.account_id,
                         Trade.symbol == signal.symbol,
                         Trade.timeframe == signal.timeframe,
                         Trade.status == 'open'
                     )
-                ).first()
+                ).count()
 
-                if existing_trade:
-                    logger.info(f"⏭️  Skipping signal #{signal.id} ({signal.symbol} {signal.timeframe}): Already have open position (ticket #{existing_trade.ticket})")
+                # Calculate max allowed trades based on confidence
+                signal_confidence = float(signal.confidence) if signal.confidence else 50.0
+                max_trades_for_confidence = calculate_max_trades_for_confidence(signal_confidence)
+
+                if existing_trades_count >= max_trades_for_confidence:
+                    logger.info(
+                        f"⏭️  Skipping signal #{signal.id} ({signal.symbol} {signal.timeframe}): "
+                        f"Already have {existing_trades_count} open positions "
+                        f"(max for {signal_confidence:.1f}% confidence: {max_trades_for_confidence})"
+                    )
                     continue
 
                 # Check risk limits

@@ -317,6 +317,109 @@ def import_worker_functions():
     except Exception as e:
         logger.error(f"Failed to import auto_trader_worker: {e}")
     
+    try:
+        # Session Volatility Analyzer - Market Noise Logging
+        logger.info("📦 Importing session_volatility_analyzer...")
+        from session_volatility_analyzer import SessionVolatilityAnalyzer
+        from database import ScopedSession
+        from models import Trade
+        
+        def analyze_market_conditions():
+            """Log current market conditions (session, volatility, noise) with timezone context"""
+            analyzer = SessionVolatilityAnalyzer()
+            from timezone_manager import tz
+            db = ScopedSession()
+            try:
+                # Get current session with timezone info
+                session_info = tz.get_current_session_info()
+                session_name = session_info['session']
+                
+                # Get all open trades and analyze their symbols
+                open_trades = db.query(Trade).filter_by(status='open').all()
+                symbols = list(set(t.symbol for t in open_trades))
+                
+                if symbols:
+                    logger.info(f"📊 Market Conditions Analysis ({session_name}):")
+                    logger.info(f"   🕒 UTC: {session_info['utc_time']} | Broker: {session_info['broker_time']}")
+                    
+                    for symbol in symbols[:5]:  # Limit to first 5 symbols
+                        # Calculate volatility (note: parameter order is symbol, db, account_id)
+                        volatility = analyzer.calculate_recent_volatility(symbol, db, account_id=1)
+                        
+                        # Get trailing distance multiplier
+                        multiplier, reason = analyzer.get_trailing_distance_multiplier(symbol, db, account_id=1)
+                        
+                        # Determine volatility label
+                        if volatility < 0.8:
+                            vol_label = "LOW"
+                        elif volatility < 1.2:
+                            vol_label = "NORMAL"
+                        elif volatility < 1.8:
+                            vol_label = "HIGH"
+                        else:
+                            vol_label = "EXTREME"
+                        
+                        logger.info(
+                            f"   {symbol:8s} | Session: {session_name:18s} | "
+                            f"Volatility: {vol_label:8s} ({volatility:.2f}x) | "
+                            f"Trailing: {multiplier:.2f}x"
+                        )
+                        
+            finally:
+                db.close()
+        
+        workers['market_conditions'] = analyze_market_conditions
+        
+    except Exception as e:
+        logger.error(f"Failed to import session_volatility_analyzer: {e}")
+    
+    try:
+        # Time Exit Worker - Time-based position closing
+        logger.info("📦 Importing time_exit_worker...")
+        import workers.time_exit_worker as tew
+        from database import ScopedSession
+        
+        def check_time_exits():
+            """Check for trades that should be closed based on time"""
+            time_exit_enabled = os.getenv('TIME_EXIT_ENABLED', 'false').lower() == 'true'
+            if not time_exit_enabled:
+                return
+            
+            db = ScopedSession()
+            try:
+                # Process time-based exits
+                results = tew.process_open_trades(db)
+                if results.get('closed_count', 0) > 0:
+                    logger.info(f"⏰ Time Exit: Closed {results['closed_count']} trades")
+            finally:
+                db.close()
+        
+        workers['time_exit'] = check_time_exits
+        
+    except Exception as e:
+        logger.error(f"Failed to import time_exit_worker: {e}")
+    
+    try:
+        # TP/SL Monitor Worker
+        logger.info("📦 Importing tpsl_monitor_worker...")
+        import workers.tpsl_monitor_worker as tpsl
+        from database import ScopedSession
+        
+        _tpsl_monitor = tpsl.TPSLMonitor()
+        
+        def check_tpsl():
+            """Check for missing TP/SL on open trades"""
+            db = ScopedSession()
+            try:
+                _tpsl_monitor.check_trades(db)
+            finally:
+                db.close()
+        
+        workers['tpsl_monitor'] = check_tpsl
+        
+    except Exception as e:
+        logger.error(f"Failed to import tpsl_monitor_worker: {e}")
+    
     return workers
 
 
@@ -397,6 +500,18 @@ def main():
         'auto_trader': {
             'function': worker_functions.get('auto_trader'),
             'interval': int(os.getenv('AUTO_TRADER_CHECK_INTERVAL', 60)),  # 1 minute
+        },
+        'market_conditions': {
+            'function': worker_functions.get('market_conditions'),
+            'interval': int(os.getenv('MARKET_CONDITIONS_CHECK_INTERVAL', 300)),  # 5 minutes
+        },
+        'time_exit': {
+            'function': worker_functions.get('time_exit'),
+            'interval': int(os.getenv('TIME_EXIT_CHECK_INTERVAL', 300)),  # 5 minutes
+        },
+        'tpsl_monitor': {
+            'function': worker_functions.get('tpsl_monitor'),
+            'interval': int(os.getenv('TPSL_MONITOR_CHECK_INTERVAL', 60)),  # 1 minute
         },
     }
     

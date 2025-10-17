@@ -1,271 +1,291 @@
-# ngTradingBot
+# ngTradingBot - Automated MT5 Trading System
 
-Advanced Multi-Port Trading System with MetaTrader 5 Integration, Real-time Signal Generation, and Web Dashboard.
+🤖 **Vollautomatisches Trading-System** mit MT5-Integration, Machine Learning und dynamischem Risk Management
 
-## Features
+## 🎯 Features
 
-### 🔌 Multi-Port Server Architecture
-- **Port 9900**: Command & Control API (EA connection, heartbeat, commands)
-- **Port 9901**: High-frequency tick streaming (100ms batches)
-- **Port 9902**: Trade updates and position synchronization
-- **Port 9903**: Centralized logging system
-- **Port 9905**: Web Dashboard & WebSocket real-time updates
+- ✅ **Timezone-aware Trading**: UTC + Broker Zeit (EET/EEST) mit automatischer Konvertierung
+- ✅ **3-Tier Risk Profiles**: MODERATE | NORMAL | AGGRESSIVE mit dynamischer Confidence-Berechnung
+- ✅ **Session-based Trading**: ASIAN | LONDON | OVERLAP | US mit Volatilitäts-Anpassungen
+- ✅ **Dynamic Position Limits**: Confidence-basiert (50-100% → 1-5 Trades)
+- ✅ **10 Background Workers**: Auto-Trader, Market Conditions, Time Exit, TP/SL Monitor, etc.
+- ✅ **Real-time Dashboard**: WebSocket-Updates, sortierte Positionen nach Profit
+- ✅ **MT5 Binary Protocol**: 2s Heartbeat, 250ms Command Polling für maximale Performance
 
-### 📊 Real-time Trading Signals
-- **Technical Analysis**: RSI, MACD, Stochastic, Bollinger Bands, EMA crossovers
-- **Pattern Detection**: Support/Resistance, Trend channels
-- **Multi-timeframe**: M1, M5, M15, H1, H4, D1
-- **Confidence Scoring**: Weighted multi-indicator signals
-- **Market Hours Detection**: Automatic filtering of non-tradeable symbols
+## 📁 Projektstruktur
 
-### 🤖 MT5 Expert Advisor (EA) - v1.00 (Build 2025-10-07 15:30)
-- **WebSocket-based Communication**: Reliable binary protocol
-- **Tick Streaming**: Real-time market data with 100ms batches
-- **Trade Execution**: Open, modify, close positions via REST API
-- **Magic Number Tagging**: All trades tagged with `MagicNumber = 999888` for identification
-- **Enhanced Volume Validation**: Re-validates after rounding to prevent edge cases
-- **Race Condition Protection**: Mutex prevents simultaneous profit calculations
-- **Close Reason Detection**: SL_HIT, TP_HIT, TRAILING_STOP, MANUAL
-- **Comprehensive Logging**: All EA events logged to server
-- **Auto-reconnection**: Automatic recovery from disconnections
+```
+ngTradingBot/
+├── app.py                          # Flask API Server (Multi-Port: 9900-9905)
+├── auto_trader.py                  # Automatischer Trading-Engine
+├── unified_workers.py              # 10 Background Workers
+├── timezone_manager.py             # 🆕 Timezone Management (UTC ↔ EET/EEST)
+├── dynamic_confidence_calculator.py # 🆕 Context-aware Confidence
+├── session_volatility_analyzer.py  # Session & Volatility Analysis
+├── models.py                       # SQLAlchemy ORM Models
+├── database.py                     # Database Connection
+├── redis_client.py                 # Redis Queue & Metrics
+├── core_communication.py           # MT5 Binary Protocol Handler
+├── core_api.py                     # Core API Endpoints
+├── templates/                      # Dashboard HTML/CSS/JS
+├── workers/                        # Individual Worker Modules
+├── mt5_EA/                         # MetaTrader 5 Expert Advisors
+├── migrations/                     # SQL Database Migrations
+├── docs/                           # 📚 Documentation (46 MD files)
+├── tests/                          # 🧪 Test Files
+├── scripts/                        # 🔧 Shell Scripts
+└── archive/                        # 📦 Old Versions
 
-### 📈 Web Dashboard
-- **Real-time Updates**: WebSocket-based live data
-- **Signal Management**: Filter by confidence, view active signals
-- **Position Monitoring**: Track open trades with P&L
-- **Symbol Price Display**: Live bid/ask with pulsing updates
-- **Performance Metrics**: Today, Week, Month, Year profits
-- **AutoTrade Control**: Automated signal execution
-
-### 🗄️ Database & Storage
-- **PostgreSQL**: Account data, trades, signals, ticks, logs
-- **Redis**: Market volatility caching, signal intervals
-- **Automated Cleanup**: Old tick data retention (7 days)
-- **Backup System**: Daily database backups to GitHub
-
-## Setup
-
-### Prerequisites
-```bash
-# Docker & Docker Compose installed
-# MetaTrader 5 installed (for EA)
+Docker Services:
+├── ngtradingbot_server             # Flask API Server
+├── ngtradingbot_workers            # Unified Workers
+├── ngtradingbot_db                 # PostgreSQL 15
+└── ngtradingbot_redis              # Redis 7
 ```
 
-### Installation
+## 🚀 Quick Start
 
-1. **Clone Repository**
+### 1. Clone & Setup
+
 ```bash
-git clone <repository>
+git clone https://github.com/MikeHotel0815/ngTradingBot.git
 cd ngTradingBot
+cp .env.example .env
+# Edit .env with your credentials
 ```
 
-2. **Start Services**
+### 2. Start System
+
 ```bash
+# Build & Start
+docker compose build --no-cache
 docker compose up -d
+
+# Check Status
+docker compose ps
+docker logs ngtradingbot_workers --tail 50
 ```
 
-3. **Configure MT5 EA**
-- Copy `mt5_EA/Experts/ServerConnector.mq5` to MT5 Experts folder
-- Compile in MetaEditor
-- Add to chart
-- Configure WebRequest URL: `http://<server-ip>:9900`
+### 3. Access Dashboard
 
-### Environment Variables
+```
+http://localhost:9900
+```
 
-Create `.env` file:
-```env
-POSTGRES_USER=trader
-POSTGRES_PASSWORD=<your-password>
-POSTGRES_DB=ngtradingbot
+## ⚙️ Configuration
+
+### Environment Variables (.env)
+
+```bash
+# Database
+DATABASE_URL=postgresql://user:pass@db:5432/trading
+
+# Redis
 REDIS_URL=redis://redis:6379/0
-BACKUP_ENABLED=true
-BACKUP_INTERVAL_HOURS=24
+
+# MT5 Connection
+MT5_ACCOUNT=12345678
+MT5_PASSWORD=your_password
+MT5_SERVER=YourBroker-Server
+
+# Auto-Trading
+AUTO_TRADING_ENABLED=true
+MIN_CONFIDENCE=50.0
+RISK_PROFILE=normal  # moderate | normal | aggressive
+
+# Workers
+TIME_EXIT_ENABLED=true
+TPSL_MONITOR_ENABLED=true
 ```
 
-## Architecture
+## 🕒 Timezone Management
 
-### Server Components
+Das System verwendet **timezone-aware timestamps** für präzises Trading:
 
-**app.py**: Main Flask application with multi-port routing
-- Command & Control endpoints
-- Tick batch processing
-- Trade synchronization
-- Logging aggregation
-- WebUI & dashboard
+- **Server/DB**: UTC (naive timestamps für SQLAlchemy)
+- **Broker/MT5**: EET/EEST (Europe/Bucharest)
+- **Logging**: Zeigt beide Zeitzonen: `[UTC: 10:30:00 | Broker: 13:30:00 EEST]`
 
-**signal_generator.py**: Technical analysis engine
-- Multi-indicator analysis
-- Pattern detection
-- Confidence scoring
-- Signal expiration management
+### Usage:
 
-**signal_worker.py**: Background signal generation
-- Periodic signal updates
-- Market volatility detection
-- Dynamic signal intervals
-
-**tick_batch_writer.py**: High-performance tick storage
-- Batched PostgreSQL inserts
-- Redis caching for latest ticks
-- Memory-efficient buffering
-
-**backup_scheduler.py**: Automated backup system
-- Daily database dumps
-- GitHub integration
-- Retention management
-
-### Database Schema
-
-**accounts**: MT5 account information
-**subscribed_symbols**: User symbol subscriptions
-**ticks**: Real-time tick data (7-day retention)
-**ohlc_data**: Historical candle data
-**trades**: Position history with close reasons
-**trading_signals**: Generated signals with indicators
-**logs**: EA and server event logs
-**commands**: Pending trade commands
-
-## API Endpoints
-
-### Command & Control (9900)
-- `POST /api/connect` - EA initial connection
-- `POST /api/heartbeat` - Account status updates
-- `POST /api/symbols` - Get subscribed symbols
-- `POST /api/get_commands` - Poll pending commands
-- `POST /api/command_response` - Command execution result
-
-### Tick Streaming (9901)
-- `POST /api/ticks` - Batch tick ingestion
-
-### Trade Updates (9902)
-- `POST /api/trades/update` - Position updates
-
-### Logging (9903)
-- `POST /api/log` - EA log messages
-
-### Dashboard (9905)
-- `GET /` - Web dashboard
-- `GET /api/dashboard/info` - Account information
-- `GET /api/signals` - Active trading signals
-- `POST /api/command/create` - Manual trade commands
-- WebSocket `/socket.io` - Real-time updates
-
-## MT5 Expert Advisor
-
-### Features
-- OnTimer() based tick collection (100ms intervals)
-- Independent from chart symbol ticks
-- Trading hours detection (Forex weekends, Crypto 24/7)
-- Close reason detection (SL/TP/Trailing/Manual)
-- Comprehensive event logging
-- Automatic reconnection on disconnect
-
-### Logging Events
-- Connection/Reconnection/Disconnect
-- Trade opened/closed/modified
-- Command execution (success/failure)
-- Errors and warnings
-- Symbol subscription changes
-
-### Configuration
-```mql5
-input string ServerURL = "http://100.97.100.50:9900";
-input int ConnectionTimeout = 5000;
-input int HeartbeatInterval = 30;
-input int TickBatchInterval = 100;
-```
-
-## Signal Generation
-
-### Technical Indicators
-- **RSI**: Overbought (>70), Oversold (<30)
-- **MACD**: Bullish/Bearish crossovers
-- **Stochastic**: Overbought (>80), Oversold (<20)
-- **Bollinger Bands**: Breakout detection
-- **EMA Crossover**: Fast(9)/Slow(21) crossovers
-
-### Confidence Calculation
 ```python
-confidence = (matching_indicators / total_indicators) * 100
+from timezone_manager import tz
+
+# Current time
+now_utc = tz.now_utc()
+now_broker = tz.now_broker()
+
+# Convert
+broker_time = tz.utc_to_broker(utc_dt)
+utc_time = tz.broker_to_utc(broker_dt)
+
+# Database
+db_dt = tz.to_db(aware_dt)      # Make naive UTC
+aware_dt = tz.from_db(db_dt)    # Make aware
+
+# Logging
+log_msg = tz.format_for_log(dt, "Trade opened")
 ```
 
-### Market Hours Filtering
-- **Crypto (BTC, ETH, etc.)**: 24/7 tradeable
-- **Forex (GBPUSD, EURUSD, etc.)**: Closed weekends (Sat/Sun)
-- **Metals (XAU, XAG)**: Session-based trading
+Siehe: `docs/TIMEZONE_IMPLEMENTATION.md`
 
-## Monitoring
+## 🎯 Risk Profile System
 
-### View Logs
+### 3 Intelligente Profile:
+
+| Profile    | Base Conf. | Symbol Adj. | Session Adj. | Volatility Adj. |
+|------------|------------|-------------|--------------|-----------------|
+| MODERATE   | 65%        | ±2-8%       | ±0-5%        | ±3-5%           |
+| NORMAL     | 55%        | ±2-8%       | ±0-5%        | ±3-5%           |
+| AGGRESSIVE | 50%        | ±2-8%       | ±0-5%        | ±3-5%           |
+
+### Dynamic Position Limits:
+
+- **50-59% Confidence** → 1 Trade
+- **60-69% Confidence** → 2 Trades
+- **70-79% Confidence** → 3 Trades
+- **80-89% Confidence** → 4 Trades
+- **90-100% Confidence** → 5 Trades (capped at 4)
+
+Siehe: `docs/MAX_PERFORMANCE_CONFIG.md`
+
+## 📊 Trading Sessions (UTC)
+
+| Session    | UTC Time    | Volatility | Trailing Multiplier |
+|------------|-------------|------------|---------------------|
+| ASIAN      | 00:00-08:00 | Low (0.7x) | 0.7x                |
+| LONDON     | 08:00-16:00 | High (1.2x)| 1.2x                |
+| OVERLAP    | 13:00-16:00 | Max (1.5x) | 1.5x                |
+| US         | 13:00-22:00 | High (1.3x)| 1.3x                |
+| AFTER_HOURS| 22:00-00:00 | Low        | 0.9x                |
+
+## 🔧 Workers (10 Total)
+
+| Worker               | Interval | Function                          |
+|----------------------|----------|-----------------------------------|
+| decision_cleanup     | 1h       | Clean old trading decisions       |
+| news_fetch           | 1h       | Fetch economic calendar           |
+| trade_timeout        | 5min     | Timeout stale trades              |
+| strategy_validation  | 5min     | Validate trading strategies       |
+| drawdown_protection  | 1min     | Monitor account drawdown          |
+| partial_close        | 1min     | Partial position closing          |
+| **auto_trader**      | 1min     | Execute trading signals           |
+| **market_conditions**| 5min     | 🆕 Log session + volatility       |
+| **time_exit**        | 5min     | 🆕 Time-based exits               |
+| **tpsl_monitor**     | 1min     | 🆕 TP/SL validation               |
+
+## 📡 API Endpoints
+
+### Trading Control
+
 ```bash
-# Server logs
-docker logs ngtradingbot_server -f
+# Get Auto-Trade Status
+GET http://localhost:9901/api/auto-trade/status
 
-# Database logs
-docker exec ngtradingbot_db psql -U trader -d ngtradingbot -c \
-  "SELECT level, message, details, timestamp FROM logs ORDER BY timestamp DESC LIMIT 20;"
+# Set Risk Profile
+POST http://localhost:9901/api/auto-trade/set-risk-profile
+{"risk_profile": "aggressive"}
 
-# Redis cache
-docker exec ngtradingbot_redis redis-cli KEYS "*"
+# Get Confidence Requirements
+GET http://localhost:9901/api/auto-trade/confidence-requirements
 ```
 
-### Health Checks
-- Server startup logs show all 5 ports active
-- EA heartbeat every 30 seconds
-- Signal generation logs show interval and volatility
-- Tick batch writer logs show storage rate
+### Monitoring
 
-## Development
-
-### Database Migrations
 ```bash
-# Connect to DB
-docker exec -it ngtradingbot_db psql -U trader -d ngtradingbot
+# Worker Status
+GET http://localhost:9901/api/workers/status
 
-# View schema
-\dt
-\d+ trades
+# Market Conditions
+GET http://localhost:9901/api/market-conditions
+
+# System Health
+GET http://localhost:9900/health
 ```
 
-### Manual Backup
+Siehe: `docs/API_DOCUMENTATION.md`
+
+## 🧪 Testing
+
 ```bash
-docker exec ngtradingbot_server python backup_scheduler.py
+# Timezone Verification
+python3 verify_timezone.py
+
+# Unit Tests
+cd tests
+python3 test_core_system.py
+python3 test_tp_sl.py
+
+# 72h Monitoring
+cd scripts
+./start_72h_test.sh
 ```
 
-### Signal Generation Testing
-```python
-from signal_generator import generate_signal
+## 📚 Dokumentation
 
-signal = generate_signal(
-    symbol="BTCUSD",
-    timeframe="H4",
-    account_id=1
-)
+Alle Dokumente in `docs/`:
+
+- `TIMEZONE_IMPLEMENTATION.md` - Timezone Management
+- `MAX_PERFORMANCE_CONFIG.md` - Performance Tuning
+- `API_DOCUMENTATION.md` - API Reference
+- `CORE_SYSTEM_README.md` - Core System
+- `MIGRATION_GUIDE.md` - Database Migrations
+- `TESTING_CHECKLIST.md` - QA Checklist
+
+## 🐛 Debugging
+
+```bash
+# Worker Logs
+docker logs ngtradingbot_workers --tail 100 -f
+
+# Server Logs
+docker logs ngtradingbot_server --tail 100 -f
+
+# Database
+docker exec -it ngtradingbot_db psql -U trading_user -d trading
+
+# Redis
+docker exec -it ngtradingbot_redis redis-cli
 ```
 
-## Troubleshooting
+## 🔒 Security
 
-### EA Not Connecting
-1. Check WebRequest is enabled in MT5 Tools > Options
-2. Add server URL to allowed URLs list
-3. Verify server is running: `docker ps`
-4. Check EA logs in MT5 Experts tab
+- ✅ Environment variables für sensible Daten
+- ✅ PostgreSQL mit Passwort-Auth
+- ✅ Redis mit Passwort (optional)
+- ✅ Docker Network Isolation
+- ✅ Input Validation auf allen Endpoints
 
-### No Signals Generated
-1. Check signal worker is running: `docker logs ngtradingbot_server | grep signal_worker`
-2. Verify symbols are subscribed: Check dashboard
-3. Check market hours for Forex symbols
-4. Review signal generation logs
+## 📈 Performance
 
-### Dashboard Not Updating
-1. Check WebSocket connection in browser console
-2. Verify tick streaming is active
-3. Restart server: `docker compose restart server`
+- **Heartbeat**: 2 Sekunden (optimal für 2 EAs)
+- **Command Polling**: 250ms
+- **Database**: Connection Pooling (20 connections)
+- **Redis**: Pipelining für Batch Operations
+- **WebSocket**: Smart Updates (nur bei Änderungen)
 
-## License
+## 🤝 Contributing
 
-Proprietary - All rights reserved
+1. Fork the repository
+2. Create feature branch: `git checkout -b feature/amazing-feature`
+3. Commit changes: `git commit -m 'Add amazing feature'`
+4. Push to branch: `git push origin feature/amazing-feature`
+5. Open Pull Request
 
-## Support
+## 📄 License
 
-For issues and questions, contact the development team.
+MIT License - siehe LICENSE file
+
+## 👤 Author
+
+**MikeHotel0815**
+
+- GitHub: [@MikeHotel0815](https://github.com/MikeHotel0815)
+
+## 🎯 Status
+
+✅ **PRODUCTION READY** - Timezone-aware, Risk Profiles, 10 Workers, Full Monitoring
+
+---
+
+**Last Updated**: 2025-10-17 | **Version**: 3.0.0 (Timezone Implementation)

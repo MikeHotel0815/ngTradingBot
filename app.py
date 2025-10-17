@@ -985,6 +985,7 @@ def auto_trade_status():
     return jsonify({
         'enabled': trader.enabled,
         'min_confidence': trader.min_autotrade_confidence,
+        'risk_profile': trader.risk_profile,  # ✅ NEW
         'circuit_breaker_enabled': trader.circuit_breaker_enabled,
         'circuit_breaker_tripped': trader.circuit_breaker_tripped,
         'circuit_breaker_reason': trader.circuit_breaker_reason,
@@ -992,6 +993,85 @@ def auto_trade_status():
         'max_total_drawdown_percent': trader.max_total_drawdown_percent,
         'processed_signals': len(trader.processed_signal_hashes)
     }), 200
+
+
+@app_command.route('/api/auto-trade/set-risk-profile', methods=['POST'])
+def set_risk_profile():
+    """Set risk profile for dynamic confidence calculation"""
+    try:
+        data = request.get_json() or {}
+        risk_profile = data.get('risk_profile', 'normal')
+        
+        if risk_profile not in ['moderate', 'normal', 'aggressive']:
+            return jsonify({
+                'status': 'error',
+                'message': 'Invalid risk profile. Must be: moderate, normal, or aggressive'
+            }), 400
+        
+        from auto_trader import get_auto_trader
+        trader = get_auto_trader()
+        trader.set_risk_profile(risk_profile)
+        
+        logger.info(f"Risk Profile set to: {risk_profile}")
+        return jsonify({
+            'status': 'success',
+            'message': f'Risk Profile set to: {risk_profile.upper()}',
+            'risk_profile': risk_profile
+        }), 200
+    except Exception as e:
+        logger.error(f"Error setting risk profile: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_command.route('/api/auto-trade/confidence-requirements', methods=['GET'])
+def get_confidence_requirements():
+    """Get current confidence requirements for all active symbols"""
+    try:
+        from dynamic_confidence_calculator import get_confidence_calculator
+        from session_volatility_analyzer import SessionVolatilityAnalyzer
+        from auto_trader import get_auto_trader
+        
+        trader = get_auto_trader()
+        calculator = get_confidence_calculator()
+        analyzer = SessionVolatilityAnalyzer()
+        
+        # Get current session
+        session_name, session_info = analyzer.get_current_session()
+        
+        # Get all symbols with open positions
+        db = ScopedSession()
+        try:
+            from models import Trade
+            open_trades = db.query(Trade).filter_by(status='open').all()
+            symbols = list(set(t.symbol for t in open_trades))
+            
+            # Calculate volatility for each symbol
+            volatility_map = {}
+            for symbol in symbols:
+                volatility_map[symbol] = analyzer.calculate_recent_volatility(db, symbol, account_id=1)
+            
+            # Get requirements for all symbols
+            requirements = calculator.get_all_requirements(
+                symbols=symbols,
+                risk_profile=trader.risk_profile,
+                session=session_name,
+                volatility_map=volatility_map
+            )
+            
+            return jsonify({
+                'status': 'success',
+                'risk_profile': trader.risk_profile,
+                'session': session_name,
+                'session_description': session_info.get('description', session_name),
+                'requirements': requirements
+            }), 200
+            
+        finally:
+            db.close()
+            
+    except Exception as e:
+        logger.error(f"Error getting confidence requirements: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
 @app_command.route('/api/monitoring/<int:account_id>', methods=['GET'])
