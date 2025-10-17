@@ -2248,6 +2248,30 @@ def sync_trades(account, db):
                     else:
                         entry_reason = f"Trade from {source}"
 
+                # ✅ COMPREHENSIVE TRACKING: Get current market prices for entry snapshot
+                from models import Tick
+                from market_context_helper import get_current_trading_session
+                
+                symbol_for_tick = trade_data.get('symbol')
+                current_tick = None
+                entry_bid = None
+                entry_ask = None
+                entry_spread = None
+                
+                if symbol_for_tick:
+                    # Get latest tick for this symbol (ticks are global - no account_id)
+                    current_tick = db.query(Tick).filter_by(
+                        symbol=symbol_for_tick
+                    ).order_by(Tick.timestamp.desc()).first()
+                    
+                    if current_tick:
+                        entry_bid = float(current_tick.bid)
+                        entry_ask = float(current_tick.ask)
+                        entry_spread = float(current_tick.spread) if current_tick.spread else (entry_ask - entry_bid if entry_ask and entry_bid else None)
+                
+                # ✅ COMPREHENSIVE TRACKING: Get current session
+                session = get_current_trading_session()
+                
                 new_trade = Trade(
                     account_id=account.id,
                     ticket=ticket,
@@ -2261,16 +2285,35 @@ def sync_trades(account, db):
                     close_time=datetime.fromisoformat(trade_data['close_time']) if trade_data.get('close_time') else None,
                     sl=trade_data.get('sl'),
                     tp=trade_data.get('tp'),
-                    original_tp=trade_data.get('tp'),  # 🎯 NEW: Store original TP for extension tracking
-                    tp_extended_count=0,  # 🎯 NEW: Initialize extension counter
+                    original_tp=trade_data.get('tp'),  # Store original TP for extension tracking
+                    tp_extended_count=0,  # Initialize extension counter
+                    
+                    # ✅ COMPREHENSIVE TRACKING - Initial TP/SL Snapshot
+                    initial_tp=trade_data.get('tp'),
+                    initial_sl=trade_data.get('sl'),
+                    
+                    # ✅ COMPREHENSIVE TRACKING - Entry Price Action
+                    entry_bid=entry_bid,
+                    entry_ask=entry_ask,
+                    entry_spread=entry_spread,
+                    
+                    # ✅ COMPREHENSIVE TRACKING - Initialize MFE/MAE
+                    max_favorable_excursion=0,
+                    max_adverse_excursion=0,
+                    trailing_stop_active=False,
+                    trailing_stop_moves=0,
+                    
+                    # ✅ COMPREHENSIVE TRACKING - Market Context
+                    session=session,
+                    
                     profit=trade_data.get('profit'),
                     commission=trade_data.get('commission'),
                     swap=trade_data.get('swap'),
                     source=source,  # Now correctly set based on command lookup
                     command_id=command_id,
-                    signal_id=signal_id_from_command,  # ✅ FIX: Store signal_id!
-                    timeframe=timeframe_from_signal,  # ✅ NEW: Store timeframe from signal!
-                    entry_confidence=entry_confidence_from_signal,  # ✅ NEW: Store confidence!
+                    signal_id=signal_id_from_command,  # Store signal_id!
+                    timeframe=timeframe_from_signal,  # Store timeframe from signal!
+                    entry_confidence=entry_confidence_from_signal,  # Store confidence!
                     entry_reason=entry_reason,
                     response_data=trade_data.get('response_data'),
                     status=trade_data.get('status', 'open'),

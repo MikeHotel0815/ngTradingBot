@@ -177,8 +177,41 @@ class Trade(Base):
     close_time = Column(DateTime)
     sl = Column(Numeric(20, 5))
     tp = Column(Numeric(20, 5))
-    original_tp = Column(Numeric(20, 5))  # 🎯 NEW: Original TP for tracking extensions
-    tp_extended_count = Column(Integer, default=0)  # 🎯 NEW: How many times TP was extended
+    original_tp = Column(Numeric(20, 5))  # 🎯 Original TP for tracking extensions
+    tp_extended_count = Column(Integer, default=0)  # 🎯 How many times TP was extended
+    
+    # ✅ COMPREHENSIVE TRACKING - Initial TP/SL Snapshot
+    initial_tp = Column(Numeric(20, 5))  # TP at trade opening (for extension tracking)
+    initial_sl = Column(Numeric(20, 5))  # SL at trade opening (for trailing detection)
+    
+    # ✅ COMPREHENSIVE TRACKING - Price Action at Entry
+    entry_bid = Column(Numeric(20, 5))  # Bid price at entry
+    entry_ask = Column(Numeric(20, 5))  # Ask price at entry
+    entry_spread = Column(Numeric(10, 5))  # Spread at entry
+    
+    # ✅ COMPREHENSIVE TRACKING - Price Action at Exit
+    exit_bid = Column(Numeric(20, 5))  # Bid price at exit
+    exit_ask = Column(Numeric(20, 5))  # Ask price at exit
+    exit_spread = Column(Numeric(10, 5))  # Spread at exit
+    
+    # ✅ COMPREHENSIVE TRACKING - Trailing Stop Tracking
+    trailing_stop_active = Column(Boolean, default=False)  # Was TS activated?
+    trailing_stop_moves = Column(Integer, default=0)  # How many times SL was moved by TS
+    
+    # ✅ COMPREHENSIVE TRACKING - MFE/MAE (Max Favorable/Adverse Excursion)
+    max_favorable_excursion = Column(Numeric(10, 2), default=0)  # Max profit during trade (pips)
+    max_adverse_excursion = Column(Numeric(10, 2), default=0)  # Max drawdown during trade (pips)
+    
+    # ✅ COMPREHENSIVE TRACKING - Performance Metrics
+    pips_captured = Column(Numeric(10, 2))  # Profit/Loss in pips
+    risk_reward_realized = Column(Numeric(10, 2))  # Actual R:R achieved
+    hold_duration_minutes = Column(Integer)  # Trade duration in minutes
+    
+    # ✅ COMPREHENSIVE TRACKING - Market Context
+    entry_volatility = Column(Numeric(10, 5))  # ATR/Spread at entry
+    exit_volatility = Column(Numeric(10, 5))  # ATR/Spread at exit
+    session = Column(String(20))  # Trading session (London/NY/Asia/Pacific)
+    
     profit = Column(Numeric(15, 2))
     commission = Column(Numeric(15, 2))
     swap = Column(Numeric(15, 2))
@@ -187,7 +220,7 @@ class Trade(Base):
     signal_id = Column(Integer, ForeignKey('trading_signals.id'))  # Link to signal if from autotrade
     timeframe = Column(String(10))  # Timeframe signal was generated on
     entry_reason = Column(String(200))  # Why trade was opened: pattern, indicator confluence, etc
-    entry_confidence = Column(Numeric(5, 2))  # ✅ NEW: Signal confidence at entry (for opportunity cost comparison)
+    entry_confidence = Column(Numeric(5, 2))  # Signal confidence at entry (for opportunity cost comparison)
     close_reason = Column(String(100))  # TP_HIT, SL_HIT, MANUAL, TRAILING_STOP, etc
     response_data = Column(JSONB)  # Full EA response
     status = Column(String(20), default='open')  # open, closed, cancelled
@@ -200,6 +233,42 @@ class Trade(Base):
 
     def __repr__(self):
         return f"<Trade(ticket={self.ticket}, {self.direction} {self.volume} {self.symbol} @ {self.open_price})>"
+
+
+class TradeHistoryEvent(Base):
+    """Trade modification history - tracks all TP/SL changes, volume modifications, etc."""
+    __tablename__ = 'trade_history_events'
+    __table_args__ = (
+        Index('idx_trade_history_trade_id', 'trade_id'),
+        Index('idx_trade_history_ticket', 'ticket'),
+        Index('idx_trade_history_event_type', 'event_type'),
+        Index('idx_trade_history_timestamp', 'timestamp'),
+        Index('idx_trade_history_ticket_timestamp', 'ticket', 'timestamp'),
+    )
+
+    id = Column(Integer, primary_key=True)
+    trade_id = Column(Integer, ForeignKey('trades.id', ondelete='CASCADE'), nullable=False)
+    ticket = Column(BigInteger, nullable=False, index=True)
+    event_type = Column(String(50), nullable=False)  # TP_MODIFIED, SL_MODIFIED, VOLUME_MODIFIED, PRICE_UPDATE
+    timestamp = Column(DateTime, nullable=False, default=datetime.utcnow)
+    
+    # Before/After Values
+    old_value = Column(Numeric(20, 5))
+    new_value = Column(Numeric(20, 5))
+    
+    # Context
+    reason = Column(String(200))  # Human-readable reason (e.g., "Trailing Stop activated")
+    source = Column(String(50))  # System component (e.g., "smart_trailing_stop", "manual")
+    
+    # Market State at time of change
+    price_at_change = Column(Numeric(20, 5))
+    spread_at_change = Column(Numeric(10, 5))
+    
+    # Additional metadata (renamed from 'metadata' - reserved word)
+    event_metadata = Column(JSONB)
+
+    def __repr__(self):
+        return f"<TradeHistoryEvent(ticket={self.ticket}, type={self.event_type}, {self.old_value}->{self.new_value})>"
 
 
 class Command(Base):

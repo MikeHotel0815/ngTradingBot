@@ -451,6 +451,18 @@ def import_worker_functions():
     except Exception as e:
         logger.error(f"Failed to import trade_monitor: {e}")
     
+    try:
+        # ✅ NEW: MFE/MAE Tracker - Maximum Favorable/Adverse Excursion
+        logger.info("📦 Importing mfe_mae_tracker...")
+        import workers.mfe_mae_tracker as mfe
+        
+        _mfe_tracker = mfe.MFEMAETracker()
+        
+        workers['mfe_mae_tracker'] = _mfe_tracker.update_all_trades
+        
+    except Exception as e:
+        logger.error(f"Failed to import mfe_mae_tracker: {e}")
+    
     return workers
 
 
@@ -527,6 +539,10 @@ def main():
         'partial_close': {
             'function': worker_functions.get('partial_close'),
             'interval': int(os.getenv('PARTIAL_CLOSE_CHECK_INTERVAL', 60)),  # 1 minute
+        },
+        'mfe_mae_tracker': {
+            'function': worker_functions.get('mfe_mae_tracker'),
+            'interval': int(os.getenv('MFE_MAE_UPDATE_INTERVAL', 10)),  # 10 seconds
         },
         'auto_trader': {
             'function': worker_functions.get('auto_trader'),
