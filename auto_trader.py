@@ -548,24 +548,9 @@ class AutoTrader:
                     'reason': f'Max positions for {signal_confidence:.1f}% confidence reached: {total_exposure}/{max_trades_for_confidence} ({signal.symbol} {signal.timeframe})'
                 }
 
-            # Check signal age (don't execute old signals)
-            # ✅ DYNAMIC AGE LIMIT: Adjust based on timeframe
-            # M5 = 30min, M15 = 60min, H1 = 120min, H4 = 360min (6h), D1 = 1440min (24h)
-            timeframe_age_limits = {
-                'M5': 30,
-                'M15': 60,
-                'H1': 120,
-                'H4': 360,  # 6 hours for H4 signals
-                'D1': 1440  # 24 hours for daily signals
-            }
-            max_age_minutes = timeframe_age_limits.get(signal.timeframe, settings.signal_max_age_minutes)
-            
-            signal_age = datetime.utcnow() - signal.created_at
-            if signal_age > timedelta(minutes=max_age_minutes):
-                return {
-                    'execute': False,
-                    'reason': f'Signal too old ({int(signal_age.total_seconds()/60)}min, max: {max_age_minutes}min for {signal.timeframe})'
-                }
+            # ✅ NEW LOGIC: No age limit! Signals are valid as long as status='active'
+            # A separate signal_validation_worker runs every 30s to deactivate invalid signals
+            # This ensures only valid signals are traded, regardless of age
 
             # ✅ ENHANCED: Check SL-Hit Protection (automatic pause after multiple SL hits)
             from sl_hit_protection import get_sl_hit_protection
@@ -1114,7 +1099,6 @@ class AutoTrader:
 
                 # ✅ NEW: Check for opportunity cost - should we replace existing trades?
                 from trade_replacement_manager import get_trade_replacement_manager
-                from models import Trade
 
                 trm = get_trade_replacement_manager()
 

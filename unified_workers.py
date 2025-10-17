@@ -420,6 +420,16 @@ def import_worker_functions():
     except Exception as e:
         logger.error(f"Failed to import tpsl_monitor_worker: {e}")
     
+    try:
+        # ✅ NEW: Signal Validation Worker
+        logger.info("📦 Importing signal_validation_worker...")
+        import workers.signal_validation_worker as svw
+        
+        workers['signal_validation'] = svw.run_signal_validation_worker
+        
+    except Exception as e:
+        logger.error(f"Failed to import signal_validation_worker: {e}")
+    
     return workers
 
 
@@ -512,6 +522,10 @@ def main():
         'tpsl_monitor': {
             'function': worker_functions.get('tpsl_monitor'),
             'interval': int(os.getenv('TPSL_MONITOR_CHECK_INTERVAL', 60)),  # 1 minute
+        },
+        'signal_validation': {
+            'function': worker_functions.get('signal_validation'),
+            'interval': int(os.getenv('SIGNAL_VALIDATION_CHECK_INTERVAL', 30)),  # 30 seconds
         },
     }
     
