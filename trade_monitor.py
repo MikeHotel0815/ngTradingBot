@@ -559,6 +559,84 @@ class TradeMonitor:
         except Exception as e:
             logger.error(f"Error monitoring trades: {e}")
 
+    def monitor_once(self, db: Session):
+        """
+        Run one monitoring cycle (for unified_workers integration)
+        
+        Args:
+            db: Database session
+        """
+        try:
+            # Monitor positions
+            self.monitor_open_trades(db)
+
+            # ✅ Run Smart Trailing Stop periodically
+            now = datetime.utcnow()
+            if self.last_trailing_check is None:
+                self.last_trailing_check = now
+            
+            if (now - self.last_trailing_check).total_seconds() >= self.trailing_check_interval:
+                logger.debug("🔄 Running Smart Trailing Stop check with market noise compensation...")
+                try:
+                    stats = self.smart_trailing.process_all(db)
+                    if stats['trailed'] > 0 or stats['extended'] > 0:
+                        logger.info(
+                            f"🎯 Smart Trailing: {stats['trailed']} SL adjusted, "
+                            f"{stats['extended']} TP extended | "
+                            f"ATR-based noise compensation active"
+                        )
+                except Exception as e:
+                    logger.error(f"Error in smart trailing: {e}")
+
+                self.last_trailing_check = now
+
+            # ✅ Check for recently closed trades and update symbol configs
+            try:
+                closed_trades_list = db.query(Trade).filter(
+                    Trade.status == 'closed',
+                    Trade.close_time >= datetime.utcnow() - timedelta(minutes=2)
+                ).all()
+                
+                closed_tickets = []
+                for t in closed_trades_list:
+                    closed_tickets.append({
+                        'ticket': int(t.ticket),
+                        'symbol': str(t.symbol),
+                        'direction': str(t.direction)
+                    })
+                
+                del closed_trades_list
+                
+                for trade_data in closed_tickets:
+                    ticket = trade_data['ticket']
+                    symbol = trade_data['symbol']
+                    
+                    if not hasattr(self, '_processed_closed_trades'):
+                        self._processed_closed_trades = set()
+                    
+                    if ticket not in self._processed_closed_trades:
+                        self._processed_closed_trades.add(ticket)
+                        
+                        try:
+                            config = update_symbol_after_trade(ticket)
+                            if config:
+                                logger.info(
+                                    f"✅ Symbol config updated: {config['symbol']} {config['direction']} - "
+                                    f"status={config['status']}, conf≥{config['min_confidence_threshold']}%, "
+                                    f"risk={config['risk_multiplier']}x"
+                                )
+                        except Exception as e:
+                            logger.error(f"Error updating symbol config for trade #{ticket}: {e}")
+
+                if hasattr(self, '_processed_closed_trades') and len(self._processed_closed_trades) > 100:
+                    self._processed_closed_trades = set(list(self._processed_closed_trades)[-100:])
+
+            except Exception as e:
+                logger.error(f"Error processing closed trades: {e}")
+
+        except Exception as e:
+            logger.error(f"Monitor cycle error: {e}")
+
     def monitor_loop(self):
         """Main monitoring loop with unified trailing stop and post-trade updates"""
         logger.info(f"Trade Monitor started (interval: {self.monitor_interval}s)")

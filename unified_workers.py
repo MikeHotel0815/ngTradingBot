@@ -430,6 +430,27 @@ def import_worker_functions():
     except Exception as e:
         logger.error(f"Failed to import signal_validation_worker: {e}")
     
+    try:
+        # ✅ NEW: Trade Monitor with Smart Trailing Stop
+        logger.info("📦 Importing trade_monitor...")
+        import trade_monitor as tm
+        from database import ScopedSession
+        
+        _trade_monitor = tm.get_monitor()
+        
+        def run_trade_monitor_cycle():
+            """Run one cycle of trade monitoring"""
+            db = ScopedSession()
+            try:
+                _trade_monitor.monitor_once(db)
+            finally:
+                db.close()
+        
+        workers['trade_monitor'] = run_trade_monitor_cycle
+        
+    except Exception as e:
+        logger.error(f"Failed to import trade_monitor: {e}")
+    
     return workers
 
 
@@ -526,6 +547,10 @@ def main():
         'signal_validation': {
             'function': worker_functions.get('signal_validation'),
             'interval': int(os.getenv('SIGNAL_VALIDATION_CHECK_INTERVAL', 30)),  # 30 seconds
+        },
+        'trade_monitor': {
+            'function': worker_functions.get('trade_monitor'),
+            'interval': int(os.getenv('TRADE_MONITOR_CHECK_INTERVAL', 1)),  # 1 second for real-time monitoring
         },
     }
     

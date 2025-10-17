@@ -206,6 +206,21 @@ class SmartTrailingStop:
             
             # Final trail distance
             trail_dist = base_trail_dist * session_mult * progress_mult
+            
+            # ✅ CRITICAL: Cap trail distance to max 50% of current profit
+            # This ensures we can always reach break-even even with high ATR
+            # Use profit_pts (already in points) for comparison
+            max_trail_pts = profit_pts * 0.5
+            trail_pts = trail_dist / cfg['point']
+            
+            if trail_pts > max_trail_pts:
+                old_trail_pts = trail_pts
+                trail_dist = max_trail_pts * cfg['point']  # Convert back to price
+                logger.info(
+                    f"🔧 Trade {trade.ticket}: Trail capped at 50% of profit: "
+                    f"{old_trail_pts:.1f}pts → {max_trail_pts:.1f}pts"
+                )
+            
             trail_dist_pts = trail_dist / cfg['point']
 
             logger.info(
@@ -224,13 +239,15 @@ class SmartTrailingStop:
             # === SAFETY CHECKS ===
             
             # 1. NEVER move SL against trade (only lock profits)
+            # For BUY: New SL must be HIGHER than current (moving up towards price)
+            # For SELL: New SL must be LOWER than current (moving down towards price)
             if is_buy:
                 if new_sl <= sl:
                     logger.debug(f"Trade {trade.ticket}: New SL {new_sl:.5f} <= current {sl:.5f}, skipping")
                     return None
             else:
                 if new_sl >= sl:
-                    logger.debug(f"Trade {trade.ticket}: New SL {new_sl:.5f} >= current {sl:.5f}, skipping")
+                    logger.debug(f"Trade {trade.ticket}: New SL {new_sl:.5f} >= current {sl:.5f}, not better - skipping")
                     return None
 
             # 2. NEVER create a loss with trailing stop
