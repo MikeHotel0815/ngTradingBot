@@ -153,8 +153,9 @@ def create_close_command(db: Session, trade: Trade, reason: str) -> bool:
 
         payload_data = {
             'ticket': int(trade.ticket),
-            'reason': f'strategy_validation_{reason}',
-            'worker': 'strategy_validation_worker'
+            'reason': 'STRATEGY_INVALID',  # Normalized close reason
+            'worker': 'strategy_validation_worker',
+            'details': reason  # Keep original for logging
         }
 
         command = Command(

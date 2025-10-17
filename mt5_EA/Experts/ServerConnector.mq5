@@ -12,7 +12,7 @@
 #property description "2s Heartbeat | 250ms Command Polling"
 
 // MANUAL: Update this date when code is modified!
-#define CODE_LAST_MODIFIED "2025-10-17 10:46:50 - MAX_PERFORMANCE_2EA_CONFIG"  // ⚡ Ultra-fast: 2s heartbeat, 300ms polling!
+#define CODE_LAST_MODIFIED "2025-10-17 15:30:00 - EXIT_REASON_FIX"  // ✅ Fixed: Server-initiated closes now show correct reason (TP/SL/TS/TIME_EXIT/etc) instead of MANUAL
 
 // ⚡⚡⚡ MAXIMUM PERFORMANCE INPUT PARAMETERS ⚡⚡⚡
 input string ServerURL = "http://100.97.100.50:9900";  // Python server URL (Tailscale)
@@ -44,6 +44,15 @@ struct PositionInfo {
 };
 PositionInfo trackedPositions[];
 int trackedPositionCount = 0;
+
+// Server-initiated close reasons
+struct ServerCloseReason {
+   ulong ticket;
+   string reason;
+   datetime timestamp;
+};
+ServerCloseReason serverCloseReasons[];
+int serverCloseReasonCount = 0;
 
 // Symbol management
 string subscribedSymbols[];
@@ -1769,6 +1778,31 @@ void ExecuteCloseTrade(string commandId, string cmdObj)
       return;
    }
 
+   // Parse close_reason from command payload
+   string closeReason = "";
+   int reasonPos = StringFind(cmdObj, "\"reason\":");
+   if(reasonPos >= 0)
+   {
+      // Skip past "reason": and find the opening quote
+      string afterReason = StringSubstr(cmdObj, reasonPos + 9, 100);
+      int quoteStart = StringFind(afterReason, "\"");
+      if(quoteStart >= 0)
+      {
+         int quoteEnd = StringFind(afterReason, "\"", quoteStart + 1);
+         if(quoteEnd > quoteStart)
+         {
+            closeReason = StringSubstr(afterReason, quoteStart + 1, quoteEnd - quoteStart - 1);
+            Print("DEBUG CLOSE: Parsed close_reason = '", closeReason, "'");
+         }
+      }
+   }
+
+   // Store server close reason for this ticket
+   if(closeReason != "")
+   {
+      StoreServerCloseReason(ticket, closeReason);
+   }
+
    // Find position
    string symbol = "";
    int totalPositions = PositionsTotal();
@@ -1792,7 +1826,7 @@ void ExecuteCloseTrade(string commandId, string cmdObj)
       return;
    }
 
-   Print("Closing position: Ticket ", ticket, " Symbol ", symbol);
+   Print("Closing position: Ticket ", ticket, " Symbol ", symbol, " Reason: ", closeReason);
 
    // Prepare close request
    MqlTradeRequest request;
@@ -2869,6 +2903,14 @@ void SendTradeUpdate(ulong ticket, string action, string closeReason = "")
 //+------------------------------------------------------------------+
 string DetectCloseReason(ulong positionTicket, ulong dealTicket)
 {
+   // First check if server initiated this close with a specific reason
+   string serverReason = GetServerCloseReason(positionTicket);
+   if(serverReason != "")
+   {
+      Print("Using server-initiated close reason for ticket ", positionTicket, ": ", serverReason);
+      return serverReason;
+   }
+
    // Find tracked position to get original SL/TP
    for(int i = 0; i < trackedPositionCount; i++)
    {
@@ -3006,6 +3048,77 @@ void UntrackPosition(ulong ticket)
          ArrayResize(trackedPositions, trackedPositionCount);
 
          Print("Untracked position ", ticket);
+         
+         // Also remove from server close reasons if exists
+         RemoveServerCloseReason(ticket);
+         return;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Store server-initiated close reason                              |
+//+------------------------------------------------------------------+
+void StoreServerCloseReason(ulong ticket, string reason)
+{
+   // Check if already exists (update)
+   for(int i = 0; i < serverCloseReasonCount; i++)
+   {
+      if(serverCloseReasons[i].ticket == ticket)
+      {
+         serverCloseReasons[i].reason = reason;
+         serverCloseReasons[i].timestamp = TimeCurrent();
+         Print("Updated server close reason for ticket ", ticket, ": ", reason);
+         return;
+      }
+   }
+
+   // Add new entry
+   int newSize = serverCloseReasonCount + 1;
+   ArrayResize(serverCloseReasons, newSize);
+   
+   serverCloseReasons[serverCloseReasonCount].ticket = ticket;
+   serverCloseReasons[serverCloseReasonCount].reason = reason;
+   serverCloseReasons[serverCloseReasonCount].timestamp = TimeCurrent();
+   
+   serverCloseReasonCount++;
+   Print("Stored server close reason for ticket ", ticket, ": ", reason);
+}
+
+//+------------------------------------------------------------------+
+//| Get server-initiated close reason for ticket                     |
+//+------------------------------------------------------------------+
+string GetServerCloseReason(ulong ticket)
+{
+   for(int i = 0; i < serverCloseReasonCount; i++)
+   {
+      if(serverCloseReasons[i].ticket == ticket)
+      {
+         return serverCloseReasons[i].reason;
+      }
+   }
+   return "";
+}
+
+//+------------------------------------------------------------------+
+//| Remove server close reason from tracking                         |
+//+------------------------------------------------------------------+
+void RemoveServerCloseReason(ulong ticket)
+{
+   for(int i = 0; i < serverCloseReasonCount; i++)
+   {
+      if(serverCloseReasons[i].ticket == ticket)
+      {
+         // Shift remaining elements
+         for(int j = i; j < serverCloseReasonCount - 1; j++)
+         {
+            serverCloseReasons[j] = serverCloseReasons[j + 1];
+         }
+
+         serverCloseReasonCount--;
+         ArrayResize(serverCloseReasons, serverCloseReasonCount);
+
+         Print("Removed server close reason for ticket ", ticket);
          return;
       }
    }

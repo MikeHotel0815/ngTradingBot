@@ -257,8 +257,9 @@ def create_close_all_command(db: Session, account_id: int, reason: str) -> int:
 
             payload_data = {
                 'ticket': int(trade.ticket),
-                'reason': f'emergency_{reason}',
-                'worker': 'drawdown_protection_worker'
+                'reason': 'EMERGENCY_CLOSE',  # Normalized close reason
+                'worker': 'drawdown_protection_worker',
+                'details': reason  # Keep original for logging
             }
 
             command = Command(

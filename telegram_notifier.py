@@ -208,7 +208,11 @@ class TelegramNotifier:
             'TP_HIT': '🎯 Take Profit',
             'SL_HIT': '🛑 Stop Loss',
             'MANUAL': '👤 Manual Close',
-            'TRAILING_STOP': '📈 Trailing Stop'
+            'TRAILING_STOP': '📈 Trailing Stop',
+            'TIME_EXIT': '⏰ Time Exit',
+            'STRATEGY_INVALID': '📊 Strategy Invalid',
+            'EMERGENCY_CLOSE': '🚨 Emergency Close',
+            'PARTIAL_CLOSE': '✂️ Partial Close'
         }
         close_reason_formatted = reason_map.get(close_reason, close_reason)
         

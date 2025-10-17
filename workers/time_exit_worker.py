@@ -151,10 +151,23 @@ def create_close_command(db: Session, trade: Trade, reason: str) -> bool:
     try:
         command_id = str(uuid.uuid4())
 
+        # Normalize close reason for consistent display
+        # Map worker reasons to standard close reasons
+        close_reason_map = {
+            'max_duration': 'TIME_EXIT',
+            'force_loss': 'TIME_EXIT',
+            'grace_period': 'TIME_EXIT'
+        }
+        
+        # Extract base reason (remove hours/details)
+        base_reason = reason.split('_')[0] if '_' in reason else reason
+        normalized_reason = close_reason_map.get(base_reason, 'TIME_EXIT')
+
         payload_data = {
             'ticket': int(trade.ticket),
-            'reason': f'time_exit_{reason}',
-            'worker': 'time_exit_worker'
+            'reason': normalized_reason,  # Use normalized reason
+            'worker': 'time_exit_worker',
+            'details': reason  # Keep original for logging
         }
 
         command = Command(
