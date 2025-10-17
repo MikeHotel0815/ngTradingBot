@@ -2167,7 +2167,9 @@ def sync_trades(account, db):
 
             if existing_trade:
                 # Update existing trade
-                existing_trade.status = trade_data.get('status', 'open')
+                old_status = existing_trade.status
+                new_status = trade_data.get('status', 'open')
+                existing_trade.status = new_status
                 existing_trade.close_price = trade_data.get('close_price')
                 existing_trade.close_time = datetime.fromisoformat(trade_data['close_time']) if trade_data.get('close_time') else None
                 existing_trade.profit = trade_data.get('profit')
@@ -2179,6 +2181,59 @@ def sync_trades(account, db):
                 if trade_data.get('tp') is not None:
                     existing_trade.tp = trade_data.get('tp')
                 existing_trade.updated_at = datetime.utcnow()
+                
+                # ✅ PHASE 7: Exit Enhancement - Calculate metrics when trade closes
+                if old_status == 'open' and new_status == 'closed' and existing_trade.close_price:
+                    from models import Tick
+                    from market_context_helper import (
+                        calculate_pips, 
+                        calculate_risk_reward, 
+                        get_current_trading_session
+                    )
+                    
+                    # Calculate pips_captured
+                    existing_trade.pips_captured = calculate_pips(
+                        existing_trade.open_price,
+                        existing_trade.close_price,
+                        existing_trade.direction,
+                        existing_trade.symbol
+                    )
+                    
+                    # Calculate risk_reward_realized (if initial_sl exists)
+                    if existing_trade.initial_sl:
+                        existing_trade.risk_reward_realized = calculate_risk_reward(
+                            existing_trade.open_price,
+                            existing_trade.close_price,
+                            existing_trade.initial_sl,
+                            existing_trade.direction
+                        )
+                    
+                    # Calculate hold_duration_minutes
+                    if existing_trade.open_time and existing_trade.close_time:
+                        duration = (existing_trade.close_time - existing_trade.open_time)
+                        existing_trade.hold_duration_minutes = int(duration.total_seconds() / 60)
+                    
+                    # Capture exit price action snapshot
+                    current_tick = db.query(Tick).filter_by(
+                        symbol=existing_trade.symbol
+                    ).order_by(Tick.timestamp.desc()).first()
+                    
+                    if current_tick:
+                        existing_trade.exit_bid = float(current_tick.bid)
+                        existing_trade.exit_ask = float(current_tick.ask)
+                        existing_trade.exit_spread = float(current_tick.spread) if current_tick.spread else None
+                    
+                    # Get exit session
+                    existing_trade.session = get_current_trading_session()
+                    
+                    logger.info(
+                        f"📊 Exit Metrics for #{ticket}: "
+                        f"Pips={existing_trade.pips_captured:.2f if existing_trade.pips_captured else 0:.2f}, "
+                        f"R:R={existing_trade.risk_reward_realized:.2f if existing_trade.risk_reward_realized else 0:.2f}, "
+                        f"Duration={existing_trade.hold_duration_minutes}min, "
+                        f"Session={existing_trade.session}"
+                    )
+                
                 updated_count += 1
                 logger.info(f"🔄 Trade sync update: {existing_trade.symbol} #{ticket} profit={existing_trade.profit} SL={existing_trade.sl} TP={existing_trade.tp}")
             else:
@@ -2342,6 +2397,32 @@ def sync_trades(account, db):
                     db_trade.close_reason = 'SYNC_RECONCILIATION'
                     # Keep the last known profit/swap/commission
                     db_trade.updated_at = datetime.utcnow()
+                    
+                    # ✅ PHASE 7: Calculate exit metrics for reconciled trades
+                    if db_trade.close_price and db_trade.open_price:
+                        from market_context_helper import calculate_pips, calculate_risk_reward, get_current_trading_session
+                        
+                        db_trade.pips_captured = calculate_pips(
+                            db_trade.open_price,
+                            db_trade.close_price,
+                            db_trade.direction,
+                            db_trade.symbol
+                        )
+                        
+                        if db_trade.initial_sl:
+                            db_trade.risk_reward_realized = calculate_risk_reward(
+                                db_trade.open_price,
+                                db_trade.close_price,
+                                db_trade.initial_sl,
+                                db_trade.direction
+                            )
+                        
+                        if db_trade.open_time:
+                            duration = (db_trade.close_time - db_trade.open_time)
+                            db_trade.hold_duration_minutes = int(duration.total_seconds() / 60)
+                        
+                        db_trade.session = get_current_trading_session()
+                    
                     closed_count += 1
                     logger.warning(f"🔄 Reconciliation: Closed trade #{db_trade.ticket} (not in MT5 position list)")
 

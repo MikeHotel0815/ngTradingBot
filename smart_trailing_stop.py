@@ -310,9 +310,24 @@ class SmartTrailingStop:
             return None
 
     def _send_modify_command(self, db: Session, trade: Trade, new_sl: float, new_tp: Optional[float] = None) -> bool:
-        """Send MODIFY_TRADE command to EA"""
+        """Send MODIFY_TRADE command to EA and log history event"""
         try:
             import uuid
+            from models import TradeHistoryEvent, Tick
+
+            # Get current price for history logging
+            current_tick = db.query(Tick).filter_by(
+                symbol=trade.symbol
+            ).order_by(Tick.timestamp.desc()).first()
+            
+            current_price = None
+            current_spread = None
+            if current_tick:
+                if trade.direction.upper() == 'BUY':
+                    current_price = float(current_tick.bid)
+                else:
+                    current_price = float(current_tick.ask)
+                current_spread = float(current_tick.spread) if current_tick.spread else None
 
             payload = {
                 'ticket': trade.ticket,
@@ -331,6 +346,69 @@ class SmartTrailingStop:
             )
 
             db.add(cmd)
+            
+            # ✅ PHASE 6: Log SL modification in history
+            old_sl = float(trade.sl) if trade.sl else None
+            if old_sl and old_sl != new_sl:
+                # Determine reason based on SL movement
+                if trade.direction.upper() == 'BUY':
+                    if new_sl >= float(trade.open_price):
+                        reason = "Trailing Stop - moved to profit zone"
+                    else:
+                        reason = "Trailing Stop - risk reduction"
+                else:  # SELL
+                    if new_sl <= float(trade.open_price):
+                        reason = "Trailing Stop - moved to profit zone"
+                    else:
+                        reason = "Trailing Stop - risk reduction"
+                
+                sl_event = TradeHistoryEvent(
+                    trade_id=trade.id,
+                    ticket=trade.ticket,
+                    event_type='SL_MODIFIED',
+                    timestamp=datetime.utcnow(),
+                    old_value=old_sl,
+                    new_value=new_sl,
+                    reason=reason,
+                    source='smart_trailing_stop',
+                    price_at_change=current_price,
+                    spread_at_change=current_spread
+                )
+                db.add(sl_event)
+                
+                # Update trailing stop tracking
+                trade.trailing_stop_active = True
+                if trade.trailing_stop_moves is None:
+                    trade.trailing_stop_moves = 0
+                trade.trailing_stop_moves += 1
+                
+                logger.info(f"📝 History: SL change logged for #{trade.ticket}: {old_sl:.5f} → {new_sl:.5f}")
+            
+            # ✅ PHASE 6: Log TP modification in history (if TP extension)
+            if new_tp:
+                old_tp = float(trade.tp) if trade.tp else None
+                if old_tp and old_tp != new_tp:
+                    tp_event = TradeHistoryEvent(
+                        trade_id=trade.id,
+                        ticket=trade.ticket,
+                        event_type='TP_MODIFIED',
+                        timestamp=datetime.utcnow(),
+                        old_value=old_tp,
+                        new_value=new_tp,
+                        reason="TP extension - trailing stop with TP extension enabled",
+                        source='smart_trailing_stop',
+                        price_at_change=current_price,
+                        spread_at_change=current_spread
+                    )
+                    db.add(tp_event)
+                    
+                    # Update TP extension tracking
+                    if trade.tp_extended_count is None:
+                        trade.tp_extended_count = 0
+                    trade.tp_extended_count += 1
+                    
+                    logger.info(f"📝 History: TP extension logged for #{trade.ticket}: {old_tp:.5f} → {new_tp:.5f}")
+            
             db.commit()
             
             logger.info(f"✅ Modify command sent for trade {trade.ticket}")
@@ -338,6 +416,7 @@ class SmartTrailingStop:
 
         except Exception as e:
             logger.error(f"Error sending modify command: {e}")
+            db.rollback()
             db.rollback()
             return False
 
