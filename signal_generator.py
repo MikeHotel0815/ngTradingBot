@@ -43,6 +43,13 @@ class SignalGenerator:
             Signal dictionary or None if no strong signal
         """
         try:
+            # ✅ Check if market is open for this symbol
+            from market_hours import is_market_open
+            if not is_market_open(self.symbol):
+                logger.debug(f"Market closed for {self.symbol}, skipping signal generation")
+                self._expire_active_signals("market closed")
+                return None
+
             # Get pattern signals
             pattern_signals = self.patterns.get_pattern_signals()
 

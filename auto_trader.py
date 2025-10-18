@@ -166,10 +166,21 @@ class AutoTrader:
         if risk_profile not in ['moderate', 'normal', 'aggressive']:
             logger.error(f"Invalid risk profile: {risk_profile}")
             return
-        
+
         self.risk_profile = risk_profile
+
+        # ✅ FIX: Update min_autotrade_confidence based on risk profile
+        # These values match DynamicConfidenceCalculator.base_confidence
+        risk_profile_confidence = {
+            'moderate': 65.0,    # Conservative: Only high-quality signals
+            'normal': 55.0,      # Balanced: Standard risk
+            'aggressive': 50.0   # Risk-seeking: More trades
+        }
+
+        self.min_autotrade_confidence = risk_profile_confidence.get(risk_profile, 55.0)
+
         self._save_autotrade_status_to_db()  # ✅ Persist to DB
-        logger.info(f"🎯 Risk Profile set to: {risk_profile.upper()}")
+        logger.info(f"🎯 Risk Profile set to: {risk_profile.upper()} (min_confidence: {self.min_autotrade_confidence}%)")
 
     def enable(self):
         """Enable auto-trading"""
@@ -465,7 +476,16 @@ class AutoTrader:
 
             settings = self._load_settings(db)
 
-            # Check DAILY DRAWDOWN PROTECTION FIRST (most critical check)
+            # ✅ Check MARKET HOURS FIRST (prevent trading on closed markets)
+            from market_hours import MarketHours
+            if not MarketHours.is_market_open(signal.symbol):
+                session = MarketHours.get_trading_session(signal.symbol)
+                return {
+                    'execute': False,
+                    'reason': f'Market closed for {signal.symbol} (session: {session})'
+                }
+
+            # Check DAILY DRAWDOWN PROTECTION SECOND (most critical check)
             from daily_drawdown_protection import get_drawdown_protection
             dd_protection = get_drawdown_protection(signal.account_id)
             dd_check = dd_protection.check_and_update(auto_trading_enabled=self.enabled)

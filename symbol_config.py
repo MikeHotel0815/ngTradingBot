@@ -99,6 +99,33 @@ class SymbolConfig:
             'min_confidence': 45.0,  # ✅ LOWERED from 55% (perfect performer, allow more trades)
             'risk_per_trade_percent': 0.02,
         },
+        'US500.c': {
+            # S&P 500 Index (Cash) - Similar to DE40, trend-following optimized
+            'sl_multiplier': 1.0,  # Full SL for trend trades
+            'breakeven_trigger_percent': 30.0,  # Similar to DE40
+            'partial_trailing_trigger_percent': 50.0,
+            'aggressive_trailing_trigger_percent': 75.0,
+            'min_confidence': 48.0,  # Slightly higher than DE40 (US market more volatile)
+            'risk_per_trade_percent': 0.02,  # 2% risk (equity index)
+        },
+        'XAGUSD': {
+            # Silver - Higher volatility than Gold, needs tighter management
+            'sl_multiplier': 0.7,  # Tighter than Gold (more volatile)
+            'breakeven_trigger_percent': 20.0,  # Earlier break-even (volatile)
+            'partial_trailing_trigger_percent': 40.0,
+            'aggressive_trailing_trigger_percent': 65.0,
+            'min_confidence': 55.0,  # Higher than Gold (more unpredictable)
+            'risk_per_trade_percent': 0.018,  # 1.8% risk (higher volatility)
+        },
+        'AUDUSD': {
+            # Aussie Dollar - Commodity-linked, good trends, Asian session
+            'sl_multiplier': 0.55,  # Moderate SL (between major and minor pairs)
+            'breakeven_trigger_percent': 18.0,  # Early break-even
+            'partial_trailing_trigger_percent': 35.0,
+            'aggressive_trailing_trigger_percent': 60.0,
+            'min_confidence': 50.0,  # Standard forex confidence
+            'risk_per_trade_percent': 0.016,  # 1.6% risk (commodity exposure)
+        },
     }
 
     @classmethod
@@ -107,15 +134,15 @@ class SymbolConfig:
         symbol_upper = symbol.upper()
 
         # Indices
-        if any(idx in symbol_upper for idx in ['DE40', 'US30', 'US500', 'NAS100', 'FTSE', 'DAX', 'SPX', 'NDX']):
+        if any(idx in symbol_upper for idx in ['DE40', 'US30', 'US500', 'NAS100', 'FTSE', 'DAX', 'SPX', 'NDX', 'UK100', 'JP225']):
             return 'index'
 
         # Cryptocurrencies
-        if any(crypto in symbol_upper for crypto in ['BTC', 'ETH', 'CRYPTO']):
+        if any(crypto in symbol_upper for crypto in ['BTC', 'ETH', 'CRYPTO', 'XRP', 'LTC']):
             return 'crypto'
 
-        # Commodities
-        if any(comm in symbol_upper for comm in ['XAUUSD', 'XAGUSD', 'OIL', 'GOLD', 'SILVER']):
+        # Commodities (precious metals, oil, etc.)
+        if any(comm in symbol_upper for comm in ['XAUUSD', 'XAGUSD', 'XAU', 'XAG', 'OIL', 'GOLD', 'SILVER', 'BRENT', 'WTI']):
             return 'commodity'
 
         # Default to forex

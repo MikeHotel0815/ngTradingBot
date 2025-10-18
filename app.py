@@ -3105,6 +3105,12 @@ def dashboard_symbols():
                     else:
                         trends[tf] = 'neutral'
 
+                # ✅ Add market hours status using new MarketHours module
+                from market_hours import MarketHours
+                market_open = MarketHours.is_market_open(sub.symbol)
+                trading_session = MarketHours.get_trading_session(sub.symbol)
+                market_hours_str = MarketHours.get_market_hours_string(sub.symbol)
+
                 symbols_data.append({
                     'symbol': sub.symbol,
                     'bid': f"{latest_tick.bid:.5f}" if latest_tick else None,
@@ -3112,7 +3118,10 @@ def dashboard_symbols():
                     'tick_count': tick_count,
                     'last_tick': latest_tick.timestamp.strftime('%H:%M:%S') if latest_tick else None,
                     'trends': trends,
-                    'tradeable': latest_tick.tradeable if latest_tick else True
+                    'tradeable': latest_tick.tradeable if latest_tick else True,
+                    'market_open': market_open,
+                    'trading_session': trading_session,
+                    'market_hours': market_hours_str
                 })
 
             # Add account data with profit values

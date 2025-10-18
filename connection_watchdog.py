@@ -13,7 +13,7 @@ import pytz
 from database import ScopedSession
 from models import Account, Tick
 from telegram_notifier import get_telegram_notifier
-from trading_hours_config import is_market_open, get_next_open_time
+from market_hours import MarketHours
 
 logging.basicConfig(
     level=logging.INFO,
@@ -205,8 +205,10 @@ class ConnectionWatchdog:
 
                     age = (now - tick_time).total_seconds()
 
-                    # Check if market should be open right now (now is already timezone-aware)
-                    market_open, close_reason = is_market_open(symbol, now)
+                    # ✅ Check if market should be open right now using new MarketHours module
+                    market_open = MarketHours.is_market_open(symbol, tick_time)
+                    session = MarketHours.get_trading_session(symbol, tick_time)
+                    close_reason = f"session: {session}" if not market_open else "market open"
 
                     # Tick flow is healthy
                     if age < self.tick_timeout:
@@ -233,8 +235,6 @@ class ConnectionWatchdog:
                         # Send alert only if market should be open
                         if not state['alerted'] and age > 600 and market_open:  # 10 minutes + market open
                             logger.error(f"🚨 {symbol} tick data STALE for {age:.0f}s (MARKET SHOULD BE OPEN)")
-
-                            next_open = get_next_open_time(symbol, now)
 
                             self.telegram.send_alert(
                                 title=f"{symbol} Data Flow Problem",
