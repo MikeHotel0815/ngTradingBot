@@ -1123,8 +1123,8 @@ def create_backtest():
 
         # Validate inputs
         account_id = InputValidator.validate_integer(data['account_id'], min_value=1)
-        name = InputValidator.check_sql_injection(data['name'])  # Name can be free text but no SQL
-        description = InputValidator.check_sql_injection(data.get('description', '')) if data.get('description') else None
+        name = InputValidator.sanitize_string(data['name'], max_length=255, allow_special_chars=False)  # Name can be free text but no SQL
+        description = InputValidator.sanitize_string(data.get('description', ''), max_length=1000, allow_special_chars=False) if data.get('description') else None
         
         # Validate symbols (comma-separated list)
         symbols_raw = data.get('symbols', 'BTCUSD')
