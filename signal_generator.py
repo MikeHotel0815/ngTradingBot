@@ -196,22 +196,37 @@ class SignalGenerator:
             elif sig['type'] == 'SELL':
                 sell_signals.append(sig)
 
-        # ✅ ENHANCED: Require stronger consensus for BUY signals
-        # BUY needs 2+ more signals than SELL to account for downward bias
+        # ✅ CONFIGURABLE: BUY signal consensus requirement
+        # NOTE: Adjust BUY_SIGNAL_ADVANTAGE based on backtesting results
+        # - 0 = No bias (simple majority for both)
+        # - 1 = BUY needs 1 more confirming signal than SELL
+        # - 2 = BUY needs 2 more confirming signals than SELL (current)
+        # TODO: Monitor performance and adjust if BUY signals are being over-filtered
+        BUY_SIGNAL_ADVANTAGE = 2  # Default: 2 extra signals required for BUY
+
         buy_count = len(buy_signals)
         sell_count = len(sell_signals)
 
         signal_type = None
-        if buy_count >= sell_count + 2:
-            # BUY: Need at least 2 more BUY signals than SELL
+        if buy_count >= sell_count + BUY_SIGNAL_ADVANTAGE:
+            # BUY: Need advantage over SELL signals
             signal_type = 'BUY'
             signals = buy_signals
+            logger.debug(
+                f"BUY signal consensus: {buy_count} BUY vs {sell_count} SELL "
+                f"(advantage: {BUY_SIGNAL_ADVANTAGE})"
+            )
         elif sell_count > buy_count:
             # SELL: Just need majority
             signal_type = 'SELL'
             signals = sell_signals
+            logger.debug(f"SELL signal consensus: {sell_count} SELL vs {buy_count} BUY")
         else:
             # Not enough consensus or conflicting signals
+            logger.debug(
+                f"No consensus: {buy_count} BUY vs {sell_count} SELL "
+                f"(BUY needs {sell_count + BUY_SIGNAL_ADVANTAGE})"
+            )
             return None
 
         # Calculate confidence score
@@ -336,13 +351,23 @@ class SignalGenerator:
         # Total confidence (before direction adjustment)
         confidence = pattern_score + indicator_score + strength_score
 
-        # ✅ ASYMMETRIC ADJUSTMENT: Penalize BUY signals slightly to account for market bias
-        # BUY signals are historically less profitable, so we require higher confidence
+        # ✅ CONFIGURABLE: BUY signal confidence penalty
+        # NOTE: Adjust BUY_CONFIDENCE_PENALTY based on backtesting results
+        # - 0.0 = No penalty (treat BUY and SELL equally)
+        # - 3.0 = Reduce BUY confidence by 3% (current)
+        # - 5.0 = Reduce BUY confidence by 5% (more conservative)
+        # TODO: Monitor BUY vs SELL performance and adjust if needed
+        BUY_CONFIDENCE_PENALTY = 3.0  # Default: -3% for BUY signals
+
         signal_type = signals[0]['type'] if signals else 'UNKNOWN'
-        if signal_type == 'BUY':
-            # Reduce BUY confidence by 3% to make them harder to trigger (reduced from 5%)
-            confidence = max(0, confidence - 3.0)
-            logger.debug(f"Applied BUY penalty: confidence reduced by 3%")
+        if signal_type == 'BUY' and BUY_CONFIDENCE_PENALTY > 0:
+            # Reduce BUY confidence to make them harder to trigger
+            original_confidence = confidence
+            confidence = max(0, confidence - BUY_CONFIDENCE_PENALTY)
+            logger.debug(
+                f"Applied BUY penalty: {original_confidence:.1f}% → {confidence:.1f}% "
+                f"(-{BUY_CONFIDENCE_PENALTY}%)"
+            )
 
         return round(min(100, confidence), 2)
 

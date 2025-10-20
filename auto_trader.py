@@ -408,27 +408,57 @@ class AutoTrader:
             settings = self._load_settings(db)
             balance = self.get_account_balance(db, account_id)
 
-            # Calculate risk amount - convert to float to avoid Decimal/float type errors
-            risk_amount = float(balance) * float(settings.risk_per_trade_percent)
+            # ✅ FIX: Use proper position sizing instead of hard-coded 0.01
+            # Delegate to PositionSizer for sophisticated volume calculation
+            from position_sizer import get_position_sizer
 
-            # Calculate position size based on SL distance
-            # Use sl_price directly (DB column name) instead of property
+            position_sizer = get_position_sizer()
+
+            # Calculate SL distance in pips
             sl_price = getattr(signal, 'sl_price', None) or getattr(signal, 'sl', None)
-            
-            if sl_price and signal.entry_price:
-                # Convert to float to avoid Decimal/float type errors
-                sl_distance = abs(float(signal.entry_price) - float(sl_price))
-                if sl_distance > 0:
-                    # Position size = Risk Amount / SL Distance
-                    volume = risk_amount / sl_distance
-                    volume = round(volume, 2)  # Round to 2 decimals
-                    return max(0.01, min(volume, 0.01))  # Min 0.01, Max 0.01 (TEST MODE)
 
-            # Fallback: use percentage of balance
-            return 0.01  # FIXED: Always use 0.01 for testing
+            if sl_price and signal.entry_price:
+                # Get broker symbol info for pip calculation
+                from models import BrokerSymbol
+                broker_symbol = db.query(BrokerSymbol).filter_by(
+                    account_id=account_id,
+                    symbol=signal.symbol
+                ).first()
+
+                if broker_symbol:
+                    # Calculate SL distance in pips
+                    sl_distance = abs(float(signal.entry_price) - float(sl_price))
+                    point = float(broker_symbol.point_value or 0.00001)
+                    sl_distance_pips = sl_distance / (point * 10)  # Convert to pips
+
+                    # Use position sizer
+                    volume = position_sizer.calculate_lot_size(
+                        db=db,
+                        account_id=account_id,
+                        symbol=signal.symbol,
+                        confidence=float(signal.confidence) if signal.confidence else 50.0,
+                        sl_distance_pips=sl_distance_pips,
+                        entry_price=float(signal.entry_price)
+                    )
+
+                    # Apply safety limits (0.01 min, 1.0 max for safety)
+                    volume = max(0.01, min(volume, 1.0))
+
+                    logger.info(
+                        f"📊 Position Size: {signal.symbol} | "
+                        f"Confidence: {signal.confidence:.1f}% | "
+                        f"SL Distance: {sl_distance_pips:.1f} pips | "
+                        f"Volume: {volume:.2f} lot"
+                    )
+
+                    return volume
+
+            # Fallback: minimum volume
+            logger.warning(f"Position sizing fallback for {signal.symbol}: using 0.01 lot")
+            return 0.01
 
         except Exception as e:
-            logger.error(f"Error calculating position size: {e}")
+            logger.error(f"Error calculating position size: {e}", exc_info=True)
             return 0.01  # Fallback to minimum
 
     def check_risk_limits(self, db: Session, account_id: int) -> Dict:
@@ -476,7 +506,28 @@ class AutoTrader:
 
             settings = self._load_settings(db)
 
-            # ✅ Check MARKET HOURS FIRST (prevent trading on closed markets)
+            # ✅ NEW: Check signal staleness FIRST (prevent trading on outdated signals)
+            signal_age_seconds = (datetime.utcnow() - signal.created_at).total_seconds()
+            MAX_SIGNAL_AGE_SECONDS = 300  # 5 minutes
+
+            if signal_age_seconds > MAX_SIGNAL_AGE_SECONDS:
+                logger.warning(
+                    f"⚠️ Signal #{signal.id} is STALE: {signal_age_seconds:.0f}s old "
+                    f"(max: {MAX_SIGNAL_AGE_SECONDS}s). Market conditions may have changed."
+                )
+                return {
+                    'execute': False,
+                    'reason': f'Signal too old ({signal_age_seconds:.0f}s > {MAX_SIGNAL_AGE_SECONDS}s)'
+                }
+
+            # Log warning if signal is getting old (>2 minutes)
+            if signal_age_seconds > 120:
+                logger.warning(
+                    f"⏰ Signal #{signal.id} aging: {signal_age_seconds:.0f}s old "
+                    f"({signal.symbol} {signal.timeframe} {signal.signal_type})"
+                )
+
+            # ✅ Check MARKET HOURS SECOND (prevent trading on closed markets)
             from market_hours import MarketHours
             if not MarketHours.is_market_open(signal.symbol):
                 session = MarketHours.get_trading_session(signal.symbol)
@@ -753,12 +804,37 @@ class AutoTrader:
                 logger.warning(f"SL too tight: {sl_distance_pct:.2f}% (min: {min_sl_distance_pct}%)")
                 return False
 
-            # Check 4: Maximum TP distance (5% for most, 3% for volatile)
-            max_tp_distance_pct = 3.0 if signal.symbol in ['BTCUSD', 'ETHUSD', 'XAUUSD'] else 5.0
+            # Check 4: Maximum TP distance - adjusted based on risk profile
+            # Load risk profile from global settings
+            risk_profile = 'normal'  # default
+            try:
+                from models import GlobalSettings
+                from database import ScopedSession
+                temp_db = ScopedSession()
+                try:
+                    settings = temp_db.query(GlobalSettings).first()
+                    if settings:
+                        risk_profile = settings.autotrade_risk_profile or 'normal'
+                finally:
+                    temp_db.close()
+            except Exception as e:
+                logger.debug(f"Could not load risk profile: {e}")
+
+            # Base limits
+            base_limit = 3.0 if signal.symbol in ['BTCUSD', 'ETHUSD', 'XAUUSD'] else 5.0
+
+            # Adjust limits based on risk profile
+            if risk_profile == 'moderate':
+                max_tp_distance_pct = base_limit * 0.8  # 80% of base (conservative)
+            elif risk_profile == 'aggressive':
+                max_tp_distance_pct = base_limit * 4.0  # 400% of base (very aggressive)
+            else:  # normal
+                max_tp_distance_pct = base_limit * 1.5  # 150% of base
+
             tp_distance_pct = abs(tp - entry) / entry * 100
 
             if tp_distance_pct > max_tp_distance_pct:
-                logger.warning(f"TP too far: {tp_distance_pct:.2f}% (max: {max_tp_distance_pct}%)")
+                logger.warning(f"TP too far: {tp_distance_pct:.2f}% (max: {max_tp_distance_pct:.1f}% for {risk_profile} profile)")
                 return False
 
             # Check 5: Risk/Reward ratio (minimum 1:1.2)
@@ -972,11 +1048,19 @@ class AutoTrader:
         """
         Generate a hash for a signal based on its key properties.
         This allows detecting when a signal is updated with new values.
+
+        ✅ FIX: Added signal ID and timestamp to prevent hash collisions
         """
         import hashlib
-        
+
         # Create hash from key signal properties
-        hash_string = f"{signal.account_id}_{signal.symbol}_{signal.timeframe}_{signal.signal_type}_{signal.confidence}_{signal.entry_price}"
+        # Include signal ID and timestamp to ensure uniqueness
+        timestamp_str = signal.created_at.isoformat() if signal.created_at else 'no_time'
+        hash_string = (
+            f"{signal.id}_{signal.account_id}_{signal.symbol}_{signal.timeframe}_"
+            f"{signal.signal_type}_{signal.confidence:.2f}_{signal.entry_price:.5f}_"
+            f"{timestamp_str}"
+        )
         return hashlib.md5(hash_string.encode()).hexdigest()
 
     def process_new_signals(self, db: Session):
@@ -1364,16 +1448,29 @@ class AutoTrader:
                     # ⚠️ Command not found in database (shouldn't happen)
                     logger.error(f"❌ Command {command_id} not found in database!")
 
-                # Critical alert if many commands are failing
-                if self.failed_command_count >= 3:
+                # ✅ ENHANCED: Circuit breaker with configurable threshold and cooldown
+                # NOTE: Adjust thresholds based on connection reliability
+                # - Lower threshold (3) = More sensitive, faster shutdown on issues
+                # - Higher threshold (5-7) = More tolerant, allows temporary glitches
+                CIRCUIT_BREAKER_THRESHOLD = 5  # Default: 5 consecutive failures
+                CIRCUIT_BREAKER_COOLDOWN_MINUTES = 5  # Wait 5 min before auto-resume
+
+                if self.failed_command_count >= CIRCUIT_BREAKER_THRESHOLD:
                     logger.critical(
-                        f"🚨 CRITICAL: {self.failed_command_count} consecutive command failures! "
-                        f"MT5 connection may be down. Disabling auto-trading."
+                        f"🚨 CIRCUIT BREAKER TRIGGERED: {self.failed_command_count} consecutive command failures! "
+                        f"(threshold: {CIRCUIT_BREAKER_THRESHOLD}) MT5 connection may be down. "
+                        f"Disabling auto-trading for {CIRCUIT_BREAKER_COOLDOWN_MINUTES}min."
                     )
                     self.disable()
                     self.circuit_breaker_tripped = True
-                    self.circuit_breaker_reason = f"{self.failed_command_count} consecutive command failures"
-                    
+                    self.circuit_breaker_reason = (
+                        f"{self.failed_command_count} consecutive command failures "
+                        f"(threshold: {CIRCUIT_BREAKER_THRESHOLD})"
+                    )
+                    self.circuit_breaker_cooldown_until = (
+                        datetime.utcnow() + timedelta(minutes=CIRCUIT_BREAKER_COOLDOWN_MINUTES)
+                    )
+
                     # ✅ NEW: Log circuit breaker activation to AI Decision Log
                     try:
                         from ai_decision_log import log_circuit_breaker
@@ -1384,7 +1481,10 @@ class AutoTrader:
                             details={
                                 'failed_commands': [cmd_id for cmd_id in commands_to_remove],
                                 'last_error': error_msg if command and command.status == 'failed' else 'Timeout',
-                                'timestamp': now.isoformat()
+                                'timestamp': now.isoformat(),
+                                'threshold': CIRCUIT_BREAKER_THRESHOLD,
+                                'cooldown_minutes': CIRCUIT_BREAKER_COOLDOWN_MINUTES,
+                                'cooldown_until': self.circuit_breaker_cooldown_until.isoformat()
                             }
                         )
                     except Exception as log_error:
@@ -1544,39 +1644,104 @@ class AutoTrader:
             return {'allowed': True, 'error': str(e)}
 
     def _get_max_allowed_spread(self, symbol: str) -> float:
-        """Get maximum allowed spread per symbol type"""
+        """Get maximum allowed spread per symbol (from database configuration)"""
+        from datetime import datetime
+        from database import ScopedSession
+
         symbol_upper = symbol.upper()
+
+        # Load risk profile for spread adjustment
+        risk_profile = 'normal'
+        db = None
+        try:
+            from models import GlobalSettings, SymbolSpreadConfig
+
+            db = ScopedSession()
+
+            settings = GlobalSettings.query.get(1)
+            if settings:
+                risk_profile = settings.autotrade_risk_profile or 'normal'
+
+            # Check if symbol has database configuration
+            spread_config = db.query(SymbolSpreadConfig).filter_by(
+                symbol=symbol_upper,
+                enabled=True
+            ).first()
+
+            if spread_config:
+                # Determine if it's Asian session (roughly 00:00-09:00 UTC)
+                current_hour_utc = datetime.utcnow().hour
+                is_asian_session = 0 <= current_hour_utc < 9
+
+                # Determine if it's weekend (Saturday/Sunday)
+                is_weekend = datetime.utcnow().weekday() >= 5
+
+                # Use database configuration with session awareness
+                max_spread = spread_config.get_max_spread(
+                    risk_profile=risk_profile,
+                    is_asian_session=is_asian_session,
+                    is_weekend=is_weekend
+                )
+
+                logger.debug(
+                    f"Spread limit for {symbol_upper}: {max_spread:.5f} "
+                    f"(profile={risk_profile}, asian={is_asian_session}, weekend={is_weekend})"
+                )
+                return max_spread
+
+        except Exception as e:
+            logger.warning(f"Could not load spread config from database: {e}")
+            # Fall through to hardcoded defaults
+        finally:
+            if db:
+                db.close()
+
+        # Fallback: Hardcoded spread limits (if no database config found)
+        # Spread multiplier based on risk profile
+        if risk_profile == 'moderate':
+            multiplier = 0.8  # More conservative
+        elif risk_profile == 'aggressive':
+            multiplier = 2.0  # More tolerant of wide spreads
+        else:  # normal
+            multiplier = 1.2  # Slightly more tolerant than base
+
+        # Base spread limits (fallback only)
+        base_spread = 0.0
 
         # Forex major pairs: tight spreads expected
         if any(pair in symbol_upper for pair in ['EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF']):
-            return 0.0003  # 3 pips
+            base_spread = 0.0003  # 3 pips
 
         # Forex minor pairs: wider spreads acceptable
         elif any(pair in symbol_upper for pair in ['EURGBP', 'EURJPY', 'GBPJPY']):
-            return 0.0005  # 5 pips
+            base_spread = 0.0005  # 5 pips
 
         # Exotic pairs: even wider spreads
         elif any(curr in symbol_upper for curr in ['ZAR', 'TRY', 'MXN']):
-            return 0.001  # 10 pips
+            base_spread = 0.001  # 10 pips
 
         # Crypto: variable spreads (use percentage of price)
         elif any(crypto in symbol_upper for crypto in ['BTC', 'ETH', 'XRP']):
-            # Return 0.5% of current price as max spread
-            # This will be calculated dynamically based on the signal's entry price
-            return 100.0  # For crypto, allow larger absolute spreads (will be validated by % check above)
+            base_spread = 100.0  # For crypto, allow larger absolute spreads
 
-        # Gold/Silver
+        # Gold/Silver (commodities have wider spreads)
         elif 'XAU' in symbol_upper:
-            return 0.50  # $0.50
+            base_spread = 0.50  # $0.50
         elif 'XAG' in symbol_upper:
-            return 0.05  # $0.05
+            base_spread = 0.10  # $0.10 (increased from 0.05 - silver has naturally wider spreads)
 
         # Indices
         elif any(idx in symbol_upper for idx in ['US30', 'US500', 'NAS100', 'DE40']):
-            return 5.0  # 5 points
+            base_spread = 5.0  # 5 points
 
         # Default: conservative limit
-        return 0.001  # 10 pips
+        else:
+            base_spread = 0.001  # 10 pips
+
+        logger.debug(f"Spread limit for {symbol_upper}: {base_spread * multiplier:.5f} (fallback, profile={risk_profile})")
+
+        # Apply risk profile multiplier
+        return base_spread * multiplier
 
     def auto_trade_loop(self):
         """Main auto-trading loop"""
@@ -1584,6 +1749,20 @@ class AutoTrader:
 
         while True:
             try:
+                # ✅ NEW: Check circuit breaker cooldown for auto-resume
+                if (self.circuit_breaker_tripped and
+                    hasattr(self, 'circuit_breaker_cooldown_until') and
+                    datetime.utcnow() >= self.circuit_breaker_cooldown_until):
+
+                    logger.info(
+                        f"⏰ Circuit breaker cooldown expired. Auto-resuming trading. "
+                        f"Resetting failed command count from {self.failed_command_count} to 0."
+                    )
+                    self.circuit_breaker_tripped = False
+                    self.circuit_breaker_reason = None
+                    self.failed_command_count = 0
+                    self.enable()  # Re-enable auto-trading
+
                 if not self.enabled:
                     logger.debug("Auto-Trading disabled, waiting...")
                     time.sleep(self.check_interval)
