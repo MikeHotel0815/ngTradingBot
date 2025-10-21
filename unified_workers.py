@@ -421,14 +421,61 @@ def import_worker_functions():
         logger.error(f"Failed to import tpsl_monitor_worker: {e}")
     
     try:
-        # ✅ NEW: Signal Validation Worker
-        logger.info("📦 Importing signal_validation_worker...")
-        import workers.signal_validation_worker as svw
-        
-        workers['signal_validation'] = svw.run_signal_validation_worker
-        
+        # ✅ Signal Generator Worker - Generates trading signals
+        logger.info("📦 Importing signal_worker...")
+        from database import ScopedSession
+        from models import Account, SubscribedSymbol
+        from signal_generator import SignalGenerator
+
+        def run_signal_generation():
+            """Generate signals for all subscribed symbols"""
+            db = ScopedSession()
+            try:
+                signals_generated = 0
+                accounts = db.query(Account).all()
+
+                for account in accounts:
+                    subscribed = db.query(SubscribedSymbol).filter(
+                        SubscribedSymbol.account_id == account.id,
+                        SubscribedSymbol.active == True
+                    ).all()
+
+                    for sub in subscribed:
+                        for timeframe in ['H1', 'H4']:
+                            try:
+                                generator = SignalGenerator(account.id, sub.symbol, timeframe)
+                                signal = generator.generate_signal()
+                                if signal:
+                                    signals_generated += 1
+                                    logger.info(f"📊 Generated {signal['signal_type']} signal for {sub.symbol} {timeframe} (confidence: {signal['confidence']:.1f}%)")
+                            except Exception as e:
+                                logger.debug(f"Signal generation failed for {sub.symbol} {timeframe}: {e}")
+
+                if signals_generated > 0:
+                    logger.info(f"✅ Signal generation: {signals_generated} new signals created")
+            finally:
+                db.close()
+
+        workers['signal_generator'] = run_signal_generation
+
     except Exception as e:
-        logger.error(f"Failed to import signal_validation_worker: {e}")
+        logger.error(f"Failed to import signal_generator: {e}")
+
+    try:
+        # ✅ Signal Validation Worker - Continuous indicator-based validation
+        logger.info("📦 Importing signal_validator...")
+        from signal_validator import SignalValidator
+
+        _signal_validator = SignalValidator()
+
+        def run_signal_validation():
+            """Validate all active signals against indicator conditions"""
+            _signal_validator.validate_all_signals()
+
+        workers['signal_validation'] = run_signal_validation
+
+    except Exception as e:
+        logger.error(f"Failed to import signal_validator: {e}")
     
     try:
         # ✅ NEW: Trade Monitor with Smart Trailing Stop
@@ -544,6 +591,10 @@ def main():
             'function': worker_functions.get('mfe_mae_tracker'),
             'interval': int(os.getenv('MFE_MAE_UPDATE_INTERVAL', 10)),  # 10 seconds
         },
+        'signal_generator': {
+            'function': worker_functions.get('signal_generator'),
+            'interval': int(os.getenv('SIGNAL_GENERATOR_INTERVAL', 60)),  # 1 minute
+        },
         'auto_trader': {
             'function': worker_functions.get('auto_trader'),
             'interval': int(os.getenv('AUTO_TRADER_CHECK_INTERVAL', 60)),  # 1 minute
@@ -562,7 +613,7 @@ def main():
         },
         'signal_validation': {
             'function': worker_functions.get('signal_validation'),
-            'interval': int(os.getenv('SIGNAL_VALIDATION_CHECK_INTERVAL', 30)),  # 30 seconds
+            'interval': int(os.getenv('SIGNAL_VALIDATION_CHECK_INTERVAL', 10)),  # 10 seconds - continuous validation
         },
         'trade_monitor': {
             'function': worker_functions.get('trade_monitor'),

@@ -12,7 +12,7 @@
 #property description "2s Heartbeat | 250ms Command Polling"
 
 // MANUAL: Update this date when code is modified!
-#define CODE_LAST_MODIFIED "2025-10-17 15:30:00 - EXIT_REASON_FIX"  // ✅ Fixed: Server-initiated closes now show correct reason (TP/SL/TS/TIME_EXIT/etc) instead of MANUAL
+#define CODE_LAST_MODIFIED "2025-10-21 08:33:00 - TRAILING_STOP_DETECTION"  // ✅ Added: trailing_stop flag detection in MODIFY_TRADE for correct close_reason
 
 // ⚡⚡⚡ MAXIMUM PERFORMANCE INPUT PARAMETERS ⚡⚡⚡
 input string ServerURL = "http://100.97.100.50:9900";  // Python server URL (Tailscale)
@@ -639,7 +639,7 @@ void SendSymbolSpecifications()
          specsJSON += ",";
 
       specsJSON += StringFormat(
-         "{\"symbol\":\"%s\",\"volume_min\":%.2f,\"volume_max\":%.2f,\"volume_step\":%.2f,\"stops_level\":%d,\"freeze_level\":%d,\"trade_mode\":%d,\"digits\":%d,\"point_value\":%.10f}",
+         "{\"symbol\":\"%s\",\"volume_min\":%.2f,\"volume_max\":%.2f,\"volume_step\":%.2f,\"stops_level\":%d,\"freeze_level\":%d,\"trade_mode\":%d,\"digits\":%d,\"point_value\":%.10f,\"contract_size\":%.2f}",
          symbol,
          SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN),
          SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX),
@@ -648,7 +648,8 @@ void SendSymbolSpecifications()
          SymbolInfoInteger(symbol, SYMBOL_TRADE_FREEZE_LEVEL),
          SymbolInfoInteger(symbol, SYMBOL_TRADE_MODE),
          SymbolInfoInteger(symbol, SYMBOL_DIGITS),
-         SymbolInfoDouble(symbol, SYMBOL_POINT)
+         SymbolInfoDouble(symbol, SYMBOL_POINT),
+         SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE)
       );
    }
 
@@ -1638,6 +1639,14 @@ void ExecuteModifyTrade(string commandId, string cmdObj)
       tp = StringToDouble(tpStr);
    }
 
+   // ✅ Parse trailing_stop flag (boolean)
+   bool isTrailingStop = false;
+   if(StringFind(cmdObj, "\"trailing_stop\":true") >= 0 || StringFind(cmdObj, "\"trailing_stop\": true") >= 0)
+   {
+      isTrailingStop = true;
+      Print("DEBUG MODIFY: This is a TRAILING STOP modification for ticket ", ticket);
+   }
+
    // Validate that SL and TP are set
    if(sl == 0 || tp == 0)
    {
@@ -1697,6 +1706,13 @@ void ExecuteModifyTrade(string commandId, string cmdObj)
          );
          SendCommandResponse(commandId, "completed", responseData);
          Print("Position modified successfully! Ticket: ", ticket, " SL: ", sl, " TP: ", tp);
+
+         // ✅ If this is a trailing stop, mark it for close reason detection
+         if(isTrailingStop)
+         {
+            StoreServerCloseReason(ticket, "TRAILING_STOP");
+            Print("✅ Marked position ", ticket, " as TRAILING_STOP");
+         }
       }
       else
       {

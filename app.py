@@ -682,6 +682,11 @@ def update_symbol_specs(account, db):
         if not symbol_specs:
             return jsonify({'status': 'error', 'message': 'No symbol specs provided'}), 400
 
+        # ✅ DEBUG: Log incoming data to verify contract_size is being sent
+        if symbol_specs:
+            first_spec = symbol_specs[0]
+            logger.info(f"📥 Receiving symbol_specs: {len(symbol_specs)} symbols, first={first_spec.get('symbol')}, has contract_size: {'contract_size' in first_spec}")
+
         updated_count = 0
 
         for spec in symbol_specs:
@@ -704,7 +709,14 @@ def update_symbol_specs(account, db):
                 broker_symbol.trade_mode = spec.get('trade_mode')
                 broker_symbol.digits = spec.get('digits')
                 broker_symbol.point_value = spec.get('point_value')
+                contract_size_value = spec.get('contract_size')
+                broker_symbol.contract_size = contract_size_value  # ✅ NEW: Auto-retrieve from MT5
                 broker_symbol.last_updated = datetime.utcnow()
+
+                # ✅ DEBUG: Log contract_size value for first symbol
+                if updated_count == 0:
+                    logger.info(f"📊 First symbol {symbol_name}: contract_size={contract_size_value}")
+
                 updated_count += 1
 
         db.commit()
@@ -1075,6 +1087,234 @@ def get_confidence_requirements():
             
     except Exception as e:
         logger.error(f"Error getting confidence requirements: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# ============================================================================
+# Spread Configuration API Endpoints
+# ============================================================================
+
+@app_command.route('/api/spread-config', methods=['GET'])
+def get_all_spread_configs():
+    """Get all symbol spread configurations"""
+    try:
+        from models import SymbolSpreadConfig
+
+        db = ScopedSession()
+        try:
+            configs = db.query(SymbolSpreadConfig).order_by(
+                SymbolSpreadConfig.asset_type,
+                SymbolSpreadConfig.symbol
+            ).all()
+
+            result = []
+            for config in configs:
+                result.append({
+                    'id': config.id,
+                    'symbol': config.symbol,
+                    'typical_spread': float(config.typical_spread),
+                    'max_spread_multiplier': float(config.max_spread_multiplier),
+                    'absolute_max_spread': float(config.absolute_max_spread) if config.absolute_max_spread else None,
+                    'asian_session_spread': float(config.asian_session_spread) if config.asian_session_spread else None,
+                    'weekend_spread': float(config.weekend_spread) if config.weekend_spread else None,
+                    'enabled': config.enabled,
+                    'use_dynamic_limits': config.use_dynamic_limits,
+                    'asset_type': config.asset_type,
+                    'notes': config.notes,
+                    'created_at': config.created_at.isoformat() if config.created_at else None,
+                    'updated_at': config.updated_at.isoformat() if config.updated_at else None
+                })
+
+            return jsonify({
+                'status': 'success',
+                'configs': result,
+                'count': len(result)
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Error getting spread configs: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_command.route('/api/spread-config/<symbol>', methods=['GET'])
+def get_spread_config(symbol):
+    """Get spread configuration for a specific symbol"""
+    try:
+        from models import SymbolSpreadConfig
+
+        db = ScopedSession()
+        try:
+            config = db.query(SymbolSpreadConfig).filter_by(
+                symbol=symbol.upper()
+            ).first()
+
+            if not config:
+                return jsonify({
+                    'status': 'error',
+                    'message': f'No configuration found for {symbol.upper()}'
+                }), 404
+
+            return jsonify({
+                'status': 'success',
+                'config': {
+                    'id': config.id,
+                    'symbol': config.symbol,
+                    'typical_spread': float(config.typical_spread),
+                    'max_spread_multiplier': float(config.max_spread_multiplier),
+                    'absolute_max_spread': float(config.absolute_max_spread) if config.absolute_max_spread else None,
+                    'asian_session_spread': float(config.asian_session_spread) if config.asian_session_spread else None,
+                    'weekend_spread': float(config.weekend_spread) if config.weekend_spread else None,
+                    'enabled': config.enabled,
+                    'use_dynamic_limits': config.use_dynamic_limits,
+                    'asset_type': config.asset_type,
+                    'notes': config.notes,
+                    'created_at': config.created_at.isoformat() if config.created_at else None,
+                    'updated_at': config.updated_at.isoformat() if config.updated_at else None
+                }
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Error getting spread config for {symbol}: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_command.route('/api/spread-config/<symbol>', methods=['POST', 'PUT'])
+def update_spread_config(symbol):
+    """Create or update spread configuration for a symbol"""
+    try:
+        from models import SymbolSpreadConfig
+        from decimal import Decimal
+
+        data = request.get_json() or {}
+        symbol_upper = symbol.upper()
+
+        # Validate required fields for new entries
+        if 'typical_spread' not in data:
+            return jsonify({
+                'status': 'error',
+                'message': 'typical_spread is required'
+            }), 400
+
+        db = ScopedSession()
+        try:
+            # Check if config exists
+            config = db.query(SymbolSpreadConfig).filter_by(
+                symbol=symbol_upper
+            ).first()
+
+            if config:
+                # Update existing
+                config.typical_spread = Decimal(str(data['typical_spread']))
+                config.max_spread_multiplier = Decimal(str(data.get('max_spread_multiplier', 3.0)))
+
+                if 'absolute_max_spread' in data and data['absolute_max_spread'] is not None:
+                    config.absolute_max_spread = Decimal(str(data['absolute_max_spread']))
+
+                if 'asian_session_spread' in data and data['asian_session_spread'] is not None:
+                    config.asian_session_spread = Decimal(str(data['asian_session_spread']))
+
+                if 'weekend_spread' in data and data['weekend_spread'] is not None:
+                    config.weekend_spread = Decimal(str(data['weekend_spread']))
+
+                if 'enabled' in data:
+                    config.enabled = bool(data['enabled'])
+
+                if 'use_dynamic_limits' in data:
+                    config.use_dynamic_limits = bool(data['use_dynamic_limits'])
+
+                if 'asset_type' in data:
+                    config.asset_type = data['asset_type']
+
+                if 'notes' in data:
+                    config.notes = data['notes']
+
+                db.commit()
+                action = 'updated'
+            else:
+                # Create new
+                config = SymbolSpreadConfig(
+                    symbol=symbol_upper,
+                    typical_spread=Decimal(str(data['typical_spread'])),
+                    max_spread_multiplier=Decimal(str(data.get('max_spread_multiplier', 3.0))),
+                    absolute_max_spread=Decimal(str(data['absolute_max_spread'])) if data.get('absolute_max_spread') else None,
+                    asian_session_spread=Decimal(str(data['asian_session_spread'])) if data.get('asian_session_spread') else None,
+                    weekend_spread=Decimal(str(data['weekend_spread'])) if data.get('weekend_spread') else None,
+                    enabled=bool(data.get('enabled', True)),
+                    use_dynamic_limits=bool(data.get('use_dynamic_limits', True)),
+                    asset_type=data.get('asset_type'),
+                    notes=data.get('notes')
+                )
+                db.add(config)
+                db.commit()
+                action = 'created'
+
+            logger.info(f"Spread config {action} for {symbol_upper}")
+
+            return jsonify({
+                'status': 'success',
+                'message': f'Spread configuration {action} for {symbol_upper}',
+                'config': {
+                    'id': config.id,
+                    'symbol': config.symbol,
+                    'typical_spread': float(config.typical_spread),
+                    'max_spread_multiplier': float(config.max_spread_multiplier),
+                    'absolute_max_spread': float(config.absolute_max_spread) if config.absolute_max_spread else None,
+                    'asian_session_spread': float(config.asian_session_spread) if config.asian_session_spread else None,
+                    'weekend_spread': float(config.weekend_spread) if config.weekend_spread else None,
+                    'enabled': config.enabled,
+                    'use_dynamic_limits': config.use_dynamic_limits,
+                    'asset_type': config.asset_type,
+                    'notes': config.notes
+                }
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Error updating spread config for {symbol}: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_command.route('/api/spread-config/<symbol>', methods=['DELETE'])
+def delete_spread_config(symbol):
+    """Delete spread configuration for a symbol"""
+    try:
+        from models import SymbolSpreadConfig
+
+        db = ScopedSession()
+        try:
+            config = db.query(SymbolSpreadConfig).filter_by(
+                symbol=symbol.upper()
+            ).first()
+
+            if not config:
+                return jsonify({
+                    'status': 'error',
+                    'message': f'No configuration found for {symbol.upper()}'
+                }), 404
+
+            db.delete(config)
+            db.commit()
+
+            logger.info(f"Spread config deleted for {symbol.upper()}")
+
+            return jsonify({
+                'status': 'success',
+                'message': f'Spread configuration deleted for {symbol.upper()}'
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Error deleting spread config for {symbol}: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
@@ -3153,35 +3393,42 @@ def dashboard_symbols():
 
 @app_webui.route('/api/dashboard/ohlc')
 def dashboard_ohlc():
-    """Get OHLC data for specified timeframe"""
+    """Get OHLC data for specified timeframe and symbol"""
     try:
         timeframe = request.args.get('timeframe', 'M1')
+        symbol = request.args.get('symbol')
+        limit = int(request.args.get('limit', 100))
+
+        if not symbol:
+            return jsonify({'status': 'error', 'message': 'Symbol parameter required'}), 400
 
         db = ScopedSession()
         try:
-            account = db.query(Account).order_by(Account.last_heartbeat.desc()).first()  # Use active account
-
-            if not account:
-                return jsonify({'status': 'error', 'message': 'No account found'}), 404
-
-            ohlc_data = db.query(OHLCData).filter_by(
-                account_id=account.id,
+            # OHLC data is now global (no account_id needed)
+            query = db.query(OHLCData).filter_by(
+                symbol=symbol,
                 timeframe=timeframe
-            ).order_by(OHLCData.timestamp.desc()).limit(20).all()
+            )
 
-            ohlc_list = []
+            ohlc_data = query.order_by(OHLCData.timestamp.desc()).limit(limit).all()
+
+            candle_list = []
             for ohlc in reversed(ohlc_data):
-                ohlc_list.append({
-                    'symbol': ohlc.symbol,
-                    'timestamp': ohlc.timestamp.isoformat(),
-                    'open': f"{ohlc.open:.5f}",
-                    'high': f"{ohlc.high:.5f}",
-                    'low': f"{ohlc.low:.5f}",
-                    'close': f"{ohlc.close:.5f}",
-                    'volume': ohlc.volume
+                candle_list.append({
+                    'time': ohlc.timestamp.isoformat(),
+                    'open': float(ohlc.open),
+                    'high': float(ohlc.high),
+                    'low': float(ohlc.low),
+                    'close': float(ohlc.close),
+                    'volume': int(ohlc.volume) if ohlc.volume else 0
                 })
 
-            return jsonify({'status': 'success', 'timeframe': timeframe, 'ohlc': ohlc_list}), 200
+            return jsonify({
+                'status': 'success',
+                'symbol': symbol,
+                'timeframe': timeframe,
+                'candles': candle_list
+            }), 200
 
         finally:
             db.close()
@@ -5273,6 +5520,159 @@ def get_safety_monitor_status():
         }), 500
 
 
+# ============================================================================
+# Spread Configuration Proxy Endpoints (WebUI Server)
+# These proxy requests to the command server (port 9900) so they work
+# even when port 9900 is not directly accessible from the browser
+# ============================================================================
+
+@app_webui.route('/api/spread-config', methods=['GET'])
+def proxy_get_all_spread_configs():
+    """Proxy: Get all symbol spread configurations"""
+    try:
+        from models import SymbolSpreadConfig
+
+        db = ScopedSession()
+        try:
+            configs = db.query(SymbolSpreadConfig).order_by(
+                SymbolSpreadConfig.asset_type,
+                SymbolSpreadConfig.symbol
+            ).all()
+
+            result = []
+            for config in configs:
+                result.append({
+                    'id': config.id,
+                    'symbol': config.symbol,
+                    'typical_spread': float(config.typical_spread),
+                    'max_spread_multiplier': float(config.max_spread_multiplier),
+                    'absolute_max_spread': float(config.absolute_max_spread) if config.absolute_max_spread else None,
+                    'asian_session_spread': float(config.asian_session_spread) if config.asian_session_spread else None,
+                    'weekend_spread': float(config.weekend_spread) if config.weekend_spread else None,
+                    'enabled': config.enabled,
+                    'use_dynamic_limits': config.use_dynamic_limits,
+                    'asset_type': config.asset_type,
+                    'notes': config.notes,
+                    'created_at': config.created_at.isoformat() if config.created_at else None,
+                    'updated_at': config.updated_at.isoformat() if config.updated_at else None
+                })
+
+            return jsonify({
+                'status': 'success',
+                'configs': result,
+                'count': len(result)
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Error getting spread configs: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_webui.route('/api/spread-config/<symbol>', methods=['GET'])
+def proxy_get_spread_config(symbol):
+    """Proxy: Get spread configuration for a specific symbol"""
+    try:
+        from models import SymbolSpreadConfig
+
+        db = ScopedSession()
+        try:
+            config = db.query(SymbolSpreadConfig).filter_by(
+                symbol=symbol.upper()
+            ).first()
+
+            if not config:
+                return jsonify({
+                    'status': 'error',
+                    'message': f'No configuration found for {symbol.upper()}'
+                }), 404
+
+            return jsonify({
+                'status': 'success',
+                'config': {
+                    'id': config.id,
+                    'symbol': config.symbol,
+                    'typical_spread': float(config.typical_spread),
+                    'max_spread_multiplier': float(config.max_spread_multiplier),
+                    'absolute_max_spread': float(config.absolute_max_spread) if config.absolute_max_spread else None,
+                    'asian_session_spread': float(config.asian_session_spread) if config.asian_session_spread else None,
+                    'weekend_spread': float(config.weekend_spread) if config.weekend_spread else None,
+                    'enabled': config.enabled,
+                    'use_dynamic_limits': config.use_dynamic_limits,
+                    'asset_type': config.asset_type,
+                    'notes': config.notes,
+                    'created_at': config.created_at.isoformat() if config.created_at else None,
+                    'updated_at': config.updated_at.isoformat() if config.updated_at else None
+                }
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Error getting spread config for {symbol}: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_webui.route('/api/spread-config/<symbol>', methods=['POST', 'PUT'])
+def proxy_update_spread_config(symbol):
+    """Proxy: Create or update spread configuration for a symbol"""
+    try:
+        from models import SymbolSpreadConfig
+        from decimal import Decimal
+
+        data = request.get_json() or {}
+        symbol_upper = symbol.upper()
+
+        if 'typical_spread' not in data:
+            return jsonify({
+                'status': 'error',
+                'message': 'typical_spread is required'
+            }), 400
+
+        db = ScopedSession()
+        try:
+            config = db.query(SymbolSpreadConfig).filter_by(symbol=symbol_upper).first()
+
+            if config:
+                config.typical_spread = Decimal(str(data['typical_spread']))
+                config.max_spread_multiplier = Decimal(str(data.get('max_spread_multiplier', 3.0)))
+                if 'absolute_max_spread' in data and data['absolute_max_spread'] is not None:
+                    config.absolute_max_spread = Decimal(str(data['absolute_max_spread']))
+                if 'enabled' in data:
+                    config.enabled = bool(data['enabled'])
+                if 'notes' in data:
+                    config.notes = data['notes']
+                db.commit()
+                action = 'updated'
+            else:
+                config = SymbolSpreadConfig(
+                    symbol=symbol_upper,
+                    typical_spread=Decimal(str(data['typical_spread'])),
+                    max_spread_multiplier=Decimal(str(data.get('max_spread_multiplier', 3.0))),
+                    absolute_max_spread=Decimal(str(data['absolute_max_spread'])) if data.get('absolute_max_spread') else None,
+                    enabled=bool(data.get('enabled', True)),
+                    notes=data.get('notes')
+                )
+                db.add(config)
+                db.commit()
+                action = 'created'
+
+            return jsonify({
+                'status': 'success',
+                'message': f'Spread configuration {action} for {symbol_upper}'
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Error updating spread config for {symbol}: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
 if __name__ == '__main__':
     logger.info("=" * 60)
     logger.info("ngTradingBot Server Starting...")
@@ -5380,6 +5780,12 @@ if __name__ == '__main__':
     ]
 
     logger.info("All servers starting...")
+
+    # Log app_command routes for debugging
+    logger.info("=== app_command routes (port 9900) ===")
+    for rule in app_command.url_map.iter_rules():
+        logger.info(f"  {rule.rule} -> {rule.endpoint} {list(rule.methods)}")
+    logger.info("=" * 40)
 
     threads = []
     for app, port, name in ports:

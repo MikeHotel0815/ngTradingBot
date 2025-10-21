@@ -1,0 +1,523 @@
+/**
+ * Symbol Modal Styles
+ *
+ * Styling for the symbol detail modal with responsive layout,
+ * timeframe tabs, indicators, signals, and trades display.
+ */
+
+/* Modal Overlay */
+#symbol-modal {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.85);
+    z-index: 10000;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    overflow-y: auto;
+}
+
+/* Modal Container */
+.symbol-modal-container {
+    background: linear-gradient(135deg, #1e1e1e 0%, #2d2d2d 100%);
+    border-radius: 16px;
+    max-width: 1200px;
+    width: 100%;
+    max-height: 90vh;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    display: flex;
+    flex-direction: column;
+    animation: modalSlideIn 0.3s ease-out;
+}
+
+@keyframes modalSlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-30px) scale(0.95);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+/* Modal Header */
+.symbol-modal-header {
+    background: linear-gradient(135deg, #2a2a2a 0%, #1a1a1a 100%);
+    padding: 24px 30px;
+    border-bottom: 2px solid #3a3a3a;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    position: relative;
+}
+
+.symbol-modal-header-left {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.symbol-modal-header-symbol {
+    font-size: 28px;
+    font-weight: 700;
+    color: #fff;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.symbol-modal-header-price {
+    display: flex;
+    gap: 20px;
+    font-size: 16px;
+    color: #bbb;
+}
+
+.bid-price {
+    color: #f44336;
+    font-weight: 600;
+}
+
+.ask-price {
+    color: #4CAF50;
+    font-weight: 600;
+}
+
+.symbol-modal-header-status {
+    display: flex;
+    align-items: center;
+}
+
+.status-active {
+    color: #4CAF50;
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.status-inactive {
+    color: #f44336;
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.symbol-modal-close {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    background: transparent;
+    border: none;
+    color: #999;
+    font-size: 32px;
+    cursor: pointer;
+    padding: 0;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    transition: all 0.2s ease;
+}
+
+.symbol-modal-close:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+    transform: scale(1.1);
+}
+
+/* Timeframe Tabs */
+.symbol-modal-timeframes {
+    background: #2a2a2a;
+    padding: 16px 30px;
+    border-bottom: 1px solid #3a3a3a;
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+}
+
+.timeframe-tab {
+    padding: 10px 20px;
+    background: #1e1e1e;
+    border: 2px solid #3a3a3a;
+    border-radius: 8px;
+    color: #bbb;
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+    min-width: 60px;
+    text-align: center;
+}
+
+.timeframe-tab:hover {
+    background: #2d2d2d;
+    border-color: #4a4a4a;
+    color: #fff;
+}
+
+.timeframe-tab.active {
+    background: linear-gradient(135deg, #2196F3 0%, #1976D2 100%);
+    border-color: #2196F3;
+    color: #fff;
+    box-shadow: 0 4px 12px rgba(33, 150, 243, 0.4);
+}
+
+/* Modal Content */
+.symbol-modal-content {
+    padding: 30px;
+    overflow-y: auto;
+    flex: 1;
+}
+
+/* Section Titles */
+.symbol-modal-section-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: #fff;
+    margin: 0 0 16px 0;
+    padding-bottom: 10px;
+    border-bottom: 2px solid #3a3a3a;
+}
+
+/* Chart Section */
+.symbol-modal-chart {
+    margin-bottom: 30px;
+}
+
+#symbol-chart-container {
+    background: #1a1a1a;
+    border: 1px solid #3a3a3a;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+/* Indicators Section */
+.symbol-modal-indicators {
+    margin-bottom: 30px;
+}
+
+.indicator-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+}
+
+.indicator-card {
+    background: linear-gradient(135deg, #2a2a2a 0%, #1e1e1e 100%);
+    border: 1px solid #3a3a3a;
+    border-radius: 12px;
+    padding: 20px;
+    text-align: center;
+    transition: all 0.2s ease;
+}
+
+.indicator-card:hover {
+    border-color: #4a4a4a;
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+}
+
+.indicator-label {
+    font-size: 12px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 8px;
+}
+
+.indicator-value {
+    font-size: 24px;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 8px;
+}
+
+.indicator-value.rsi-overbought {
+    color: #f44336;
+}
+
+.indicator-value.rsi-oversold {
+    color: #4CAF50;
+}
+
+.indicator-value.rsi-neutral {
+    color: #FFC107;
+}
+
+.indicator-value.trend-buy {
+    color: #4CAF50;
+}
+
+.indicator-value.trend-sell {
+    color: #f44336;
+}
+
+.indicator-value.trend-neutral {
+    color: #999;
+}
+
+.indicator-interpretation {
+    font-size: 12px;
+    color: #bbb;
+}
+
+/* Signals Section */
+.symbol-modal-signals {
+    margin-bottom: 30px;
+}
+
+.signals-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.signal-card {
+    background: linear-gradient(135deg, #2a2a2a 0%, #1e1e1e 100%);
+    border: 2px solid #3a3a3a;
+    border-radius: 12px;
+    padding: 16px;
+    transition: all 0.2s ease;
+}
+
+.signal-card:hover {
+    border-color: #4a4a4a;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+}
+
+.signal-card.signal-buy {
+    border-left: 4px solid #4CAF50;
+}
+
+.signal-card.signal-sell {
+    border-left: 4px solid #f44336;
+}
+
+.signal-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.signal-type {
+    font-weight: 700;
+    font-size: 16px;
+    padding: 4px 12px;
+    border-radius: 6px;
+}
+
+.signal-card.signal-buy .signal-type {
+    background: rgba(76, 175, 80, 0.2);
+    color: #4CAF50;
+}
+
+.signal-card.signal-sell .signal-type {
+    background: rgba(244, 67, 54, 0.2);
+    color: #f44336;
+}
+
+.signal-confidence {
+    font-weight: 700;
+    font-size: 16px;
+    color: #2196F3;
+}
+
+.signal-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.signal-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 14px;
+}
+
+.signal-label {
+    color: #888;
+    font-weight: 600;
+}
+
+.signal-value {
+    color: #fff;
+    font-weight: 600;
+}
+
+.signal-card-footer {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid #3a3a3a;
+}
+
+.signal-card-footer small {
+    color: #888;
+    font-size: 12px;
+}
+
+/* Trades Section */
+.symbol-modal-trades {
+    margin-bottom: 30px;
+}
+
+.trades-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.trade-card {
+    background: linear-gradient(135deg, #2a2a2a 0%, #1e1e1e 100%);
+    border: 2px solid #3a3a3a;
+    border-radius: 12px;
+    padding: 16px;
+    transition: all 0.2s ease;
+}
+
+.trade-card:hover {
+    border-color: #4a4a4a;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+}
+
+.trade-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.trade-direction {
+    font-weight: 700;
+    font-size: 16px;
+    padding: 4px 12px;
+    border-radius: 6px;
+}
+
+.trade-direction.trade-buy {
+    background: rgba(76, 175, 80, 0.2);
+    color: #4CAF50;
+}
+
+.trade-direction.trade-sell {
+    background: rgba(244, 67, 54, 0.2);
+    color: #f44336;
+}
+
+.trade-pnl {
+    font-weight: 700;
+    font-size: 18px;
+}
+
+.trade-pnl.profit {
+    color: #4CAF50;
+}
+
+.trade-pnl.loss {
+    color: #f44336;
+}
+
+.trade-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.trade-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 14px;
+}
+
+.trade-label {
+    color: #888;
+    font-weight: 600;
+}
+
+.trade-value {
+    color: #fff;
+    font-weight: 600;
+}
+
+/* Loading, No Data, Error States */
+.loading,
+.no-data,
+.error {
+    padding: 40px;
+    text-align: center;
+    color: #888;
+    font-size: 14px;
+}
+
+.error {
+    color: #f44336;
+}
+
+/* Scrollbar Styling */
+.symbol-modal-content::-webkit-scrollbar,
+.symbol-modal-timeframes::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+.symbol-modal-content::-webkit-scrollbar-track,
+.symbol-modal-timeframes::-webkit-scrollbar-track {
+    background: #1e1e1e;
+}
+
+.symbol-modal-content::-webkit-scrollbar-thumb,
+.symbol-modal-timeframes::-webkit-scrollbar-thumb {
+    background: #3a3a3a;
+    border-radius: 4px;
+}
+
+.symbol-modal-content::-webkit-scrollbar-thumb:hover,
+.symbol-modal-timeframes::-webkit-scrollbar-thumb:hover {
+    background: #4a4a4a;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .symbol-modal-container {
+        max-width: 100%;
+        max-height: 100vh;
+        border-radius: 0;
+    }
+
+    .symbol-modal-header {
+        padding: 20px;
+    }
+
+    .symbol-modal-header-symbol {
+        font-size: 22px;
+    }
+
+    .symbol-modal-timeframes {
+        padding: 12px 20px;
+    }
+
+    .symbol-modal-content {
+        padding: 20px;
+    }
+
+    .indicator-grid {
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 12px;
+    }
+}
+
+/* Clickable Symbol Names */
+.symbol-clickable {
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.symbol-clickable:hover {
+    color: #2196F3 !important;
+    text-decoration: underline;
+}

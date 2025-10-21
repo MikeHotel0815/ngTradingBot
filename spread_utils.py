@@ -132,17 +132,41 @@ def calculate_spread_cost(
     return spread_cost
 
 
-def get_contract_size(symbol: str) -> float:
+def get_contract_size(symbol: str, db_session=None) -> float:
     """
     Get contract size (units per 1 standard lot) for symbol.
 
+    IMPROVED: Automatically fetches from MT5 via database (updated by EA).
+    Falls back to heuristic-based detection if DB not available.
+
     This is also called "point value multiplier" because:
     spread_cost = spread × lot_size × contract_size
+
+    Args:
+        symbol: Trading symbol
+        db_session: Optional database session for fetching contract size from BrokerSymbol
 
     Returns:
         Contract size (units per lot)
     """
     symbol_upper = symbol.upper()
+
+    # ✅ PRIORITY 1: Try to get contract size from database (MT5-provided value)
+    if db_session:
+        try:
+            from models import BrokerSymbol
+            broker_symbol = db_session.query(BrokerSymbol).filter_by(symbol=symbol).first()
+            if broker_symbol and broker_symbol.contract_size:
+                contract_size = float(broker_symbol.contract_size)
+                # Sanity check: contract size should be > 0
+                if contract_size > 0:
+                    return contract_size
+        except Exception as e:
+            # DB not available or error - fall through to fallback
+            pass
+
+    # ✅ FALLBACK: Heuristic-based detection (legacy method)
+    # This ensures the system works even before MT5 sends symbol specs
 
     # IMPORTANT: Check crypto FIRST before USD check (BTCUSD, ETHUSD contain USD!)
     # Bitcoin: 1 lot = 1 BTC (usually)
@@ -160,8 +184,9 @@ def get_contract_size(symbol: str) -> float:
         return 100.0
 
     # Silver (XAGUSD): 1 lot = 5000 oz (typically)
+    # ✅ FIXED: Was 50.0 (factor 100 error), now correct
     if 'XAG' in symbol_upper:
-        return 50.0
+        return 5000.0
 
     # Indices: 1 lot = 1 contract (usually $1 per point)
     if any(idx in symbol_upper for idx in ['DAX', 'DE40', 'SPX', 'US500', 'NDX', 'US100']):

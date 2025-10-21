@@ -45,6 +45,21 @@ Docker Services:
 
 ## 🚀 Quick Start
 
+### IMPORTANT: Docker Build Rules
+
+**⚠️ On code changes ALWAYS rebuild container with --no-cache**
+
+```bash
+# After ANY Python code changes:
+docker compose build --no-cache workers
+docker compose build --no-cache server
+
+# Then restart:
+docker compose up -d
+```
+
+Docker caches layers aggressively. Without `--no-cache`, your code changes may not be included in the container!
+
 ### 1. Clone & Setup
 
 ```bash

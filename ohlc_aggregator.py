@@ -89,16 +89,18 @@ def aggregate_ticks_to_m1(db, account_id, symbol, start_time, end_time):
 
 def aggregate_m1_to_higher_timeframes(db, account_id, symbol):
     """
-    Aggregate M1 candles to higher timeframes: M5, M15, H1, H4, D1
+    Aggregate M1 candles to higher timeframes: M5, M15, M30, H1, H4, D1
 
     NOTE: account_id kept for compatibility but not used (OHLC is global now)
     """
     timeframes = {
         'M5': 5,      # 5 minutes
         'M15': 15,    # 15 minutes
+        'M30': 30,    # 30 minutes
         'H1': 60,     # 1 hour
         'H4': 240,    # 4 hours
-        'D1': 1440    # 1 day (24 hours)
+        'D1': 1440,   # 1 day (24 hours)
+        'W1': 10080   # 1 week (7 days * 24 hours * 60 minutes)
     }
 
     total_created = 0
@@ -119,14 +121,18 @@ def aggregate_m1_to_higher_timeframes(db, account_id, symbol):
         groups = {}
         for candle in m1_candles:
             # Calculate period start for this timeframe
-            if tf_name == 'D1':
+            if tf_name == 'W1':
+                # Week starts on Monday (weekday=0)
+                days_since_monday = candle.timestamp.weekday()
+                period_start = (candle.timestamp - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
+            elif tf_name == 'D1':
                 period_start = candle.timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
             elif tf_name == 'H4':
                 hour_group = (candle.timestamp.hour // 4) * 4
                 period_start = candle.timestamp.replace(hour=hour_group, minute=0, second=0, microsecond=0)
             elif tf_name == 'H1':
                 period_start = candle.timestamp.replace(minute=0, second=0, microsecond=0)
-            else:  # M5, M15
+            else:  # M5, M15, M30
                 minute_group = (candle.timestamp.minute // minutes) * minutes
                 period_start = candle.timestamp.replace(minute=minute_group, second=0, microsecond=0)
 
@@ -143,9 +149,11 @@ def aggregate_m1_to_higher_timeframes(db, account_id, symbol):
                 OHLCData.timestamp == period_time
             ).first()
 
-            # Require at least 1 M1 candle to create higher timeframe candle
-            # (Previously required minutes//5 which was too restrictive - 12 for H1, 48 for H4)
-            if not existing and len(candle_group) >= 1:
+            # Require sufficient M1 candles to create a valid higher timeframe candle
+            # For continuous data: need at least 80% of expected candles (to allow for minor gaps)
+            # M5=4 (80% of 5), M15=12 (80% of 15), H1=48 (80% of 60), H4=192 (80% of 240), D1=1152 (80% of 1440)
+            min_candles_required = max(1, int(minutes * 0.8))
+            if not existing and len(candle_group) >= min_candles_required:
                 ohlc = OHLCData(
                     symbol=symbol,
                     timeframe=tf_name,

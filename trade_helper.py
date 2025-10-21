@@ -26,7 +26,6 @@ def normalize_volume(account_id, symbol, volume):
     try:
         # Get symbol specs from database
         broker_symbol = db.query(BrokerSymbol).filter_by(
-            account_id=account_id,
             symbol=symbol
         ).first()
 
@@ -83,7 +82,6 @@ def validate_trade_params(account_id, symbol, volume, sl=None, tp=None):
     try:
         # Get symbol specs
         broker_symbol = db.query(BrokerSymbol).filter_by(
-            account_id=account_id,
             symbol=symbol
         ).first()
 
@@ -140,7 +138,6 @@ def get_symbol_info(account_id, symbol):
     db = ScopedSession()
     try:
         broker_symbol = db.query(BrokerSymbol).filter_by(
-            account_id=account_id,
             symbol=symbol
         ).first()
 

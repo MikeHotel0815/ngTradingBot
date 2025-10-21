@@ -1199,6 +1199,31 @@
             }
         </style>
 
+        <!-- OPEN POSITIONS -->
+        <div class="grid">
+            <div class="card">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                    <div style="display: flex; align-items: center; gap: 15px;">
+                        <h2 style="margin: 0;">📊 Open Positions (<span id="open-trades-count">0</span>)</h2>
+                        <span style="font-size: 0.9em; color: #888;">
+                            🔄 <span id="positions-last-update" style="font-weight: 600;">--:--:--</span>
+                        </span>
+                    </div>
+                    <div>
+                        <button onclick="closeAllProfitable()" class="global-action-btn close-profitable-btn" title="Close all trades currently in profit">
+                            ✓ Close Profitable
+                        </button>
+                        <button onclick="confirmCloseAll()" class="global-action-btn close-all-btn" title="Close ALL open trades">
+                            ✕ Close All
+                        </button>
+                    </div>
+                </div>
+                <div id="open-trades-list">
+                    <div style="text-align: center; color: #888; padding: 20px;">Loading...</div>
+                </div>
+            </div>
+        </div>
+
         <div class="grid">
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
@@ -1296,6 +1321,103 @@
             </div>
         </div>
 
+        <!-- SPREAD CONFIGURATION MANAGEMENT -->
+        <div class="grid">
+            <div class="card">
+                <h2>⚙️ Spread Limits Configuration</h2>
+                <p style="color: #888; margin-bottom: 15px;">
+                    Configure maximum allowed spreads per symbol. Wider spreads during volatile sessions or low liquidity can lead to poor execution.
+                </p>
+
+                <div style="margin-bottom: 20px;">
+                    <button id="refresh-spread-config-btn" style="padding: 10px 20px; background: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer;">
+                        🔄 Refresh
+                    </button>
+                    <select id="spread-filter-asset-type" style="padding: 10px; margin-left: 10px; background: #2a2a2a; color: white; border: 1px solid #555; border-radius: 5px;">
+                        <option value="">All Assets</option>
+                        <option value="FOREX">Forex</option>
+                        <option value="COMMODITY">Commodities</option>
+                        <option value="INDEX">Indices</option>
+                        <option value="CRYPTO">Crypto</option>
+                    </select>
+                </div>
+
+                <div id="spread-config-container" style="overflow-x: auto;">
+                    <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+                        <thead>
+                            <tr style="border-bottom: 2px solid #444; text-align: left;">
+                                <th style="padding: 10px;">Symbol</th>
+                                <th style="padding: 10px;">Type</th>
+                                <th style="padding: 10px; text-align: right;">Typical</th>
+                                <th style="padding: 10px; text-align: right;">Max Mult.</th>
+                                <th style="padding: 10px; text-align: right;">Max Limit</th>
+                                <th style="padding: 10px; text-align: right;">Calculated Max</th>
+                                <th style="padding: 10px; text-align: center;">Enabled</th>
+                                <th style="padding: 10px; text-align: center;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="spread-config-list">
+                            <tr><td colspan="8" style="text-align: center; padding: 20px; color: #888;">Loading spread configuration...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- SPREAD CONFIGURATION EDIT MODAL -->
+        <div id="spread-config-modal" style="display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.7); overflow: auto;">
+            <div style="background-color: #1a1a1a; margin: 5% auto; padding: 30px; border: 2px solid #4CAF50; border-radius: 10px; width: 600px; max-width: 90%;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                    <h2 style="margin: 0;">✏️ Edit Spread Configuration</h2>
+                    <span id="close-spread-modal" style="color: #aaa; font-size: 28px; font-weight: bold; cursor: pointer;">&times;</span>
+                </div>
+
+                <form id="spread-config-form">
+                    <input type="hidden" id="edit-symbol" />
+
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 5px; color: #4CAF50; font-weight: bold;">Symbol</label>
+                        <input type="text" id="display-symbol" readonly style="width: 100%; padding: 10px; background: #2a2a2a; color: #888; border: 1px solid #555; border-radius: 5px;" />
+                    </div>
+
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 5px; color: #4CAF50; font-weight: bold;">Typical Spread</label>
+                        <input type="number" id="edit-typical-spread" step="0.00001" required style="width: 100%; padding: 10px; background: #2a2a2a; color: white; border: 1px solid #555; border-radius: 5px;" />
+                        <small style="color: #888;">Normal expected spread for this symbol</small>
+                    </div>
+
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 5px; color: #4CAF50; font-weight: bold;">Max Spread Multiplier</label>
+                        <input type="number" id="edit-max-multiplier" step="0.1" required style="width: 100%; padding: 10px; background: #2a2a2a; color: white; border: 1px solid #555; border-radius: 5px;" />
+                        <small style="color: #888;">Maximum allowed = typical × multiplier (e.g., 3.0 = 3x typical)</small>
+                    </div>
+
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 5px; color: #4CAF50; font-weight: bold;">Absolute Max Spread (Optional)</label>
+                        <input type="number" id="edit-absolute-max" step="0.00001" style="width: 100%; padding: 10px; background: #2a2a2a; color: white; border: 1px solid #555; border-radius: 5px;" />
+                        <small style="color: #888;">Hard limit regardless of multiplier (leave empty for none)</small>
+                    </div>
+
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: flex; align-items: center; cursor: pointer;">
+                            <input type="checkbox" id="edit-enabled" style="margin-right: 10px; width: 20px; height: 20px;" />
+                            <span style="color: #4CAF50; font-weight: bold;">Enabled (spread checking active)</span>
+                        </label>
+                    </div>
+
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 5px; color: #4CAF50; font-weight: bold;">Notes</label>
+                        <textarea id="edit-notes" rows="3" style="width: 100%; padding: 10px; background: #2a2a2a; color: white; border: 1px solid #555; border-radius: 5px;"></textarea>
+                    </div>
+
+                    <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px;">
+                        <button type="button" id="cancel-spread-edit" style="padding: 10px 20px; background: #555; color: white; border: none; border-radius: 5px; cursor: pointer;">Cancel</button>
+                        <button type="submit" style="padding: 10px 20px; background: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer;">💾 Save Changes</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
         <!-- TRADING STATISTICS -->
         <div class="grid">
             <div class="card">
@@ -1338,31 +1460,6 @@
                 </div>
                 <div id="ai-decision-log-container" style="max-height: 400px; overflow-y: auto;">
                     <div style="text-align: center; padding: 20px; color: #888;">Loading decisions...</div>
-                </div>
-            </div>
-        </div>
-
-        <!-- OPEN POSITIONS -->
-        <div class="grid">
-            <div class="card">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                    <div style="display: flex; align-items: center; gap: 15px;">
-                        <h2 style="margin: 0;">📊 Open Positions (<span id="open-trades-count">0</span>)</h2>
-                        <span style="font-size: 0.9em; color: #888;">
-                            🔄 <span id="positions-last-update" style="font-weight: 600;">--:--:--</span>
-                        </span>
-                    </div>
-                    <div>
-                        <button onclick="closeAllProfitable()" class="global-action-btn close-profitable-btn" title="Close all trades currently in profit">
-                            ✓ Close Profitable
-                        </button>
-                        <button onclick="confirmCloseAll()" class="global-action-btn close-all-btn" title="Close ALL open trades">
-                            ✕ Close All
-                        </button>
-                    </div>
-                </div>
-                <div id="open-trades-list">
-                    <div style="text-align: center; color: #888; padding: 20px;">Loading...</div>
                 </div>
             </div>
         </div>
@@ -1411,6 +1508,1393 @@
             Dashboard aktualisiert sich in Echtzeit (WebSocket)
         </div>
     </div>
+
+
+
+
+
+    <!-- Symbol Modal JavaScript (Inline) -->
+    <script>
+/**
+ * Symbol Modal Module
+ *
+ * Manages the symbol detail modal with timeframe-based views,
+ * indicators, signals, and open trades for a specific symbol.
+ *
+ * Usage:
+ *   SymbolModal.show('BTCUSD', 'H1');  // Show BTCUSD with H1 timeframe
+ *   SymbolModal.close();                // Close the modal
+ */
+
+const SymbolModal = (function() {
+    'use strict';
+
+    // Private state
+    let currentSymbol = null;
+    let currentTimeframe = 'H1';
+    let modalElement = null;
+    let updateInterval = null;
+    let chart = null;
+    let candlestickSeries = null;
+
+    // Available timeframes
+    const TIMEFRAMES = ['M5', 'M15', 'M30', 'H1', 'H4', 'D1', 'W1'];
+
+    /**
+     * Get expected time gap in seconds for a timeframe
+     */
+    function getExpectedTimeGap(timeframe) {
+        const gaps = {
+            'M1': 60,
+            'M5': 300,
+            'M15': 900,
+            'M30': 1800,
+            'H1': 3600,
+            'H4': 14400,
+            'D1': 86400,
+            'W1': 604800
+        };
+        return gaps[timeframe] || 3600;
+    }
+
+    /**
+     * Initialize the modal (called once on page load)
+     */
+    function init() {
+        modalElement = document.getElementById('symbol-modal');
+        if (!modalElement) {
+            console.error('Symbol modal element not found');
+            return;
+        }
+
+        // Set up event listeners
+        setupEventListeners();
+    }
+
+    /**
+     * Set up all event listeners for the modal
+     */
+    function setupEventListeners() {
+        // Close button
+        const closeBtn = modalElement.querySelector('.symbol-modal-close');
+        if (closeBtn) {
+            closeBtn.addEventListener('click', close);
+        }
+
+        // Fullscreen button
+        const fullscreenBtn = modalElement.querySelector('.symbol-modal-fullscreen');
+        if (fullscreenBtn) {
+            fullscreenBtn.addEventListener('click', toggleFullscreen);
+        }
+
+        // Click outside to close
+        modalElement.addEventListener('click', function(e) {
+            if (e.target === modalElement) {
+                close();
+            }
+        });
+
+        // Escape key to close
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && modalElement.style.display !== 'none') {
+                close();
+            }
+        });
+
+        // Timeframe tab clicks
+        const timeframeTabs = modalElement.querySelectorAll('.timeframe-tab');
+        timeframeTabs.forEach(tab => {
+            tab.addEventListener('click', function() {
+                const timeframe = this.dataset.timeframe;
+                switchTimeframe(timeframe);
+            });
+        });
+    }
+
+    /**
+     * Show the modal for a specific symbol and timeframe
+     * @param {string} symbol - The symbol to display (e.g., 'BTCUSD')
+     * @param {string} timeframe - The timeframe to show (e.g., 'H1')
+     */
+    function show(symbol, timeframe = 'H1') {
+        console.log(`🚀🚀🚀 SymbolModal.show() CALLED with symbol=${symbol}, timeframe=${timeframe}`);
+
+        if (!modalElement) {
+            console.error('❌ Modal not initialized - modalElement is null');
+            return;
+        }
+
+        console.log('✅ Modal element found, setting current symbol and timeframe');
+        currentSymbol = symbol;
+        currentTimeframe = timeframe;
+
+        // Reset live update state for new symbol
+        isInitialLoad = true;
+        lastCandleData = [];
+
+        // Show the modal
+        console.log('📺 Setting modal display to flex');
+        modalElement.style.display = 'flex';
+
+        // Update content
+        console.log('🔄 Calling updateModalContent()');
+        updateModalContent();
+
+        // Start auto-refresh
+        console.log('⏱️ Starting auto-refresh');
+        startAutoRefresh();
+
+        // Log for debugging
+        console.log(`✅ Successfully opened symbol modal: ${symbol} (${timeframe})`);
+    }
+
+    /**
+     * Close the modal
+     */
+    function close() {
+        if (modalElement) {
+            modalElement.style.display = 'none';
+            modalElement.classList.remove('fullscreen'); // Exit fullscreen when closing
+        }
+
+        // Stop auto-refresh
+        stopAutoRefresh();
+
+        // Clean up chart
+        if (chart) {
+            chart.remove();
+            chart = null;
+            candlestickSeries = null;
+        }
+
+        currentSymbol = null;
+        currentTimeframe = 'H1';
+
+        console.log('Closed symbol modal');
+    }
+
+    /**
+     * Toggle fullscreen mode for the modal
+     */
+    function toggleFullscreen() {
+        if (!modalElement) return;
+
+        const isFullscreen = modalElement.classList.contains('fullscreen');
+
+        if (isFullscreen) {
+            // Exit fullscreen
+            modalElement.classList.remove('fullscreen');
+            console.log('Exited fullscreen mode');
+
+            // Recreate chart with normal dimensions
+            setTimeout(() => {
+                if (chart) {
+                    const chartContainer = document.getElementById('symbol-chart-container');
+                    if (chartContainer) {
+                        chart.remove();
+                        chart = null;
+                        candlestickSeries = null;
+
+                        // Force full refresh when recreating chart
+                        isInitialLoad = true;
+                        updateChart(true); // Recreate with normal size
+                    }
+                }
+            }, 50);
+        } else {
+            // Enter fullscreen
+            modalElement.classList.add('fullscreen');
+            console.log('Entered fullscreen mode');
+
+            // Recreate chart with fullscreen dimensions
+            setTimeout(() => {
+                if (chart) {
+                    const chartContainer = document.getElementById('symbol-chart-container');
+                    if (chartContainer) {
+                        console.log('📐 Fullscreen mode - Container dimensions:', {
+                            width: chartContainer.offsetWidth,
+                            height: chartContainer.offsetHeight,
+                            clientHeight: chartContainer.clientHeight,
+                            scrollHeight: chartContainer.scrollHeight
+                        });
+                        chart.remove();
+                        chart = null;
+                        candlestickSeries = null;
+
+                        // Force full refresh when recreating chart
+                        isInitialLoad = true;
+                        updateChart(true); // Recreate with fullscreen size
+                    }
+                }
+            }, 50);
+        }
+    }
+
+    /**
+     * Switch to a different timeframe
+     * @param {string} timeframe - The new timeframe
+     */
+    function switchTimeframe(timeframe) {
+        if (!TIMEFRAMES.includes(timeframe)) {
+            console.error('Invalid timeframe:', timeframe);
+            return;
+        }
+
+        console.log(`🔄 Switching timeframe from ${currentTimeframe} to ${timeframe}`);
+        currentTimeframe = timeframe;
+
+        // Reset live update state for new timeframe
+        isInitialLoad = true;
+        lastCandleData = [];
+
+        // Update active tab
+        const tabs = modalElement.querySelectorAll('.timeframe-tab');
+        tabs.forEach(tab => {
+            if (tab.dataset.timeframe === timeframe) {
+                tab.classList.add('active');
+            } else {
+                tab.classList.remove('active');
+            }
+        });
+
+        // Refresh data for new timeframe
+        console.log(`🔄 Calling updateModalContent() for timeframe ${timeframe}`);
+        updateModalContent();
+    }
+
+    /**
+     * Update all content in the modal
+     */
+    async function updateModalContent() {
+        if (!currentSymbol) return;
+
+        // Update header
+        updateHeader();
+
+        // Update chart
+        await updateChart();
+
+        // Update indicators
+        await updateIndicators();
+
+        // Update signals
+        await updateSignals();
+
+        // Update open trades
+        await updateOpenTrades();
+    }
+
+    /**
+     * Update the modal header with symbol info and current price
+     */
+    async function updateHeader() {
+        console.log(`💰 updateHeader() called for ${currentSymbol}`);
+        const headerSymbol = modalElement.querySelector('.symbol-modal-header-symbol');
+        const headerPrice = modalElement.querySelector('.symbol-modal-header-price');
+        const headerStatus = modalElement.querySelector('.symbol-modal-header-status');
+
+        if (headerSymbol) {
+            headerSymbol.textContent = currentSymbol;
+        }
+
+        try {
+            // Fetch current symbol price
+            const response = await fetch('/api/dashboard/symbols');
+            const data = await response.json();
+            console.log(`💰 Symbols API response:`, data);
+
+            if (data.status === 'success') {
+                const symbolData = data.symbols.find(s => s.symbol === currentSymbol);
+                console.log(`💰 Found symbol data for ${currentSymbol}:`, symbolData);
+
+                if (symbolData) {
+                    // Update price
+                    if (headerPrice) {
+                        const bidPrice = parseFloat(symbolData.bid).toFixed(symbolData.digits || 2);
+                        const askPrice = parseFloat(symbolData.ask).toFixed(symbolData.digits || 2);
+                        headerPrice.innerHTML = `
+                            <span class="bid-price">Bid: ${bidPrice}</span>
+                            <span class="ask-price">Ask: ${askPrice}</span>
+                        `;
+                        console.log(`💰 Updated header prices: Bid=${bidPrice}, Ask=${askPrice}`);
+                    }
+
+                    // Update status
+                    if (headerStatus) {
+                        if (symbolData.tradeable) {
+                            headerStatus.innerHTML = '<span class="status-active">🟢 Handelbar</span>';
+                        } else {
+                            headerStatus.innerHTML = '<span class="status-inactive">🔒 Markt geschlossen</span>';
+                        }
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('Error fetching symbol data:', error);
+        }
+    }
+
+    /**
+     * Indicator toggle states (all enabled by default)
+     */
+    let indicatorToggles = {
+        supportResistance: true,
+        bollingerBands: true,
+        trendProjection: true
+    };
+
+    /**
+     * Toggle indicator visibility
+     */
+    function toggleIndicator(indicatorName) {
+        indicatorToggles[indicatorName] = !indicatorToggles[indicatorName];
+        console.log(`🔄 Toggle ${indicatorName}: ${indicatorToggles[indicatorName] ? 'ON' : 'OFF'}`);
+
+        // Update button state
+        const button = document.querySelector(`[data-indicator="${indicatorName}"]`);
+        if (button) {
+            if (indicatorToggles[indicatorName]) {
+                button.classList.add('active');
+            } else {
+                button.classList.remove('active');
+            }
+        }
+
+        // Refresh chart (force full refresh to redraw indicators)
+        updateChart(true);
+    }
+
+    /**
+     * Detect support and resistance levels
+     */
+    function detectSupportResistanceLevels(candleData) {
+        if (candleData.length < 20) return [];
+
+        const levels = [];
+        const lookback = 5; // How many candles to look left/right for swing points
+
+        // Find swing highs and lows
+        for (let i = lookback; i < candleData.length - lookback; i++) {
+            const candle = candleData[i];
+
+            // Check if this is a swing high
+            let isSwingHigh = true;
+            for (let j = 1; j <= lookback; j++) {
+                if (candleData[i - j].high >= candle.high || candleData[i + j].high >= candle.high) {
+                    isSwingHigh = false;
+                    break;
+                }
+            }
+
+            // Check if this is a swing low
+            let isSwingLow = true;
+            for (let j = 1; j <= lookback; j++) {
+                if (candleData[i - j].low <= candle.low || candleData[i + j].low <= candle.low) {
+                    isSwingLow = false;
+                    break;
+                }
+            }
+
+            if (isSwingHigh) {
+                levels.push({ price: candle.high, type: 'resistance', time: candle.time });
+            }
+            if (isSwingLow) {
+                levels.push({ price: candle.low, type: 'support', time: candle.time });
+            }
+        }
+
+        // Cluster nearby levels (within 0.2% of each other)
+        const clustered = [];
+        const threshold = 0.002; // 0.2%
+
+        levels.forEach(level => {
+            const existing = clustered.find(c =>
+                Math.abs(c.price - level.price) / level.price < threshold && c.type === level.type
+            );
+
+            if (existing) {
+                // Merge into existing cluster
+                existing.price = (existing.price + level.price) / 2;
+                existing.touches++;
+            } else {
+                clustered.push({ ...level, touches: 1 });
+            }
+        });
+
+        // Sort by number of touches (most important levels first)
+        return clustered.sort((a, b) => b.touches - a.touches).slice(0, 5);
+    }
+
+    /**
+     * Add support/resistance levels to chart
+     */
+    let supportResistanceLines = [];
+
+    function addSupportResistanceLevels(candleData) {
+        if (!chart || !candlestickSeries) {
+            console.warn('⚠️ Chart or candlestick series not available, skipping S/R levels');
+            return;
+        }
+
+        console.log('📊 Adding S/R levels to chart...');
+
+        // Remove existing price lines
+        supportResistanceLines.forEach(line => {
+            try {
+                candlestickSeries.removePriceLine(line);
+            } catch (e) {
+                console.warn('Could not remove price line:', e);
+            }
+        });
+        supportResistanceLines = [];
+
+        // Detect levels
+        const levels = detectSupportResistanceLevels(candleData);
+
+        console.log(`📊 Detected ${levels.length} S/R levels:`, levels);
+
+        if (levels.length === 0) {
+            console.warn('⚠️ No S/R levels detected');
+            return;
+        }
+
+        // Add horizontal price lines for each level using createPriceLine
+        levels.forEach((level, index) => {
+            try {
+                console.log(`  Creating ${level.type} line at ${level.price}...`);
+
+                // Use TradingView's built-in createPriceLine API
+                const priceLine = candlestickSeries.createPriceLine({
+                    price: level.price,
+                    color: level.type === 'support' ? '#4CAF50' : '#f44336',
+                    lineWidth: 2,
+                    lineStyle: 2, // LineStyle.Dashed
+                    axisLabelVisible: true,
+                    title: `${level.type.toUpperCase()} (${level.touches}x)`,
+                });
+
+                supportResistanceLines.push(priceLine);
+                console.log(`  ✅ Added ${level.type} at ${level.price.toFixed(5)} (${level.touches} touches)`);
+            } catch (error) {
+                console.error(`❌ Error adding S/R line #${index}:`, error);
+            }
+        });
+
+        console.log(`📊 Total S/R price lines added: ${supportResistanceLines.length}`);
+    }
+
+    /**
+     * Calculate Bollinger Bands
+     * @param {Array} candleData - Array of candle objects with close prices
+     * @param {number} period - Moving average period (default 20)
+     * @param {number} stdDev - Standard deviation multiplier (default 2)
+     * @returns {Object} Object with upper, middle, and lower band data
+     */
+    function calculateBollingerBands(candleData, period = 20, stdDev = 2) {
+        const result = {
+            upper: [],
+            middle: [],
+            lower: []
+        };
+
+        if (candleData.length < period) {
+            console.warn(`⚠️ Not enough data for Bollinger Bands (need ${period}, have ${candleData.length})`);
+            return result;
+        }
+
+        for (let i = period - 1; i < candleData.length; i++) {
+            // Calculate SMA (Simple Moving Average)
+            let sum = 0;
+            for (let j = 0; j < period; j++) {
+                sum += candleData[i - j].close;
+            }
+            const sma = sum / period;
+
+            // Calculate standard deviation
+            let variance = 0;
+            for (let j = 0; j < period; j++) {
+                variance += Math.pow(candleData[i - j].close - sma, 2);
+            }
+            const std = Math.sqrt(variance / period);
+
+            // Calculate bands
+            const upper = sma + (stdDev * std);
+            const lower = sma - (stdDev * std);
+
+            result.middle.push({ time: candleData[i].time, value: sma });
+            result.upper.push({ time: candleData[i].time, value: upper });
+            result.lower.push({ time: candleData[i].time, value: lower });
+        }
+
+        return result;
+    }
+
+    /**
+     * Add Bollinger Bands to chart
+     */
+    let bollingerBandsSeries = { upper: null, middle: null, lower: null };
+
+    function addBollingerBands(candleData) {
+        if (!chart) {
+            console.warn('⚠️ Chart not available, skipping Bollinger Bands');
+            return;
+        }
+
+        console.log('📊 Adding Bollinger Bands to chart...');
+
+        // Remove existing bands
+        try {
+            if (bollingerBandsSeries.upper) {
+                chart.removeSeries(bollingerBandsSeries.upper);
+            }
+            if (bollingerBandsSeries.middle) {
+                chart.removeSeries(bollingerBandsSeries.middle);
+            }
+            if (bollingerBandsSeries.lower) {
+                chart.removeSeries(bollingerBandsSeries.lower);
+            }
+        } catch (e) {
+            console.warn('Could not remove BB series:', e);
+        }
+
+        bollingerBandsSeries = { upper: null, middle: null, lower: null };
+
+        // Calculate Bollinger Bands
+        const bands = calculateBollingerBands(candleData, 20, 2);
+
+        if (bands.middle.length === 0) {
+            console.warn('⚠️ No Bollinger Bands data calculated');
+            return;
+        }
+
+        console.log(`📊 Calculated Bollinger Bands: ${bands.middle.length} data points`);
+
+        try {
+            // Add upper band (red/resistance)
+            if (typeof chart.addSeries === 'function' && window.LightweightCharts.LineSeries) {
+                bollingerBandsSeries.upper = chart.addSeries(window.LightweightCharts.LineSeries, {
+                    color: 'rgba(255, 82, 82, 0.8)',
+                    lineWidth: 1,
+                    lineStyle: 0, // Solid
+                    priceLineVisible: false,
+                    lastValueVisible: false,
+                    crosshairMarkerVisible: false,
+                });
+                bollingerBandsSeries.upper.setData(bands.upper);
+
+                // Add middle band (yellow/MA)
+                bollingerBandsSeries.middle = chart.addSeries(window.LightweightCharts.LineSeries, {
+                    color: 'rgba(255, 235, 59, 0.8)',
+                    lineWidth: 1,
+                    lineStyle: 1, // Dotted
+                    priceLineVisible: false,
+                    lastValueVisible: false,
+                    crosshairMarkerVisible: false,
+                });
+                bollingerBandsSeries.middle.setData(bands.middle);
+
+                // Add lower band (green/support)
+                bollingerBandsSeries.lower = chart.addSeries(window.LightweightCharts.LineSeries, {
+                    color: 'rgba(76, 175, 80, 0.8)',
+                    lineWidth: 1,
+                    lineStyle: 0, // Solid
+                    priceLineVisible: false,
+                    lastValueVisible: false,
+                    crosshairMarkerVisible: false,
+                });
+                bollingerBandsSeries.lower.setData(bands.lower);
+
+                console.log('✅ Bollinger Bands added successfully');
+            } else if (typeof chart.addLineSeries === 'function') {
+                // Fallback to old API
+                bollingerBandsSeries.upper = chart.addLineSeries({
+                    color: 'rgba(255, 82, 82, 0.8)',
+                    lineWidth: 1,
+                    priceLineVisible: false,
+                    lastValueVisible: false,
+                });
+                bollingerBandsSeries.upper.setData(bands.upper);
+
+                bollingerBandsSeries.middle = chart.addLineSeries({
+                    color: 'rgba(255, 235, 59, 0.8)',
+                    lineWidth: 1,
+                    priceLineVisible: false,
+                    lastValueVisible: false,
+                });
+                bollingerBandsSeries.middle.setData(bands.middle);
+
+                bollingerBandsSeries.lower = chart.addLineSeries({
+                    color: 'rgba(76, 175, 80, 0.8)',
+                    lineWidth: 1,
+                    priceLineVisible: false,
+                    lastValueVisible: false,
+                });
+                bollingerBandsSeries.lower.setData(bands.lower);
+
+                console.log('✅ Bollinger Bands added successfully [old API]');
+            } else {
+                console.warn('⚠️ LineSeries not supported in this chart version');
+            }
+        } catch (error) {
+            console.error('❌ Error adding Bollinger Bands:', error);
+        }
+    }
+
+    /**
+     * Calculate linear regression for trend projection
+     * @param {Array} candleData - Array of candle objects
+     * @param {number} lookback - Number of recent candles to use for calculation
+     * @param {number} projectForward - Number of periods to project into future
+     * @returns {Object} Trend line data with historical fit and future projection
+     */
+    function calculateTrendProjection(candleData, lookback = 30, projectForward = 10) {
+        if (candleData.length < lookback) {
+            lookback = candleData.length;
+        }
+
+        // Use last N candles for regression
+        const recentCandles = candleData.slice(-lookback);
+
+        // Prepare data for linear regression (using close prices)
+        const n = recentCandles.length;
+        let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+
+        recentCandles.forEach((candle, i) => {
+            const x = i;
+            const y = candle.close;
+            sumX += x;
+            sumY += y;
+            sumXY += x * y;
+            sumX2 += x * x;
+        });
+
+        // Calculate slope (m) and intercept (b) for y = mx + b
+        const m = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+        const b = (sumY - m * sumX) / n;
+
+        // Create trend line data
+        const trendLine = [];
+        const projectionLine = [];
+
+        // Historical trend line (fit to recent data)
+        recentCandles.forEach((candle, i) => {
+            const value = m * i + b;
+            trendLine.push({ time: candle.time, value: value });
+        });
+
+        // Project into future
+        const lastCandle = candleData[candleData.length - 1];
+        const timeframeSeconds = getExpectedTimeGap(currentTimeframe);
+
+        for (let i = 1; i <= projectForward; i++) {
+            const futureTime = lastCandle.time + (i * timeframeSeconds);
+            const futureValue = m * (n - 1 + i) + b;
+            projectionLine.push({ time: futureTime, value: futureValue });
+        }
+
+        // Calculate R² (coefficient of determination) to show trend strength
+        let ssRes = 0, ssTot = 0;
+        const meanY = sumY / n;
+
+        recentCandles.forEach((candle, i) => {
+            const predicted = m * i + b;
+            const actual = candle.close;
+            ssRes += Math.pow(actual - predicted, 2);
+            ssTot += Math.pow(actual - meanY, 2);
+        });
+
+        const r2 = 1 - (ssRes / ssTot);
+        const trendDirection = m > 0 ? 'BULLISH ↗' : m < 0 ? 'BEARISH ↘' : 'SIDEWAYS →';
+        const trendStrength = r2 > 0.7 ? 'Strong' : r2 > 0.4 ? 'Moderate' : 'Weak';
+
+        console.log(`📈 Trend Analysis: ${trendDirection}, Strength: ${trendStrength} (R²=${r2.toFixed(3)}), Slope=${m.toFixed(6)}`);
+
+        return {
+            historical: trendLine,
+            projection: projectionLine,
+            slope: m,
+            r2: r2,
+            direction: trendDirection,
+            strength: trendStrength
+        };
+    }
+
+    /**
+     * Add trend projection line to chart
+     */
+    let trendProjectionSeries = { historical: null, projection: null };
+
+    function addTrendProjection(candleData) {
+        if (!chart) {
+            console.warn('⚠️ Chart not available, skipping trend projection');
+            return;
+        }
+
+        console.log('📈 Adding trend projection to chart...');
+
+        // Remove existing trend lines
+        try {
+            if (trendProjectionSeries.historical) {
+                chart.removeSeries(trendProjectionSeries.historical);
+            }
+            if (trendProjectionSeries.projection) {
+                chart.removeSeries(trendProjectionSeries.projection);
+            }
+        } catch (e) {
+            console.warn('Could not remove trend series:', e);
+        }
+
+        trendProjectionSeries = { historical: null, projection: null };
+
+        // Calculate trend projection
+        const trend = calculateTrendProjection(candleData, 30, 10);
+
+        if (trend.historical.length === 0) {
+            console.warn('⚠️ No trend data calculated');
+            return;
+        }
+
+        try {
+            // Add historical trend line (solid)
+            if (typeof chart.addSeries === 'function' && window.LightweightCharts.LineSeries) {
+                trendProjectionSeries.historical = chart.addSeries(window.LightweightCharts.LineSeries, {
+                    color: 'rgba(33, 150, 243, 0.9)', // Blue
+                    lineWidth: 2,
+                    lineStyle: 0, // Solid
+                    priceLineVisible: false,
+                    lastValueVisible: false,
+                    crosshairMarkerVisible: true,
+                });
+                trendProjectionSeries.historical.setData(trend.historical);
+
+                // Add future projection line (dashed)
+                trendProjectionSeries.projection = chart.addSeries(window.LightweightCharts.LineSeries, {
+                    color: 'rgba(255, 152, 0, 0.8)', // Orange
+                    lineWidth: 2,
+                    lineStyle: 2, // Dashed
+                    priceLineVisible: false,
+                    lastValueVisible: true,
+                    crosshairMarkerVisible: true,
+                });
+
+                // Connect last historical point to projection
+                const connectionPoint = trend.historical[trend.historical.length - 1];
+                const projectionData = [connectionPoint, ...trend.projection];
+                trendProjectionSeries.projection.setData(projectionData);
+
+                console.log(`✅ Trend projection added: ${trend.direction}, ${trend.strength} trend (R²=${trend.r2.toFixed(3)})`);
+            } else if (typeof chart.addLineSeries === 'function') {
+                // Fallback to old API
+                trendProjectionSeries.historical = chart.addLineSeries({
+                    color: 'rgba(33, 150, 243, 0.9)',
+                    lineWidth: 2,
+                    priceLineVisible: false,
+                    lastValueVisible: false,
+                });
+                trendProjectionSeries.historical.setData(trend.historical);
+
+                trendProjectionSeries.projection = chart.addLineSeries({
+                    color: 'rgba(255, 152, 0, 0.8)',
+                    lineWidth: 2,
+                    priceLineVisible: false,
+                    lastValueVisible: true,
+                });
+
+                const connectionPoint = trend.historical[trend.historical.length - 1];
+                const projectionData = [connectionPoint, ...trend.projection];
+                trendProjectionSeries.projection.setData(projectionData);
+
+                console.log(`✅ Trend projection added [old API]: ${trend.direction}, ${trend.strength} trend (R²=${trend.r2.toFixed(3)})`);
+            } else {
+                console.warn('⚠️ LineSeries not supported in this chart version');
+            }
+        } catch (error) {
+            console.error('❌ Error adding trend projection:', error);
+        }
+    }
+
+    /**
+     * Store last candle data for comparison
+     */
+    let lastCandleData = [];
+    let isInitialLoad = true;
+
+    /**
+     * Update chart with OHLC data
+     * @param {boolean} forceRefresh - Force full chart refresh (default: false for live updates)
+     */
+    async function updateChart(forceRefresh = false) {
+        console.log(`📊📊📊 updateChart() CALLED for symbol=${currentSymbol}, timeframe=${currentTimeframe}, forceRefresh=${forceRefresh}`);
+
+        const chartContainer = document.getElementById('symbol-chart-container');
+        if (!chartContainer) {
+            console.error('❌❌❌ Chart container element #symbol-chart-container NOT FOUND in DOM!');
+            return;
+        }
+
+        console.log(`✅ Chart container found, proceeding to fetch OHLC data for ${currentSymbol} ${currentTimeframe}`);
+
+        try {
+            // Fetch OHLC data from backend
+            const url = `/api/dashboard/ohlc?symbol=${currentSymbol}&timeframe=${currentTimeframe}&limit=100`;
+            console.log(`Fetching from: ${url}`);
+
+            const response = await fetch(url);
+            const data = await response.json();
+
+            console.log(`OHLC Response:`, data);
+
+            if (data.status === 'success' && data.candles && data.candles.length > 0) {
+                console.log(`✅ Received ${data.candles.length} candles`);
+
+                // Initialize chart if not already created
+                if (!chart) {
+                    console.log('Creating new chart instance...');
+
+                    // Load TradingView Lightweight Charts library if not loaded
+                    if (typeof window.LightweightCharts === 'undefined') {
+                        console.log('Loading TradingView Charts library...');
+                        await loadLightweightCharts();
+                        console.log('Library loaded successfully');
+                    }
+
+                    // Verify library is available
+                    if (typeof window.LightweightCharts === 'undefined') {
+                        throw new Error('LightweightCharts library failed to load');
+                    }
+
+                    console.log('Using LightweightCharts:', window.LightweightCharts);
+
+                    // Clear container
+                    chartContainer.innerHTML = '';
+
+                    console.log('Creating chart with container dimensions:', {
+                        width: chartContainer.clientWidth,
+                        height: chartContainer.clientHeight
+                    });
+                    chart = window.LightweightCharts.createChart(chartContainer, {
+                        width: chartContainer.clientWidth,
+                        height: chartContainer.clientHeight || 400,
+                        layout: {
+                            background: { color: '#1a1a1a' },
+                            textColor: '#d1d4dc',
+                        },
+                        grid: {
+                            vertLines: { color: '#2a2a2a' },
+                            horzLines: { color: '#2a2a2a' },
+                        },
+                        crosshair: {
+                            mode: window.LightweightCharts.CrosshairMode.Normal,
+                        },
+                        rightPriceScale: {
+                            borderColor: '#3a3a3a',
+                        },
+                        timeScale: {
+                            borderColor: '#3a3a3a',
+                            timeVisible: true,
+                            secondsVisible: false,
+                        },
+                    });
+
+                    console.log('Chart instance created:', chart);
+                    console.log('Chart has addCandlestickSeries?', typeof chart.addCandlestickSeries);
+                    console.log('Chart has addSeries?', typeof chart.addSeries);
+
+                    // Try new API first (v4+), fall back to old API
+                    if (typeof chart.addSeries === 'function') {
+                        console.log('Using new API: chart.addSeries()');
+                        candlestickSeries = chart.addSeries(window.LightweightCharts.CandlestickSeries, {
+                            upColor: '#4CAF50',
+                            downColor: '#f44336',
+                            borderVisible: false,
+                            wickUpColor: '#4CAF50',
+                            wickDownColor: '#f44336',
+                        });
+                    } else if (typeof chart.addCandlestickSeries === 'function') {
+                        console.log('Using old API: chart.addCandlestickSeries()');
+                        candlestickSeries = chart.addCandlestickSeries({
+                            upColor: '#4CAF50',
+                            downColor: '#f44336',
+                            borderVisible: false,
+                            wickUpColor: '#4CAF50',
+                            wickDownColor: '#f44336',
+                        });
+                    } else {
+                        throw new Error('Chart object has neither addSeries nor addCandlestickSeries method');
+                    }
+
+                    console.log('Candlestick series created:', candlestickSeries);
+                    console.log('✅ Chart created successfully');
+
+                    // Handle window resize
+                    window.addEventListener('resize', () => {
+                        if (chart && chartContainer) {
+                            chart.applyOptions({ width: chartContainer.clientWidth });
+                        }
+                    });
+                }
+
+                // Convert data to TradingView format
+                const candleData = data.candles.map(candle => ({
+                    time: Math.floor(new Date(candle.time).getTime() / 1000),
+                    open: parseFloat(candle.open),
+                    high: parseFloat(candle.high),
+                    low: parseFloat(candle.low),
+                    close: parseFloat(candle.close),
+                }));
+
+                // Sort by time (ascending)
+                candleData.sort((a, b) => a.time - b.time);
+
+                console.log(`Setting ${candleData.length} candles to chart`);
+                console.log(`First candle:`, candleData[0]);
+                console.log(`Last candle:`, candleData[candleData.length - 1]);
+
+                // Check time gaps and price continuity
+                if (candleData.length > 1) {
+                    console.log('🔍 Analyzing candle data quality:');
+                    let maxGap = 0;
+                    let discontinuities = 0;
+
+                    for (let i = 1; i < Math.min(10, candleData.length); i++) {
+                        const prev = candleData[i - 1];
+                        const curr = candleData[i];
+                        const timeGap = curr.time - prev.time;
+                        const priceGap = Math.abs(curr.open - prev.close);
+                        const priceDiffPercent = (priceGap / prev.close * 100).toFixed(4);
+
+                        console.log(`  Candle ${i-1} -> ${i}: Time gap=${timeGap}s (${(timeGap/3600).toFixed(1)}h), ` +
+                                    `Close=${prev.close} -> Open=${curr.open}, Gap=${priceGap.toFixed(2)} (${priceDiffPercent}%)`);
+
+                        maxGap = Math.max(maxGap, timeGap);
+                        if (priceGap > 0.01) {
+                            discontinuities++;
+                        }
+                    }
+
+                    console.log(`  Max time gap: ${maxGap}s (${(maxGap/3600).toFixed(1)} hours)`);
+                    console.log(`  Price discontinuities in first 10 candles: ${discontinuities}`);
+                    console.log(`  Expected gap for ${currentTimeframe}: ${getExpectedTimeGap(currentTimeframe)}s`);
+                }
+
+                // Update the series (use update for real-time, setData for full refresh)
+                if (candleData.length > 0) {
+                    // Ensure candlestick series exists
+                    if (!candlestickSeries) {
+                        console.warn('⚠️ Candlestick series was null, recreating...');
+                        // Recreate the series if it's missing
+                        if (typeof chart.addSeries === 'function') {
+                            candlestickSeries = chart.addSeries(window.LightweightCharts.CandlestickSeries, {
+                                upColor: '#4CAF50',
+                                downColor: '#f44336',
+                                borderVisible: false,
+                                wickUpColor: '#4CAF50',
+                                wickDownColor: '#f44336',
+                            });
+                        }
+                    }
+
+                    if (candlestickSeries) {
+                        // Detect if this is a live update or full refresh
+                        const needsFullRefresh = forceRefresh ||
+                                                 isInitialLoad ||
+                                                 !lastCandleData.length ||
+                                                 candleData.length !== lastCandleData.length;
+
+                        if (needsFullRefresh) {
+                            // Full refresh: set all data
+                            console.log('📊 Full chart refresh with all data');
+                            candlestickSeries.setData(candleData);
+                            isInitialLoad = false;
+
+                            // Update indicators based on toggle state
+                            if (indicatorToggles.supportResistance) {
+                                addSupportResistanceLevels(candleData);
+                            }
+
+                            if (indicatorToggles.bollingerBands) {
+                                addBollingerBands(candleData);
+                            }
+
+                            if (indicatorToggles.trendProjection) {
+                                addTrendProjection(candleData);
+                            }
+
+                            // Fit content to visible range
+                            chart.timeScale().fitContent();
+                        } else {
+                            // Live update: only update the last candle
+                            const lastCandle = candleData[candleData.length - 1];
+                            const prevLastCandle = lastCandleData[lastCandleData.length - 1];
+
+                            // Check if last candle has changed
+                            if (lastCandle.time === prevLastCandle.time) {
+                                // Same candle period - update it
+                                if (lastCandle.close !== prevLastCandle.close ||
+                                    lastCandle.high !== prevLastCandle.high ||
+                                    lastCandle.low !== prevLastCandle.low ||
+                                    lastCandle.open !== prevLastCandle.open) {
+
+                                    console.log('🔄 Live update: updating current candle', {
+                                        time: new Date(lastCandle.time * 1000).toISOString(),
+                                        close: lastCandle.close
+                                    });
+                                    candlestickSeries.update(lastCandle);
+
+                                    // Update Bollinger Bands in real-time (if enabled)
+                                    if (indicatorToggles.bollingerBands) {
+                                        addBollingerBands(candleData);
+                                    }
+
+                                    // Update trend projection in real-time (if enabled)
+                                    if (indicatorToggles.trendProjection) {
+                                        addTrendProjection(candleData);
+                                    }
+                                }
+                            } else {
+                                // New candle period - full refresh
+                                console.log('🆕 New candle detected, full refresh');
+                                candlestickSeries.setData(candleData);
+
+                                // Update all indicators
+                                if (indicatorToggles.supportResistance) {
+                                    addSupportResistanceLevels(candleData);
+                                }
+
+                                if (indicatorToggles.bollingerBands) {
+                                    addBollingerBands(candleData);
+                                }
+
+                                if (indicatorToggles.trendProjection) {
+                                    addTrendProjection(candleData);
+                                }
+                            }
+                        }
+
+                        // Store current data for next comparison
+                        lastCandleData = candleData;
+
+                        console.log('✅ Chart updated successfully');
+                    } else {
+                        console.error('❌ Failed to create candlestick series');
+                    }
+                }
+
+            } else {
+                console.warn('No candle data available:', data);
+                chartContainer.innerHTML = '<div style="padding: 40px; text-align: center; color: #888;">Keine Chart-Daten verfügbar</div>';
+            }
+        } catch (error) {
+            console.error('❌ Error loading chart:', error);
+            chartContainer.innerHTML = `<div style="padding: 40px; text-align: center; color: #f44336;">Fehler beim Laden des Charts: ${error.message}</div>`;
+        }
+    }
+
+    /**
+     * Load TradingView Lightweight Charts library dynamically
+     */
+    function loadLightweightCharts() {
+        return new Promise((resolve, reject) => {
+            if (typeof window.LightweightCharts !== 'undefined') {
+                console.log('📈 LightweightCharts already loaded');
+                resolve();
+                return;
+            }
+
+            console.log('📥 Loading TradingView Lightweight Charts from CDN...');
+            const script = document.createElement('script');
+            script.src = 'https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js';
+
+            script.onload = () => {
+                console.log('📜 Script loaded, waiting for library initialization...');
+                // Wait a bit for the library to initialize its global object
+                setTimeout(() => {
+                    if (typeof window.LightweightCharts !== 'undefined') {
+                        console.log('✅ LightweightCharts library initialized successfully');
+                        console.log('LightweightCharts object:', window.LightweightCharts);
+                        resolve();
+                    } else {
+                        console.error('❌ LightweightCharts loaded but not available globally');
+                        reject(new Error('LightweightCharts global object not found'));
+                    }
+                }, 100);
+            };
+
+            script.onerror = (error) => {
+                console.error('❌ Failed to load LightweightCharts script:', error);
+                reject(error);
+            };
+
+            document.head.appendChild(script);
+        });
+    }
+
+    /**
+     * Update indicators section
+     */
+    async function updateIndicators() {
+        const indicatorsContainer = modalElement.querySelector('.symbol-modal-indicators');
+        if (!indicatorsContainer) return;
+
+        indicatorsContainer.innerHTML = '<div class="loading">Lade Indikatoren...</div>';
+
+        try {
+            // Fetch signals to get indicator data
+            const response = await fetch(`/api/signals?symbol=${currentSymbol}&timeframe=${currentTimeframe}`);
+            const data = await response.json();
+
+            if (data.status === 'success' && data.signals.length > 0) {
+                // Use the most recent signal for indicator data
+                const signal = data.signals[0];
+
+                indicatorsContainer.innerHTML = `
+                    <div class="indicator-grid">
+                        <div class="indicator-card">
+                            <div class="indicator-label">RSI (14)</div>
+                            <div class="indicator-value ${getRSIClass(signal.rsi)}">${signal.rsi ? signal.rsi.toFixed(2) : 'N/A'}</div>
+                            <div class="indicator-interpretation">${getRSIInterpretation(signal.rsi)}</div>
+                        </div>
+
+                        <div class="indicator-card">
+                            <div class="indicator-label">MACD</div>
+                            <div class="indicator-value">${signal.macd_value ? signal.macd_value.toFixed(5) : 'N/A'}</div>
+                            <div class="indicator-interpretation">${getMACDInterpretation(signal.macd_signal)}</div>
+                        </div>
+
+                        <div class="indicator-card">
+                            <div class="indicator-label">Bollinger Bands</div>
+                            <div class="indicator-value">${signal.bb_position || 'N/A'}</div>
+                            <div class="indicator-interpretation">${getBBInterpretation(signal.bb_position)}</div>
+                        </div>
+
+                        <div class="indicator-card">
+                            <div class="indicator-label">Trend</div>
+                            <div class="indicator-value trend-${signal.signal_type ? signal.signal_type.toLowerCase() : 'neutral'}">
+                                ${getTrendArrow(signal.signal_type)}
+                            </div>
+                            <div class="indicator-interpretation">${signal.signal_type || 'Neutral'}</div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                indicatorsContainer.innerHTML = '<div class="no-data">Keine Indikator-Daten verfügbar</div>';
+            }
+        } catch (error) {
+            console.error('Error fetching indicators:', error);
+            indicatorsContainer.innerHTML = '<div class="error">Fehler beim Laden der Indikatoren</div>';
+        }
+    }
+
+    /**
+     * Update signals section
+     */
+    async function updateSignals() {
+        const signalsContainer = modalElement.querySelector('.symbol-modal-signals');
+        if (!signalsContainer) return;
+
+        signalsContainer.innerHTML = '<div class="loading">Lade Signale...</div>';
+
+        try {
+            const response = await fetch(`/api/signals?symbol=${currentSymbol}&timeframe=${currentTimeframe}`);
+            const data = await response.json();
+
+            if (data.status === 'success' && data.signals.length > 0) {
+                signalsContainer.innerHTML = `
+                    <div class="signals-list">
+                        ${data.signals.map(signal => `
+                            <div class="signal-card signal-${signal.signal_type.toLowerCase()}">
+                                <div class="signal-card-header">
+                                    <span class="signal-type">${signal.signal_type}</span>
+                                    <span class="signal-confidence">${signal.confidence.toFixed(1)}%</span>
+                                </div>
+                                <div class="signal-card-body">
+                                    <div class="signal-row">
+                                        <span class="signal-label">Entry:</span>
+                                        <span class="signal-value">${signal.entry_price}</span>
+                                    </div>
+                                    <div class="signal-row">
+                                        <span class="signal-label">SL:</span>
+                                        <span class="signal-value">${signal.sl_price}</span>
+                                    </div>
+                                    <div class="signal-row">
+                                        <span class="signal-label">TP:</span>
+                                        <span class="signal-value">${signal.tp_price}</span>
+                                    </div>
+                                    <div class="signal-row">
+                                        <span class="signal-label">Lot Size:</span>
+                                        <span class="signal-value">${signal.lot_size}</span>
+                                    </div>
+                                </div>
+                                <div class="signal-card-footer">
+                                    <small>Alter: ${signal.age_minutes}min | Risiko: €${signal.risk_amount.toFixed(2)}</small>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+            } else {
+                signalsContainer.innerHTML = '<div class="no-data">Keine aktiven Signale für diesen Timeframe</div>';
+            }
+        } catch (error) {
+            console.error('Error fetching signals:', error);
+            signalsContainer.innerHTML = '<div class="error">Fehler beim Laden der Signale</div>';
+        }
+    }
+
+    /**
+     * Update open trades section
+     */
+    async function updateOpenTrades() {
+        const tradesContainer = modalElement.querySelector('.symbol-modal-trades');
+        if (!tradesContainer) return;
+
+        tradesContainer.innerHTML = '<div class="loading">Lade offene Trades...</div>';
+
+        try {
+            const apiBase = window.location.protocol + '//' + window.location.hostname + ':9900';
+            const monitoringResponse = await fetch(apiBase + '/api/monitoring/1');
+            const monitoringData = await monitoringResponse.json();
+
+            if (monitoringData.status === 'success' && monitoringData.open_trades) {
+                // Filter trades for current symbol
+                const symbolTrades = monitoringData.open_trades.filter(trade =>
+                    trade.symbol === currentSymbol
+                );
+
+                if (symbolTrades.length > 0) {
+                    tradesContainer.innerHTML = `
+                        <div class="trades-list">
+                            ${symbolTrades.map(trade => {
+                                const pnl = parseFloat(trade.profit || 0);
+                                const pnlClass = pnl >= 0 ? 'profit' : 'loss';
+
+                                return `
+                                    <div class="trade-card">
+                                        <div class="trade-card-header">
+                                            <span class="trade-direction trade-${trade.type.toLowerCase()}">${trade.type}</span>
+                                            <span class="trade-pnl ${pnlClass}">€${pnl.toFixed(2)}</span>
+                                        </div>
+                                        <div class="trade-card-body">
+                                            <div class="trade-row">
+                                                <span class="trade-label">Ticket:</span>
+                                                <span class="trade-value">#${trade.ticket}</span>
+                                            </div>
+                                            <div class="trade-row">
+                                                <span class="trade-label">Entry:</span>
+                                                <span class="trade-value">${trade.open_price}</span>
+                                            </div>
+                                            <div class="trade-row">
+                                                <span class="trade-label">Current:</span>
+                                                <span class="trade-value">${trade.current_price || 'N/A'}</span>
+                                            </div>
+                                            <div class="trade-row">
+                                                <span class="trade-label">Volume:</span>
+                                                <span class="trade-value">${trade.volume} lots</span>
+                                            </div>
+                                            ${trade.tp ? `
+                                            <div class="trade-row">
+                                                <span class="trade-label">TP:</span>
+                                                <span class="trade-value">${trade.tp}</span>
+                                            </div>
+                                            ` : ''}
+                                            ${trade.sl ? `
+                                            <div class="trade-row">
+                                                <span class="trade-label">SL:</span>
+                                                <span class="trade-value">${trade.sl}</span>
+                                            </div>
+                                            ` : ''}
+                                        </div>
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+                    `;
+                } else {
+                    tradesContainer.innerHTML = '<div class="no-data">Keine offenen Trades für dieses Symbol</div>';
+                }
+            } else {
+                tradesContainer.innerHTML = '<div class="no-data">Keine offenen Trades</div>';
+            }
+        } catch (error) {
+            console.error('Error fetching open trades:', error);
+            tradesContainer.innerHTML = '<div class="error">Fehler beim Laden der Trades</div>';
+        }
+    }
+
+    /**
+     * Start auto-refresh interval
+     */
+    function startAutoRefresh() {
+        stopAutoRefresh(); // Clear any existing interval
+
+        // Refresh every 2 seconds for real-time updates
+        updateInterval = setInterval(() => {
+            updateModalContent();
+        }, 2000);
+
+        console.log('✅ Auto-refresh started (2s interval)');
+    }
+
+    /**
+     * Stop auto-refresh interval
+     */
+    function stopAutoRefresh() {
+        if (updateInterval) {
+            clearInterval(updateInterval);
+            updateInterval = null;
+        }
+    }
+
+    // Helper functions for indicator interpretation
+
+    function getRSIClass(rsi) {
+        if (!rsi) return '';
+        if (rsi > 70) return 'rsi-overbought';
+        if (rsi < 30) return 'rsi-oversold';
+        return 'rsi-neutral';
+    }
+
+    function getRSIInterpretation(rsi) {
+        if (!rsi) return 'N/A';
+        if (rsi > 70) return 'Überkauft';
+        if (rsi < 30) return 'Überverkauft';
+        return 'Neutral';
+    }
+
+    function getMACDInterpretation(macdSignal) {
+        if (!macdSignal) return 'N/A';
+        if (macdSignal === 'bullish') return 'Bullish';
+        if (macdSignal === 'bearish') return 'Bearish';
+        return 'Neutral';
+    }
+
+    function getBBInterpretation(bbPosition) {
+        if (!bbPosition) return 'N/A';
+        if (bbPosition === 'upper') return 'Oberes Band';
+        if (bbPosition === 'lower') return 'Unteres Band';
+        if (bbPosition === 'middle') return 'Mittleres Band';
+        return bbPosition;
+    }
+
+    function getTrendArrow(signalType) {
+        if (!signalType) return '●';
+        if (signalType === 'BUY') return '▲';
+        if (signalType === 'SELL') return '▼';
+        return '●';
+    }
+
+    // Public API
+    return {
+        init: init,
+        show: show,
+        close: close
+    };
+})();
+
+// Auto-initialize will be called at end of page after all HTML is loaded
+// See initialization script at bottom of page
+
+    </script>
 
     <script>
         // Initialize Socket.IO with explicit configuration
@@ -1560,7 +3044,7 @@
 
                         return `
                         <div class="symbol-item" data-symbol="${symbol.symbol}">
-                            <div class="symbol-name">
+                            <div class="symbol-name symbol-clickable" onclick="SymbolModal.show('${symbol.symbol}', 'H1')" style="cursor: pointer;">
                                 ${symbol.symbol}
                                 ${!symbol.tradeable ? '<span style="margin-left: 8px; color: #f44336; font-size: 0.9em;" title="Außerhalb der Handelszeiten">🔒</span>' : ''}
                             </div>
@@ -2056,7 +3540,7 @@
 
                                 <!-- ROW 2: Values -->
                                 <!-- Cell 1: Symbol Name -->
-                                <div style="grid-column: 1; grid-row: 2; font-size: 1em; color: #fff; font-weight: bold; display: flex; align-items: center;">
+                                <div class="symbol-clickable" onclick="SymbolModal.show('${signal.symbol}', '${signal.timeframe}')" style="grid-column: 1; grid-row: 2; font-size: 1em; color: #fff; font-weight: bold; display: flex; align-items: center; cursor: pointer;">
                                     ${signal.symbol}
                                 </div>
 
@@ -3037,10 +4521,14 @@
             const hours = Math.floor(durationMs / 3600000);
             const minutes = Math.floor((durationMs % 3600000) / 60000);
 
+            // Extract timeframe from opening_reason (e.g., "Signal #123 (H1 BUY)")
+            const timeframeMatch = pos.opening_reason ? pos.opening_reason.match(/\((M5|M15|M30|H1|H4|D1|W1)\s/i) : null;
+            const timeframe = timeframeMatch ? timeframeMatch[1].toUpperCase() : 'H1';
+
             return `
                 <div class="trade-card ${profitClass}">
                     <div class="trade-card-header">
-                        <span class="trade-symbol">${pos.symbol}</span>
+                        <span class="trade-symbol symbol-clickable" onclick="SymbolModal.show('${pos.symbol}', '${timeframe}')" style="cursor: pointer;">${pos.symbol}</span>
                         <span class="trade-direction ${directionClass}">${pos.direction}</span>
                     </div>
                     <div class="trade-pnl ${profitClass} ${changedClass}">${isProfitable ? '+' : ''}€${pos.pnl.toFixed(2)}</div>
@@ -4522,25 +6010,874 @@
         </div>
     </div>
 
+    <!-- Symbol Modal -->
+    <div id="symbol-modal">
+        <div class="symbol-modal-container">
+            <!-- Header -->
+            <div class="symbol-modal-header">
+                <div class="symbol-modal-header-left">
+                    <div class="symbol-modal-header-symbol">BTCUSD</div>
+                    <div class="symbol-modal-header-price">
+                        <span class="bid-price">Bid: -</span>
+                        <span class="ask-price">Ask: -</span>
+                    </div>
+                </div>
+                <div class="symbol-modal-header-status">
+                    <span class="status-active">🟢 Handelbar</span>
+                </div>
+                <button class="symbol-modal-fullscreen" title="Fullscreen toggle">⛶</button>
+                <button class="symbol-modal-close">&times;</button>
+            </div>
+
+            <!-- Timeframe Tabs -->
+            <div class="symbol-modal-timeframes">
+                <div class="timeframe-tab" data-timeframe="M5">M5</div>
+                <div class="timeframe-tab" data-timeframe="M15">M15</div>
+                <div class="timeframe-tab" data-timeframe="M30">M30</div>
+                <div class="timeframe-tab active" data-timeframe="H1">H1</div>
+                <div class="timeframe-tab" data-timeframe="H4">H4</div>
+                <div class="timeframe-tab" data-timeframe="D1">D1</div>
+                <div class="timeframe-tab" data-timeframe="W1">W1</div>
+            </div>
+
+            <!-- Indicator Toggles -->
+            <div class="indicator-toggles">
+                <button class="indicator-toggle active" data-indicator="supportResistance" onclick="toggleIndicator('supportResistance')" title="Support/Resistance Levels">
+                    <span class="toggle-icon">📊</span>
+                    <span class="toggle-label">S/R</span>
+                </button>
+                <button class="indicator-toggle active" data-indicator="bollingerBands" onclick="toggleIndicator('bollingerBands')" title="Bollinger Bands">
+                    <span class="toggle-icon">📈</span>
+                    <span class="toggle-label">BB</span>
+                </button>
+                <button class="indicator-toggle active" data-indicator="trendProjection" onclick="toggleIndicator('trendProjection')" title="Trend Projection">
+                    <span class="toggle-icon">🎯</span>
+                    <span class="toggle-label">Trend</span>
+                </button>
+            </div>
+
+            <!-- Content -->
+            <div class="symbol-modal-content">
+                <!-- Chart Section -->
+                <div class="symbol-modal-chart">
+                    <h3 class="symbol-modal-section-title">Chart</h3>
+                    <div id="symbol-chart-container" style="height: 400px; width: 100%;"></div>
+                </div>
+
+                <!-- Sidebar (visible in fullscreen mode) -->
+                <div class="symbol-modal-sidebar">
+                    <!-- Indicators Section -->
+                    <div class="symbol-modal-indicators">
+                        <h3 class="symbol-modal-section-title">Indikatoren</h3>
+                        <div class="loading">Lade Indikatoren...</div>
+                    </div>
+
+                    <!-- Signals Section -->
+                    <div class="symbol-modal-signals">
+                        <h3 class="symbol-modal-section-title">Aktive Signale</h3>
+                        <div class="loading">Lade Signale...</div>
+                    </div>
+
+                    <!-- Open Trades Section -->
+                    <div class="symbol-modal-trades">
+                        <h3 class="symbol-modal-section-title">Offene Trades</h3>
+                        <div class="loading">Lade offene Trades...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Symbol Modal CSS (Inline) -->
+    <style>
+/**
+ * Symbol Modal Styles
+ *
+ * Styling for the symbol detail modal with responsive layout,
+ * timeframe tabs, indicators, signals, and trades display.
+ */
+
+/* Modal Overlay */
+#symbol-modal {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.85);
+    z-index: 10000;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    overflow-y: auto;
+}
+
+/* Modal Container */
+.symbol-modal-container {
+    background: linear-gradient(135deg, #1e1e1e 0%, #2d2d2d 100%);
+    border-radius: 16px;
+    max-width: 1200px;
+    width: 100%;
+    max-height: 90vh;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    display: flex;
+    flex-direction: column;
+    animation: modalSlideIn 0.3s ease-out;
+}
+
+@keyframes modalSlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-30px) scale(0.95);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+/* Modal Header */
+.symbol-modal-header {
+    background: linear-gradient(135deg, #2a2a2a 0%, #1a1a1a 100%);
+    padding: 24px 30px;
+    border-bottom: 2px solid #3a3a3a;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    position: relative;
+}
+
+.symbol-modal-header-left {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.symbol-modal-header-symbol {
+    font-size: 28px;
+    font-weight: 700;
+    color: #fff;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.symbol-modal-header-price {
+    display: flex;
+    gap: 20px;
+    font-size: 16px;
+    color: #bbb;
+}
+
+.bid-price {
+    color: #f44336;
+    font-weight: 600;
+}
+
+.ask-price {
+    color: #4CAF50;
+    font-weight: 600;
+}
+
+.symbol-modal-header-status {
+    display: flex;
+    align-items: center;
+}
+
+.status-active {
+    color: #4CAF50;
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.status-inactive {
+    color: #f44336;
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.symbol-modal-close {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    background: transparent;
+    border: none;
+    color: #999;
+    font-size: 32px;
+    cursor: pointer;
+    padding: 0;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    transition: all 0.2s ease;
+}
+
+.symbol-modal-close:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+    transform: scale(1.1);
+}
+
+.symbol-modal-fullscreen {
+    position: absolute;
+    top: 20px;
+    right: 70px;
+    background: transparent;
+    border: none;
+    color: #999;
+    font-size: 28px;
+    cursor: pointer;
+    padding: 0;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    transition: all 0.2s ease;
+}
+
+.symbol-modal-fullscreen:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+    transform: scale(1.1);
+}
+
+/* Fullscreen mode styles */
+#symbol-modal.fullscreen {
+    z-index: 10000;
+}
+
+#symbol-modal.fullscreen .symbol-modal-container {
+    max-width: 100%;
+    width: 100vw;
+    height: 100vh;
+    margin: 0;
+    border-radius: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Compact header in fullscreen - combine header and timeframes in one row */
+#symbol-modal.fullscreen .symbol-modal-header {
+    padding: 8px 15px;
+    min-height: unset;
+}
+
+#symbol-modal.fullscreen .symbol-modal-header-symbol {
+    font-size: 18px;
+}
+
+#symbol-modal.fullscreen .symbol-modal-header-price {
+    font-size: 13px;
+    gap: 12px;
+}
+
+#symbol-modal.fullscreen .symbol-modal-header-status {
+    font-size: 13px;
+}
+
+#symbol-modal.fullscreen .symbol-modal-header-left {
+    flex-direction: row;
+    align-items: center;
+    gap: 15px;
+}
+
+/* Compact timeframes in fullscreen */
+#symbol-modal.fullscreen .symbol-modal-timeframes {
+    padding: 6px 15px;
+}
+
+#symbol-modal.fullscreen .timeframe-tab {
+    padding: 6px 12px;
+    font-size: 13px;
+}
+
+/* Position fullscreen/close buttons closer */
+#symbol-modal.fullscreen .symbol-modal-fullscreen {
+    top: 8px;
+    right: 50px;
+    width: 32px;
+    height: 32px;
+    font-size: 22px;
+}
+
+#symbol-modal.fullscreen .symbol-modal-close {
+    top: 8px;
+    right: 10px;
+    width: 32px;
+    height: 32px;
+    font-size: 26px;
+}
+
+#symbol-modal.fullscreen .symbol-modal-content {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 350px;
+    padding: 0;
+    gap: 0;
+    overflow: hidden;
+    min-height: 0;
+}
+
+#symbol-modal.fullscreen .symbol-modal-chart {
+    grid-column: 1;
+    min-height: 0;
+    padding: 5px 10px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+#symbol-modal.fullscreen .symbol-modal-chart .symbol-modal-section-title {
+    margin: 0 0 5px 0;
+    padding: 0 0 5px 0;
+    font-size: 14px;
+    flex-shrink: 0;
+}
+
+#symbol-modal.fullscreen #symbol-chart-container {
+    flex: 1;
+    height: 100% !important;
+    min-height: 0;
+}
+
+/* Right sidebar for indicators/signals/trades in fullscreen */
+#symbol-modal.fullscreen .symbol-modal-sidebar {
+    grid-column: 2;
+    background: #1a1a1a;
+    border-left: 2px solid #3a3a3a;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    padding: 20px;
+}
+
+/* Arrange sections vertically in sidebar */
+#symbol-modal.fullscreen .symbol-modal-indicators,
+#symbol-modal.fullscreen .symbol-modal-signals,
+#symbol-modal.fullscreen .symbol-modal-trades {
+    position: static;
+    margin: 0;
+    flex: 0 0 auto;
+    max-height: none;
+}
+
+/* Timeframe Tabs */
+.symbol-modal-timeframes {
+    background: #2a2a2a;
+    padding: 16px 30px;
+    border-bottom: 1px solid #3a3a3a;
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+}
+
+/* Indicator Toggles */
+.indicator-toggles {
+    background: #252525;
+    padding: 12px 30px;
+    border-bottom: 1px solid #3a3a3a;
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.indicator-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    background: #1e1e1e;
+    border: 2px solid #3a3a3a;
+    border-radius: 8px;
+    color: #888;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+.indicator-toggle:hover {
+    background: #2a2a2a;
+    border-color: #4a4a4a;
+    transform: translateY(-1px);
+}
+
+.indicator-toggle.active {
+    background: linear-gradient(135deg, #2196F3 0%, #1976D2 100%);
+    border-color: #2196F3;
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(33, 150, 243, 0.3);
+}
+
+.indicator-toggle.active:hover {
+    background: linear-gradient(135deg, #1E88E5 0%, #1565C0 100%);
+    border-color: #1E88E5;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(33, 150, 243, 0.4);
+}
+
+.toggle-icon {
+    font-size: 16px;
+    line-height: 1;
+}
+
+.toggle-label {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+/* Compact toggles in fullscreen */
+#symbol-modal.fullscreen .indicator-toggles {
+    padding: 8px 15px;
+}
+
+#symbol-modal.fullscreen .indicator-toggle {
+    padding: 6px 12px;
+    font-size: 12px;
+}
+
+.timeframe-tab {
+    padding: 10px 20px;
+    background: #1e1e1e;
+    border: 2px solid #3a3a3a;
+    border-radius: 8px;
+    color: #bbb;
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+    min-width: 60px;
+    text-align: center;
+}
+
+.timeframe-tab:hover {
+    background: #2d2d2d;
+    border-color: #4a4a4a;
+    color: #fff;
+}
+
+.timeframe-tab.active {
+    background: linear-gradient(135deg, #2196F3 0%, #1976D2 100%);
+    border-color: #2196F3;
+    color: #fff;
+    box-shadow: 0 4px 12px rgba(33, 150, 243, 0.4);
+}
+
+/* Modal Content */
+.symbol-modal-content {
+    padding: 30px;
+    overflow-y: auto;
+    flex: 1;
+}
+
+/* Sidebar - hidden by default, shown in fullscreen */
+.symbol-modal-sidebar {
+    display: none;
+}
+
+/* Section Titles */
+.symbol-modal-section-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: #fff;
+    margin: 0 0 16px 0;
+    padding-bottom: 10px;
+    border-bottom: 2px solid #3a3a3a;
+}
+
+/* Indicators Section */
+.symbol-modal-indicators {
+    margin-bottom: 30px;
+}
+
+.indicator-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+}
+
+.indicator-card {
+    background: linear-gradient(135deg, #2a2a2a 0%, #1e1e1e 100%);
+    border: 1px solid #3a3a3a;
+    border-radius: 12px;
+    padding: 20px;
+    text-align: center;
+    transition: all 0.2s ease;
+}
+
+.indicator-card:hover {
+    border-color: #4a4a4a;
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+}
+
+.indicator-label {
+    font-size: 12px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 8px;
+}
+
+.indicator-value {
+    font-size: 24px;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 8px;
+}
+
+.indicator-value.rsi-overbought {
+    color: #f44336;
+}
+
+.indicator-value.rsi-oversold {
+    color: #4CAF50;
+}
+
+.indicator-value.rsi-neutral {
+    color: #FFC107;
+}
+
+.indicator-value.trend-buy {
+    color: #4CAF50;
+}
+
+.indicator-value.trend-sell {
+    color: #f44336;
+}
+
+.indicator-value.trend-neutral {
+    color: #999;
+}
+
+.indicator-interpretation {
+    font-size: 12px;
+    color: #bbb;
+}
+
+/* Signals Section */
+.symbol-modal-signals {
+    margin-bottom: 30px;
+}
+
+.signals-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.signal-card {
+    background: linear-gradient(135deg, #2a2a2a 0%, #1e1e1e 100%);
+    border: 2px solid #3a3a3a;
+    border-radius: 12px;
+    padding: 16px;
+    transition: all 0.2s ease;
+}
+
+.signal-card:hover {
+    border-color: #4a4a4a;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+}
+
+.signal-card.signal-buy {
+    border-left: 4px solid #4CAF50;
+}
+
+.signal-card.signal-sell {
+    border-left: 4px solid #f44336;
+}
+
+.signal-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.signal-type {
+    font-weight: 700;
+    font-size: 16px;
+    padding: 4px 12px;
+    border-radius: 6px;
+}
+
+.signal-card.signal-buy .signal-type {
+    background: rgba(76, 175, 80, 0.2);
+    color: #4CAF50;
+}
+
+.signal-card.signal-sell .signal-type {
+    background: rgba(244, 67, 54, 0.2);
+    color: #f44336;
+}
+
+.signal-confidence {
+    font-weight: 700;
+    font-size: 16px;
+    color: #2196F3;
+}
+
+.signal-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.signal-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 14px;
+}
+
+.signal-label {
+    color: #888;
+    font-weight: 600;
+}
+
+.signal-value {
+    color: #fff;
+    font-weight: 600;
+}
+
+.signal-card-footer {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid #3a3a3a;
+}
+
+.signal-card-footer small {
+    color: #888;
+    font-size: 12px;
+}
+
+/* Trades Section */
+.symbol-modal-trades {
+    margin-bottom: 30px;
+}
+
+.trades-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.trade-card {
+    background: linear-gradient(135deg, #2a2a2a 0%, #1e1e1e 100%);
+    border: 2px solid #3a3a3a;
+    border-radius: 12px;
+    padding: 16px;
+    transition: all 0.2s ease;
+}
+
+.trade-card:hover {
+    border-color: #4a4a4a;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+}
+
+.trade-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.trade-direction {
+    font-weight: 700;
+    font-size: 16px;
+    padding: 4px 12px;
+    border-radius: 6px;
+}
+
+.trade-direction.trade-buy {
+    background: rgba(76, 175, 80, 0.2);
+    color: #4CAF50;
+}
+
+.trade-direction.trade-sell {
+    background: rgba(244, 67, 54, 0.2);
+    color: #f44336;
+}
+
+.trade-pnl {
+    font-weight: 700;
+    font-size: 18px;
+}
+
+.trade-pnl.profit {
+    color: #4CAF50;
+}
+
+.trade-pnl.loss {
+    color: #f44336;
+}
+
+.trade-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.trade-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 14px;
+}
+
+.trade-label {
+    color: #888;
+    font-weight: 600;
+}
+
+.trade-value {
+    color: #fff;
+    font-weight: 600;
+}
+
+/* Loading, No Data, Error States */
+.loading,
+.no-data,
+.error {
+    padding: 40px;
+    text-align: center;
+    color: #888;
+    font-size: 14px;
+}
+
+.error {
+    color: #f44336;
+}
+
+/* Scrollbar Styling */
+.symbol-modal-content::-webkit-scrollbar,
+.symbol-modal-timeframes::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+.symbol-modal-content::-webkit-scrollbar-track,
+.symbol-modal-timeframes::-webkit-scrollbar-track {
+    background: #1e1e1e;
+}
+
+.symbol-modal-content::-webkit-scrollbar-thumb,
+.symbol-modal-timeframes::-webkit-scrollbar-thumb {
+    background: #3a3a3a;
+    border-radius: 4px;
+}
+
+.symbol-modal-content::-webkit-scrollbar-thumb:hover,
+.symbol-modal-timeframes::-webkit-scrollbar-thumb:hover {
+    background: #4a4a4a;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .symbol-modal-container {
+        max-width: 100%;
+        max-height: 100vh;
+        border-radius: 0;
+    }
+
+    .symbol-modal-header {
+        padding: 20px;
+    }
+
+    .symbol-modal-header-symbol {
+        font-size: 22px;
+    }
+
+    .symbol-modal-timeframes {
+        padding: 12px 20px;
+    }
+
+    .symbol-modal-content {
+        padding: 20px;
+    }
+
+    .indicator-grid {
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 12px;
+    }
+}
+
+/* Clickable Symbol Names */
+.symbol-clickable {
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.symbol-clickable:hover {
+    color: #2196F3 !important;
+    text-decoration: underline;
+}
+
+    </style>
+
+
     <!-- Risk Profile Management Script -->
     <script>
         // Risk Profile Management for Auto-Trading
         // This script handles the 3-button risk profile selector (MODERATE/NORMAL/AGGRESSIVE)
         (function() {
             'use strict';
-            
+
             const apiBase = window.location.protocol + '//' + window.location.hostname + ':9900';
-            
+
+            // Load current risk profile on page load
+            async function loadCurrentRiskProfile() {
+                try {
+                    const response = await fetch(apiBase + '/api/auto-trade/status');
+                    const data = await response.json();
+
+                    if (response.ok && data.risk_profile) {
+                        const currentProfile = data.risk_profile.toLowerCase();
+                        console.log('📊 Current risk profile:', currentProfile);
+
+                        // Update button states to match current profile
+                        const riskProfileBtns = document.querySelectorAll('.risk-profile-btn');
+                        riskProfileBtns.forEach(btn => {
+                            if (btn.dataset.profile === currentProfile) {
+                                btn.classList.add('active');
+                                btn.style.border = '2px solid #4CAF50';
+                                btn.style.background = '#1a4a1a';
+                                btn.style.color = '#4CAF50';
+                                btn.style.fontWeight = '600';
+                            } else {
+                                btn.classList.remove('active');
+                                btn.style.border = '2px solid #555';
+                                btn.style.background = '#2a2a2a';
+                                btn.style.color = '#888';
+                                btn.style.fontWeight = 'normal';
+                            }
+                        });
+                    }
+                } catch (error) {
+                    console.error('Error loading current risk profile:', error);
+                }
+            }
+
             // Risk Profile Button Click Handler
             document.addEventListener('DOMContentLoaded', function() {
                 const riskProfileBtns = document.querySelectorAll('.risk-profile-btn');
-                
+
+                // Load current profile on page load
+                loadCurrentRiskProfile();
+
                 riskProfileBtns.forEach(btn => {
                     btn.addEventListener('click', async function() {
                         const profile = this.dataset.profile;
-                        
+
                         console.log('🎯 Risk Profile button clicked:', profile);
-                        
+
                         try {
                             const response = await fetch(apiBase + '/api/auto-trade/set-risk-profile', {
                                 method: 'POST',
@@ -4549,9 +6886,9 @@
                                 },
                                 body: JSON.stringify({ risk_profile: profile })
                             });
-                            
+
                             const data = await response.json();
-                            
+
                             if (response.ok) {
                                 // Update button styles
                                 riskProfileBtns.forEach(b => {
@@ -4569,19 +6906,19 @@
                                         b.style.fontWeight = 'normal';
                                     }
                                 });
-                                
+
                                 // Update global min_confidence
                                 window.autoTradeMinConfidence = data.min_confidence;
-                                
+
                                 console.log('✅ Risk Profile set to:', profile, '| Min Confidence:', data.min_confidence + '%');
-                                
+
                                 // Show success feedback
                                 const feedbackMsg = document.createElement('div');
                                 feedbackMsg.textContent = `✅ Risk Profile: ${profile.toUpperCase()} (${data.min_confidence}% min confidence)`;
                                 feedbackMsg.style.cssText = 'position: fixed; top: 20px; right: 20px; background: #1a4a1a; color: #4CAF50; padding: 15px 25px; border-radius: 5px; border: 2px solid #4CAF50; z-index: 10000; font-weight: 600;';
                                 document.body.appendChild(feedbackMsg);
                                 setTimeout(() => feedbackMsg.remove(), 3000);
-                                
+
                             } else {
                                 console.error('❌ Failed to set risk profile:', data);
                                 alert('Error: ' + data.message);
@@ -4596,5 +6933,255 @@
         })();
     </script>
 
+    <!-- Spread Configuration Management Script -->
+    <script>
+        (function() {
+            console.log('⚙️ Spread Configuration Management script loaded');
+
+            // Use current page's protocol and hostname with WebUI port (9905)
+            const apiBase = window.location.protocol + '//' + window.location.hostname + ':9905';
+
+            let spreadConfigs = [];
+            let currentFilter = '';
+
+            // Load spread configurations from API
+            async function loadSpreadConfigs() {
+                try {
+                    console.log('📡 Fetching spread configurations...');
+                    const response = await fetch(apiBase + '/api/spread-config');
+                    const data = await response.json();
+
+                    if (data.status === 'success') {
+                        spreadConfigs = data.configs;
+                        renderSpreadConfigs();
+                        console.log(`✅ Loaded ${data.count} spread configurations`);
+                    } else {
+                        console.error('❌ Failed to load spread configs:', data.message);
+                        document.getElementById('spread-config-list').innerHTML =
+                            '<tr><td colspan="8" style="text-align: center; padding: 20px; color: #f44336;">Error loading spread configurations</td></tr>';
+                    }
+                } catch (error) {
+                    console.error('❌ Error fetching spread configs:', error);
+                    document.getElementById('spread-config-list').innerHTML =
+                        '<tr><td colspan="8" style="text-align: center; padding: 20px; color: #f44336;">Failed to load spread configurations</td></tr>';
+                }
+            }
+
+            // Render spread configurations table
+            function renderSpreadConfigs() {
+                const filteredConfigs = currentFilter
+                    ? spreadConfigs.filter(c => c.asset_type === currentFilter)
+                    : spreadConfigs;
+
+                if (filteredConfigs.length === 0) {
+                    document.getElementById('spread-config-list').innerHTML =
+                        '<tr><td colspan="8" style="text-align: center; padding: 20px; color: #888;">No spread configurations found</td></tr>';
+                    return;
+                }
+
+                // Get current risk profile for calculation
+                let riskProfile = 'normal';
+                const activeProfileBtn = document.querySelector('.risk-profile-btn.active');
+                if (activeProfileBtn) {
+                    riskProfile = activeProfileBtn.dataset.profile || 'normal';
+                }
+
+                const riskMultipliers = {
+                    'moderate': 0.8,
+                    'normal': 1.2,
+                    'aggressive': 2.0
+                };
+                const profileMultiplier = riskMultipliers[riskProfile] || 1.2;
+
+                const html = filteredConfigs.map(config => {
+                    // Calculate effective max spread based on risk profile
+                    let calculatedMax = config.typical_spread * config.max_spread_multiplier * profileMultiplier;
+                    if (config.absolute_max_spread) {
+                        calculatedMax = Math.min(calculatedMax, config.absolute_max_spread * profileMultiplier);
+                    }
+
+                    return `
+                        <tr style="border-bottom: 1px solid #333;">
+                            <td style="padding: 10px; font-weight: bold;">${config.symbol}</td>
+                            <td style="padding: 10px;">
+                                <span style="display: inline-block; padding: 3px 8px; background: ${getAssetTypeColor(config.asset_type)}; border-radius: 3px; font-size: 11px;">
+                                    ${config.asset_type || 'N/A'}
+                                </span>
+                            </td>
+                            <td style="padding: 10px; text-align: right; font-family: monospace;">${formatSpread(config.typical_spread, config.asset_type)}</td>
+                            <td style="padding: 10px; text-align: right; font-family: monospace;">${config.max_spread_multiplier.toFixed(1)}x</td>
+                            <td style="padding: 10px; text-align: right; font-family: monospace;">${config.absolute_max_spread ? formatSpread(config.absolute_max_spread, config.asset_type) : '—'}</td>
+                            <td style="padding: 10px; text-align: right; font-family: monospace; color: #4CAF50; font-weight: bold;">
+                                ${formatSpread(calculatedMax, config.asset_type)}
+                                <small style="color: #888; display: block; font-size: 10px;">(${riskProfile})</small>
+                            </td>
+                            <td style="padding: 10px; text-align: center;">
+                                <span style="display: inline-block; padding: 5px 10px; background: ${config.enabled ? '#1a4a1a' : '#4a1a1a'}; color: ${config.enabled ? '#4CAF50' : '#f44336'}; border-radius: 5px; font-size: 12px; font-weight: bold;">
+                                    ${config.enabled ? '✓ ON' : '✗ OFF'}
+                                </span>
+                            </td>
+                            <td style="padding: 10px; text-align: center;">
+                                <button onclick="editSpreadConfig('${config.symbol}')" style="padding: 5px 15px; background: #2196F3; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 12px;">
+                                    ✏️ Edit
+                                </button>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+
+                document.getElementById('spread-config-list').innerHTML = html;
+            }
+
+            // Format spread value based on asset type
+            function formatSpread(value, assetType) {
+                if (!value) return '—';
+
+                if (assetType === 'FOREX' && value < 0.01) {
+                    // Show as pips for forex
+                    return (value * 10000).toFixed(1) + ' pips';
+                } else if (assetType === 'FOREX') {
+                    return (value * 100).toFixed(4) + '%';
+                } else if (assetType === 'CRYPTO') {
+                    return '$' + value.toFixed(2);
+                } else if (assetType === 'INDEX') {
+                    return value.toFixed(2) + ' pts';
+                } else if (assetType === 'COMMODITY') {
+                    return '$' + value.toFixed(5);
+                } else {
+                    return value.toFixed(5);
+                }
+            }
+
+            // Get color for asset type badge
+            function getAssetTypeColor(type) {
+                const colors = {
+                    'FOREX': '#1976D2',
+                    'COMMODITY': '#F57C00',
+                    'INDEX': '#7B1FA2',
+                    'CRYPTO': '#C62828'
+                };
+                return colors[type] || '#555';
+            }
+
+            // Edit spread configuration
+            window.editSpreadConfig = function(symbol) {
+                const config = spreadConfigs.find(c => c.symbol === symbol);
+                if (!config) {
+                    console.error('Config not found for symbol:', symbol);
+                    return;
+                }
+
+                console.log('✏️ Editing spread config for', symbol);
+
+                // Populate form
+                document.getElementById('edit-symbol').value = config.symbol;
+                document.getElementById('display-symbol').value = config.symbol;
+                document.getElementById('edit-typical-spread').value = config.typical_spread;
+                document.getElementById('edit-max-multiplier').value = config.max_spread_multiplier;
+                document.getElementById('edit-absolute-max').value = config.absolute_max_spread || '';
+                document.getElementById('edit-enabled').checked = config.enabled;
+                document.getElementById('edit-notes').value = config.notes || '';
+
+                // Show modal
+                document.getElementById('spread-config-modal').style.display = 'block';
+            };
+
+            // Close modal
+            function closeModal() {
+                document.getElementById('spread-config-modal').style.display = 'none';
+            }
+
+            // Save spread configuration
+            async function saveSpreadConfig(event) {
+                event.preventDefault();
+
+                const symbol = document.getElementById('edit-symbol').value;
+                const data = {
+                    typical_spread: parseFloat(document.getElementById('edit-typical-spread').value),
+                    max_spread_multiplier: parseFloat(document.getElementById('edit-max-multiplier').value),
+                    absolute_max_spread: document.getElementById('edit-absolute-max').value
+                        ? parseFloat(document.getElementById('edit-absolute-max').value)
+                        : null,
+                    enabled: document.getElementById('edit-enabled').checked,
+                    notes: document.getElementById('edit-notes').value
+                };
+
+                console.log('💾 Saving spread config for', symbol, data);
+
+                try {
+                    const response = await fetch(apiBase + '/api/spread-config/' + symbol, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(data)
+                    });
+
+                    const result = await response.json();
+
+                    if (response.ok && result.status === 'success') {
+                        console.log('✅ Spread config saved successfully');
+                        alert('Spread configuration updated successfully!');
+                        closeModal();
+                        loadSpreadConfigs();  // Reload data
+                    } else {
+                        console.error('❌ Failed to save spread config:', result.message);
+                        alert('Failed to save: ' + result.message);
+                    }
+                } catch (error) {
+                    console.error('❌ Error saving spread config:', error);
+                    alert('Error saving spread configuration');
+                }
+            }
+
+            // Event listeners
+            document.addEventListener('DOMContentLoaded', function() {
+                console.log('⚙️ Initializing Spread Configuration Management...');
+
+                // Load configurations on page load
+                loadSpreadConfigs();
+
+                // Refresh button
+                document.getElementById('refresh-spread-config-btn').addEventListener('click', loadSpreadConfigs);
+
+                // Filter dropdown
+                document.getElementById('spread-filter-asset-type').addEventListener('change', function() {
+                    currentFilter = this.value;
+                    renderSpreadConfigs();
+                });
+
+                // Modal close button
+                document.getElementById('close-spread-modal').addEventListener('click', closeModal);
+                document.getElementById('cancel-spread-edit').addEventListener('click', closeModal);
+
+                // Form submit
+                document.getElementById('spread-config-form').addEventListener('submit', saveSpreadConfig);
+
+                // Close modal when clicking outside
+                window.addEventListener('click', function(event) {
+                    const modal = document.getElementById('spread-config-modal');
+                    if (event.target === modal) {
+                        closeModal();
+                    }
+                });
+            });
+        })();
+    </script>
+
+    <!-- Initialize Symbol Modal after all HTML is loaded -->
+    <script>
+        console.log('🔧🔧🔧 Initializing SymbolModal at end of page...');
+        console.log('SymbolModal object:', typeof SymbolModal);
+        console.log('Modal element exists:', document.getElementById('symbol-modal') !== null);
+
+        if (typeof SymbolModal !== 'undefined') {
+            SymbolModal.init();
+            console.log('✅✅✅ SymbolModal initialized successfully!');
+        } else {
+            console.error('❌❌❌ SymbolModal is not defined!');
+        }
+    </script>
+
 </body>
 </html>
+<!-- Build timestamp: Sat Oct 18 11:09:04 CEST 2025 -->

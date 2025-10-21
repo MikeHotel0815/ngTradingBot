@@ -333,7 +333,8 @@ class SmartTrailingStop:
                 'ticket': trade.ticket,
                 'symbol': trade.symbol,
                 'sl': float(new_sl),
-                'tp': float(new_tp) if new_tp else float(trade.tp)
+                'tp': float(new_tp) if new_tp else float(trade.tp),
+                'trailing_stop': True  # ✅ Mark this as trailing stop modification
             }
 
             cmd = Command(

@@ -140,7 +140,6 @@ class PositionSizer:
 
             # Get symbol info
             broker_symbol = db.query(BrokerSymbol).filter_by(
-                account_id=account_id,
                 symbol=symbol
             ).first()
 

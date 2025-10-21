@@ -77,6 +77,7 @@ class BrokerSymbol(Base):
     trade_mode = Column(Integer)  # 0=disabled, 1=longonly, 2=shortonly, 4=closeonly, 7=full
     digits = Column(Integer)  # Price digits
     point_value = Column(Numeric(20, 10))  # Point size
+    contract_size = Column(Numeric(20, 2))  # Contract size (e.g., 100000 for forex, 5000 for XAGUSD)
 
     last_updated = Column(DateTime, default=datetime.utcnow)
 
@@ -367,6 +368,12 @@ class TradingSignal(Base):
     indicators_used = Column(JSONB)  # {'RSI': 32, 'MACD': {...}, 'EMA_20': 1.0850}
     patterns_detected = Column(JSONB)  # ['Bullish Engulfing', 'Above 200 EMA']
     reasons = Column(JSONB)  # ['RSI Oversold Bounce', 'MACD Bullish Crossover']
+
+    # ✅ Continuous Signal Validation - stores indicator snapshot for validation
+    indicator_snapshot = Column(JSONB)  # Snapshot of all indicators at signal creation
+    last_validated = Column(DateTime)  # Timestamp of last validation check
+    is_valid = Column(Boolean, default=True)  # False if ANY signal condition no longer holds
+
     status = Column(String(20), default='active')  # active, expired, executed, ignored
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)  # ✅ NEW: Track signal updates
@@ -1242,3 +1249,73 @@ class SymbolTradingConfig(Base):
                 return True, f"regime_non_preferred_{market_regime}_vs_{self.preferred_regime}"
 
         return True, "approved"
+
+
+class SymbolSpreadConfig(Base):
+    """Per-symbol spread configuration for auto-trading spread validation"""
+    __tablename__ = 'symbol_spread_config'
+
+    id = Column(Integer, primary_key=True)
+    symbol = Column(String(20), unique=True, nullable=False, index=True)
+
+    # Spread limits
+    typical_spread = Column(Numeric(10, 5), nullable=False)  # Normal expected spread
+    max_spread_multiplier = Column(Numeric(5, 2), default=3.0)  # Max = typical * multiplier
+    absolute_max_spread = Column(Numeric(10, 5))  # Hard limit regardless of multiplier
+
+    # Session-specific spreads (optional)
+    asian_session_spread = Column(Numeric(10, 5))  # Wider spreads during Asian hours
+    weekend_spread = Column(Numeric(10, 5))  # For crypto/indices 24/7
+
+    # Configuration
+    enabled = Column(Boolean, default=True, nullable=False, index=True)
+    use_dynamic_limits = Column(Boolean, default=True)  # Use multiplier vs absolute
+
+    # Metadata
+    asset_type = Column(String(20))  # FOREX, COMMODITY, INDEX, CRYPTO
+    notes = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def get_max_spread(self, risk_profile='normal', is_asian_session=False, is_weekend=False):
+        """
+        Calculate maximum allowed spread for this symbol
+
+        Args:
+            risk_profile: 'moderate', 'normal', or 'aggressive'
+            is_asian_session: Whether it's currently Asian trading session
+            is_weekend: Whether it's weekend (for 24/7 assets)
+
+        Returns:
+            float: Maximum allowed spread
+        """
+        # Determine base spread based on session
+        if is_weekend and self.weekend_spread:
+            base = float(self.weekend_spread)
+        elif is_asian_session and self.asian_session_spread:
+            base = float(self.asian_session_spread)
+        else:
+            base = float(self.typical_spread)
+
+        # Apply risk profile multiplier
+        risk_multipliers = {
+            'moderate': 0.8,   # More conservative
+            'normal': 1.2,     # Slightly tolerant
+            'aggressive': 2.0  # More tolerant
+        }
+        profile_multiplier = risk_multipliers.get(risk_profile, 1.2)
+
+        # Calculate max spread
+        if self.use_dynamic_limits:
+            max_spread = base * float(self.max_spread_multiplier) * profile_multiplier
+        else:
+            max_spread = base * profile_multiplier
+
+        # Apply absolute limit if set
+        if self.absolute_max_spread:
+            max_spread = min(max_spread, float(self.absolute_max_spread) * profile_multiplier)
+
+        return max_spread
+
+    def __repr__(self):
+        return f"<SymbolSpreadConfig(symbol={self.symbol}, typical={self.typical_spread}, max_mult={self.max_spread_multiplier})>"

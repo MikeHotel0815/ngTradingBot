@@ -65,11 +65,11 @@ class SymbolConfig:
         },
         'METALS': {
             'symbols': ['XAUUSD', 'XAGUSD', 'XPTUSD', 'XPDUSD'],
-            'atr_tp_multiplier': 2.2,
-            'atr_sl_multiplier': 1.2,
+            'atr_tp_multiplier': 0.8,      # Reduced for 0.01 lot (~25 USD max profit)
+            'atr_sl_multiplier': 0.5,      # Reduced for 0.01 lot (~15 USD max loss)
             'trailing_multiplier': 0.8,
             'max_tp_pct': 2.0,             # Gold: max 2%
-            'min_sl_pct': 0.5,             # Min 0.5%
+            'min_sl_pct': 0.3,             # Reduced min stop for small accounts
             'fallback_atr_pct': 0.008,     # 0.8%
         },
         'INDICES': {
@@ -696,8 +696,10 @@ class SmartTPSLCalculator:
         self, signal_type: str, entry: float, atr: float, broker_specs: Dict
     ) -> Dict:
         """Fallback to simple ATR-based calculation with asset-specific multipliers"""
-        tp_multiplier = self.asset_config.get('atr_tp_multiplier', 2.5)
-        sl_multiplier = self.asset_config.get('atr_sl_multiplier', 1.5)
+        # Reduced multipliers for small account sizes (0.01 lot trades)
+        # These values result in ~15-25 USD risk per trade
+        tp_multiplier = self.asset_config.get('atr_tp_multiplier', 0.8)
+        sl_multiplier = self.asset_config.get('atr_sl_multiplier', 0.5)
         
         if signal_type == 'BUY':
             tp = entry + (tp_multiplier * atr)
