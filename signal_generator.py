@@ -64,13 +64,15 @@ class SignalGenerator:
             # Aggregate signals
             signal = self._aggregate_signals(pattern_signals, indicator_signals)
 
-            # ✅ UPDATED: Minimum confidence threshold for signal generation (40%)
+            # ✅ UPDATED: Minimum confidence threshold for signal generation (35%)
             # Note: This is NOT the display/auto-trade threshold
             # - Trading Signals slider controls which signals are SHOWN in UI
             # - Auto-Trade slider controls which signals are AUTO-TRADED
             # This just ensures we don't generate completely weak signals
-            # LOWERED from 50% to 40% to match active symbol configs
-            MIN_GENERATION_CONFIDENCE = 40
+            # LOWERED from 40% to 35% based on parameter analysis (2025-10-21)
+            # - Allows signals with 35-40% to pass to Ensemble/MTF validation
+            # - Filter systems will boost quality signals to 45-50%+
+            MIN_GENERATION_CONFIDENCE = 35
 
             if signal and signal['confidence'] >= MIN_GENERATION_CONFIDENCE:
                 # ✅ NEW: Ensemble validation BEFORE multi-timeframe check
@@ -197,12 +199,13 @@ class SignalGenerator:
                 sell_signals.append(sig)
 
         # ✅ CONFIGURABLE: BUY signal consensus requirement
-        # NOTE: Adjust BUY_SIGNAL_ADVANTAGE based on backtesting results
+        # NOTE: Adjusted based on parameter analysis (2025-10-21)
         # - 0 = No bias (simple majority for both)
-        # - 1 = BUY needs 1 more confirming signal than SELL
-        # - 2 = BUY needs 2 more confirming signals than SELL (current)
-        # TODO: Monitor performance and adjust if BUY signals are being over-filtered
-        BUY_SIGNAL_ADVANTAGE = 2  # Default: 2 extra signals required for BUY
+        # - 1 = BUY needs 1 more confirming signal than SELL (CURRENT - more balanced)
+        # - 2 = BUY needs 2 more confirming signals than SELL (TOO RESTRICTIVE)
+        # CHANGED from 2 to 1 to allow more BUY signals while maintaining quality
+        # Multi-layer validation (Ensemble/MTF/Regime) provides additional filtering
+        BUY_SIGNAL_ADVANTAGE = 1  # More balanced: allows 1 BUY vs. 0 SELL
 
         buy_count = len(buy_signals)
         sell_count = len(sell_signals)
@@ -352,12 +355,14 @@ class SignalGenerator:
         confidence = pattern_score + indicator_score + strength_score
 
         # ✅ CONFIGURABLE: BUY signal confidence penalty
-        # NOTE: Adjust BUY_CONFIDENCE_PENALTY based on backtesting results
+        # NOTE: Adjusted based on parameter analysis (2025-10-21)
         # - 0.0 = No penalty (treat BUY and SELL equally)
-        # - 3.0 = Reduce BUY confidence by 3% (current)
-        # - 5.0 = Reduce BUY confidence by 5% (more conservative)
-        # TODO: Monitor BUY vs SELL performance and adjust if needed
-        BUY_CONFIDENCE_PENALTY = 3.0  # Default: -3% for BUY signals
+        # - 2.0 = Reduce BUY confidence by 2% (CURRENT - more balanced)
+        # - 3.0 = Reduce BUY confidence by 3% (TOO HARSH)
+        # - 5.0 = Reduce BUY confidence by 5% (way too conservative)
+        # CHANGED from 3.0 to 2.0 to reduce double-penalty on BUY signals
+        # (Already have BUY_SIGNAL_ADVANTAGE, don't need harsh penalty too)
+        BUY_CONFIDENCE_PENALTY = 2.0  # Reduced: -2% for BUY signals
 
         signal_type = signals[0]['type'] if signals else 'UNKNOWN'
         if signal_type == 'BUY' and BUY_CONFIDENCE_PENALTY > 0:
@@ -507,12 +512,13 @@ class SignalGenerator:
     def _save_signal(self, signal: Dict):
         """
         Save or update signal in database.
-        
+
         ✅ NEW LOGIC:
         - If signal exists with SAME direction → UPDATE (confidence, prices, indicators)
         - If signal exists with DIFFERENT direction → EXPIRE old + CREATE new
         - If no signal exists → CREATE new
         - If confidence drops below minimum → EXPIRE signal
+        - STORES indicator snapshot for continuous validation
 
         Args:
             signal: Signal dictionary
@@ -521,7 +527,10 @@ class SignalGenerator:
         try:
             from models import TradingSignal
             from datetime import datetime, timedelta
-            
+
+            # ✅ Capture indicator snapshot for continuous validation
+            indicator_snapshot = self._capture_indicator_snapshot(signal)
+
             # Check for existing active signal
             existing_signal = db.query(TradingSignal).filter_by(
                 account_id=self.account_id,
@@ -529,14 +538,14 @@ class SignalGenerator:
                 timeframe=self.timeframe,
                 status='active'
             ).first()
-            
+
             MIN_CONFIDENCE_THRESHOLD = 40  # Expire signals below this
-            
+
             # Case 1: Signal exists with SAME direction → UPDATE
             if existing_signal and existing_signal.signal_type == signal['signal_type']:
                 old_confidence = float(existing_signal.confidence)
                 new_confidence = float(signal['confidence'])
-                
+
                 # Check if confidence dropped below minimum
                 if new_confidence < MIN_CONFIDENCE_THRESHOLD:
                     existing_signal.status = 'expired'
@@ -546,8 +555,8 @@ class SignalGenerator:
                         f"{signal['signal_type']} - Confidence dropped to {new_confidence:.1f}% (min: {MIN_CONFIDENCE_THRESHOLD}%)"
                     )
                     return
-                
-                # Update existing signal
+
+                # Update existing signal (DO NOT update indicator_snapshot - keep original creation conditions)
                 existing_signal.confidence = new_confidence
                 existing_signal.entry_price = float(signal.get('entry_price', 0))
                 existing_signal.sl_price = float(signal.get('sl_price', 0))
@@ -556,19 +565,21 @@ class SignalGenerator:
                 existing_signal.patterns_detected = signal.get('patterns_detected', [])
                 existing_signal.reasons = signal.get('reasons', [])
                 existing_signal.updated_at = datetime.utcnow()
-                
+                existing_signal.last_validated = datetime.utcnow()
+                existing_signal.is_valid = True
+
                 db.commit()
-                
+
                 confidence_change = new_confidence - old_confidence
                 change_emoji = "📈" if confidence_change > 0 else "📉" if confidence_change < 0 else "➡️"
-                
+
                 logger.info(
                     f"🔄 Signal UPDATED [ID:{existing_signal.id}]: {self.symbol} {self.timeframe} "
                     f"{signal['signal_type']} | Confidence: {old_confidence:.1f}% → {new_confidence:.1f}% "
                     f"{change_emoji} ({confidence_change:+.1f}%)"
                 )
                 return
-            
+
             # Case 2: Signal exists with DIFFERENT direction → EXPIRE old + CREATE new
             elif existing_signal:
                 existing_signal.status = 'expired'
@@ -576,8 +587,8 @@ class SignalGenerator:
                     f"🔄 Signal direction changed: {existing_signal.signal_type} → {signal['signal_type']}, "
                     f"expiring old signal [ID:{existing_signal.id}]"
                 )
-            
-            # Case 3: Create new signal
+
+            # Case 3: Create new signal with indicator snapshot
             new_signal = TradingSignal(
                 account_id=self.account_id,
                 symbol=self.symbol,
@@ -590,18 +601,22 @@ class SignalGenerator:
                 indicators_used=signal.get('indicators_used', {}),
                 patterns_detected=signal.get('patterns_detected', []),
                 reasons=signal.get('reasons', []),
+                indicator_snapshot=indicator_snapshot,  # ✅ Store creation conditions
+                last_validated=datetime.utcnow(),
+                is_valid=True,
                 status='active',
                 created_at=datetime.utcnow(),
                 expires_at=datetime.utcnow() + timedelta(hours=24)
             )
-            
+
             db.add(new_signal)
             db.commit()
 
             logger.info(
                 f"✨ Signal CREATED [ID:{new_signal.id}]: "
                 f"{signal['signal_type']} {self.symbol} {self.timeframe} "
-                f"(confidence: {signal['confidence']:.1f}%, entry: {signal.get('entry_price', 0):.5f})"
+                f"(confidence: {signal['confidence']:.1f}%, entry: {signal.get('entry_price', 0):.5f}) "
+                f"with {len(indicator_snapshot.get('indicators', {}))} indicators snapshot"
             )
 
         except Exception as e:
@@ -609,6 +624,102 @@ class SignalGenerator:
             db.rollback()
         finally:
             db.close()
+
+    def _capture_indicator_snapshot(self, signal: Dict) -> Dict:
+        """
+        Capture current state of all indicators and patterns for validation
+
+        Args:
+            signal: Signal dictionary with indicators_used and patterns_detected
+
+        Returns:
+            Dict containing snapshot of all relevant indicator values
+        """
+        try:
+            snapshot = {
+                'timestamp': datetime.utcnow().isoformat(),
+                'signal_type': signal['signal_type'],
+                'indicators': {},
+                'patterns': signal.get('patterns_detected', []),
+                'price_levels': {}
+            }
+
+            # Capture indicator values
+            for indicator_name, value in signal.get('indicators_used', {}).items():
+                try:
+                    if indicator_name == 'RSI':
+                        rsi_data = self.indicators.calculate_rsi()
+                        snapshot['indicators']['RSI'] = {
+                            'value': rsi_data['value'],
+                            'overbought': rsi_data.get('overbought', 70),
+                            'oversold': rsi_data.get('oversold', 30)
+                        }
+                    elif indicator_name == 'MACD':
+                        macd_data = self.indicators.calculate_macd()
+                        snapshot['indicators']['MACD'] = {
+                            'macd': macd_data['macd'],
+                            'signal': macd_data['signal'],
+                            'histogram': macd_data['histogram']
+                        }
+                    elif indicator_name == 'BB':
+                        bb_data = self.indicators.calculate_bollinger_bands()
+                        snapshot['indicators']['BB'] = {
+                            'upper': bb_data['upper'],
+                            'middle': bb_data['middle'],
+                            'lower': bb_data['lower']
+                        }
+                    elif indicator_name == 'Stochastic':
+                        stoch_data = self.indicators.calculate_stochastic()
+                        snapshot['indicators']['Stochastic'] = {
+                            'k': stoch_data['k'],
+                            'd': stoch_data['d']
+                        }
+                    elif indicator_name == 'ADX':
+                        adx_data = self.indicators.calculate_adx()
+                        snapshot['indicators']['ADX'] = {
+                            'adx': adx_data['value'],
+                            'plus_di': adx_data.get('plus_di'),
+                            'minus_di': adx_data.get('minus_di')
+                        }
+                    elif indicator_name == 'ATR':
+                        atr_data = self.indicators.calculate_atr()
+                        snapshot['indicators']['ATR'] = {
+                            'value': atr_data['value']
+                        }
+                    elif indicator_name == 'EMA':
+                        ema_data = self.indicators.calculate_ema()
+                        snapshot['indicators']['EMA'] = ema_data
+                    elif indicator_name == 'OBV':
+                        obv_data = self.indicators.calculate_obv()
+                        snapshot['indicators']['OBV'] = {
+                            'value': obv_data['value'],
+                            'trend': obv_data.get('trend')
+                        }
+                except Exception as e:
+                    logger.warning(f"Failed to capture {indicator_name} snapshot: {e}")
+
+            # Capture current price for reference
+            from models import Tick
+            db = ScopedSession()
+            try:
+                latest_tick = db.query(Tick).filter_by(
+                    symbol=self.symbol
+                ).order_by(Tick.timestamp.desc()).first()
+
+                if latest_tick:
+                    snapshot['price_levels']['bid'] = float(latest_tick.bid)
+                    snapshot['price_levels']['ask'] = float(latest_tick.ask)
+            finally:
+                db.close()
+
+            return snapshot
+
+        except Exception as e:
+            logger.error(f"Error capturing indicator snapshot: {e}", exc_info=True)
+            return {
+                'timestamp': datetime.utcnow().isoformat(),
+                'error': str(e)
+            }
 
     def get_multi_timeframe_analysis(self) -> Dict:
         """
