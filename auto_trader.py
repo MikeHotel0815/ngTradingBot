@@ -421,7 +421,6 @@ class AutoTrader:
                 # Get broker symbol info for pip calculation
                 from models import BrokerSymbol
                 broker_symbol = db.query(BrokerSymbol).filter_by(
-                    account_id=account_id,
                     symbol=signal.symbol
                 ).first()
 
@@ -506,28 +505,12 @@ class AutoTrader:
 
             settings = self._load_settings(db)
 
-            # ✅ NEW: Check signal staleness FIRST (prevent trading on outdated signals)
-            signal_age_seconds = (datetime.utcnow() - signal.created_at).total_seconds()
-            MAX_SIGNAL_AGE_SECONDS = 300  # 5 minutes
+            # ✅ REMOVED: Age-based signal rejection - replaced by continuous validation
+            # Signal validator worker now continuously checks indicator conditions
+            # Signals are deleted immediately when conditions no longer hold
+            # This allows signals to be traded as long as they remain valid
 
-            if signal_age_seconds > MAX_SIGNAL_AGE_SECONDS:
-                logger.warning(
-                    f"⚠️ Signal #{signal.id} is STALE: {signal_age_seconds:.0f}s old "
-                    f"(max: {MAX_SIGNAL_AGE_SECONDS}s). Market conditions may have changed."
-                )
-                return {
-                    'execute': False,
-                    'reason': f'Signal too old ({signal_age_seconds:.0f}s > {MAX_SIGNAL_AGE_SECONDS}s)'
-                }
-
-            # Log warning if signal is getting old (>2 minutes)
-            if signal_age_seconds > 120:
-                logger.warning(
-                    f"⏰ Signal #{signal.id} aging: {signal_age_seconds:.0f}s old "
-                    f"({signal.symbol} {signal.timeframe} {signal.signal_type})"
-                )
-
-            # ✅ Check MARKET HOURS SECOND (prevent trading on closed markets)
+            # ✅ Check MARKET HOURS FIRST (prevent trading on closed markets)
             from market_hours import MarketHours
             if not MarketHours.is_market_open(signal.symbol):
                 session = MarketHours.get_trading_session(signal.symbol)
@@ -900,6 +883,26 @@ class AutoTrader:
             adjusted_sl = sl_price
             use_supertrend_sl = False
 
+            # ✅ Dynamic SuperTrend SL with maximum distance limits
+            # Define max allowed SL distance per symbol type (in %)
+            max_sl_distance_pct = {
+                'XAGUSD': 2.5,   # Silver: max 2.5%
+                'XAUUSD': 2.0,   # Gold: max 2.0%
+                'FOREX': 1.5,    # Forex pairs: max 1.5%
+                'CRYPTO': 3.0,   # Crypto: max 3.0%
+                'INDEX': 1.5,    # Indices: max 1.5%
+            }
+
+            # Determine symbol category
+            if signal.symbol in ['XAGUSD', 'XAUUSD', 'GOLD', 'SILVER']:
+                max_sl_pct = max_sl_distance_pct.get(signal.symbol, 2.5)
+            elif 'BTC' in signal.symbol or 'ETH' in signal.symbol:
+                max_sl_pct = max_sl_distance_pct['CRYPTO']
+            elif any(idx in signal.symbol for idx in ['US500', 'US30', 'NAS100', 'GER40']):
+                max_sl_pct = max_sl_distance_pct['INDEX']
+            else:
+                max_sl_pct = max_sl_distance_pct['FOREX']
+
             try:
                 from technical_indicators import TechnicalIndicators
                 ti = TechnicalIndicators(signal.account_id, signal.symbol, signal.timeframe)
@@ -911,18 +914,39 @@ class AutoTrader:
                         # For BUY: Use SuperTrend value as SL (price below SuperTrend = exit)
                         # Verify SuperTrend is below entry (valid for BUY)
                         if float(supertrend['value']) < float(signal.entry_price):
-                            adjusted_sl = supertrend['value']
-                            use_supertrend_sl = True
-                            logger.info(f"🎯 {signal.symbol}: Using SuperTrend SL | Price: {signal.entry_price} | SuperTrend SL: {adjusted_sl:.5f} ({supertrend['distance_pct']:.2f}% distance)")
+                            st_distance_pct = abs(float(signal.entry_price) - float(supertrend['value'])) / float(signal.entry_price) * 100
+
+                            # Check if SuperTrend SL is within acceptable range
+                            if st_distance_pct <= max_sl_pct:
+                                adjusted_sl = supertrend['value']
+                                use_supertrend_sl = True
+                                logger.info(f"🎯 {signal.symbol}: Using SuperTrend SL | Price: {signal.entry_price} | SuperTrend SL: {adjusted_sl:.5f} ({st_distance_pct:.2f}% distance, max: {max_sl_pct}%)")
+                            else:
+                                # SuperTrend too far - use max allowed distance instead
+                                max_sl_distance = float(signal.entry_price) * (max_sl_pct / 100)
+                                adjusted_sl = float(signal.entry_price) - max_sl_distance
+                                use_supertrend_sl = True
+                                logger.info(f"📏 {signal.symbol}: SuperTrend SL too wide ({st_distance_pct:.2f}% > {max_sl_pct}%), using max distance SL: {adjusted_sl:.5f} ({max_sl_pct}%)")
                         else:
                             logger.warning(f"⚠️ {signal.symbol} BUY: SuperTrend SL ({supertrend['value']:.5f}) above entry ({signal.entry_price}), using traditional SL")
+
                     elif signal.signal_type == 'SELL' and supertrend['direction'] == 'bearish':
                         # For SELL: Use SuperTrend value as SL (price above SuperTrend = exit)
                         # Verify SuperTrend is above entry (valid for SELL)
                         if float(supertrend['value']) > float(signal.entry_price):
-                            adjusted_sl = supertrend['value']
-                            use_supertrend_sl = True
-                            logger.info(f"🎯 {signal.symbol}: Using SuperTrend SL | Price: {signal.entry_price} | SuperTrend SL: {adjusted_sl:.5f} ({supertrend['distance_pct']:.2f}% distance)")
+                            st_distance_pct = abs(float(supertrend['value']) - float(signal.entry_price)) / float(signal.entry_price) * 100
+
+                            # Check if SuperTrend SL is within acceptable range
+                            if st_distance_pct <= max_sl_pct:
+                                adjusted_sl = supertrend['value']
+                                use_supertrend_sl = True
+                                logger.info(f"🎯 {signal.symbol}: Using SuperTrend SL | Price: {signal.entry_price} | SuperTrend SL: {adjusted_sl:.5f} ({st_distance_pct:.2f}% distance, max: {max_sl_pct}%)")
+                            else:
+                                # SuperTrend too far - use max allowed distance instead
+                                max_sl_distance = float(signal.entry_price) * (max_sl_pct / 100)
+                                adjusted_sl = float(signal.entry_price) + max_sl_distance
+                                use_supertrend_sl = True
+                                logger.info(f"📏 {signal.symbol}: SuperTrend SL too wide ({st_distance_pct:.2f}% > {max_sl_pct}%), using max distance SL: {adjusted_sl:.5f} ({max_sl_pct}%)")
                         else:
                             logger.warning(f"⚠️ {signal.symbol} SELL: SuperTrend SL ({supertrend['value']:.5f}) below entry ({signal.entry_price}), using traditional SL")
             except Exception as e:
@@ -941,13 +965,58 @@ class AutoTrader:
 
                     logger.info(f"📊 {signal.symbol}: Adjusted SL with multiplier {sl_multiplier} | Original: {sl_price} → Adjusted: {adjusted_sl:.5f}")
 
-            # ✅ CRITICAL VALIDATION: Ensure TP/SL are valid before sending to MT5
-            if not self._validate_tp_sl(signal, adjusted_sl):
-                logger.error(f"❌ TP/SL validation failed for {signal.symbol}: Invalid TP/SL values")
-                return None
-
             # Use tp_price directly (DB column name) instead of property
             tp_price = getattr(signal, 'tp_price', None) or getattr(signal, 'tp', None)
+
+            # ✅ ADJUST TP if SuperTrend SL is used (to maintain minimum R/R ratio)
+            adjusted_tp_price = None
+            logger.info(f"🔍 DEBUG: use_supertrend_sl={use_supertrend_sl}, tp_price={tp_price}")
+
+            if use_supertrend_sl and tp_price:
+                entry = float(signal.entry_price)
+                sl_distance = abs(entry - float(adjusted_sl))
+                tp_distance = abs(float(tp_price) - entry)
+
+                # Calculate current R/R
+                current_rr = tp_distance / sl_distance if sl_distance > 0 else 0
+                min_rr = 1.5  # Minimum acceptable R/R
+
+                logger.info(f"🔍 {signal.symbol}: SuperTrend SL active - Current R/R: {current_rr:.2f}, Min R/R: {min_rr:.2f}")
+
+                if current_rr < min_rr:
+                    # Adjust TP to meet minimum R/R
+                    required_tp_distance = sl_distance * min_rr
+
+                    if signal.signal_type == 'BUY':
+                        adjusted_tp_price = entry + required_tp_distance
+                    else:  # SELL
+                        adjusted_tp_price = entry - required_tp_distance
+
+                    logger.info(
+                        f"📊 {signal.symbol}: Adjusted TP for SuperTrend SL | "
+                        f"Original TP: {tp_price:.5f} (R/R: {current_rr:.2f}) → "
+                        f"Adjusted TP: {adjusted_tp_price:.5f} (R/R: {min_rr:.2f})"
+                    )
+                    tp_price = adjusted_tp_price
+                else:
+                    logger.info(f"✅ {signal.symbol}: SuperTrend SL R/R already acceptable: {current_rr:.2f}")
+
+            # ✅ CRITICAL VALIDATION: Ensure TP/SL are valid before sending to MT5
+            # Create a temporary modified signal for validation if TP was adjusted
+            if adjusted_tp_price:
+                # Temporarily modify signal for validation
+                original_tp = signal.tp_price
+                signal.tp_price = adjusted_tp_price
+                validation_result = self._validate_tp_sl(signal, adjusted_sl)
+                signal.tp_price = original_tp  # Restore original
+
+                if not validation_result:
+                    logger.error(f"❌ TP/SL validation failed for {signal.symbol}: Invalid TP/SL values")
+                    return None
+            else:
+                if not self._validate_tp_sl(signal, adjusted_sl):
+                    logger.error(f"❌ TP/SL validation failed for {signal.symbol}: Invalid TP/SL values")
+                    return None
 
             # Convert all numeric values to float to prevent Decimal JSON serialization errors
             adjusted_sl = float(adjusted_sl)
@@ -1613,8 +1682,9 @@ class AutoTrader:
             spreads = [abs(float(t.ask) - float(t.bid)) for t in recent_ticks]
             avg_spread = sum(spreads) / len(spreads)
 
-            # Reject if spread is abnormally high (> 3x average)
-            MAX_SPREAD_MULTIPLIER = 3.0
+            # Reject if spread is abnormally high (> 3x average for forex, 5x for metals)
+            # Silver/Gold can have wider spreads than forex pairs
+            MAX_SPREAD_MULTIPLIER = 5.0 if signal.symbol in ['XAGUSD', 'XAUUSD'] else 3.0
             if current_spread > avg_spread * MAX_SPREAD_MULTIPLIER:
                 return {
                     'allowed': False,
@@ -1658,7 +1728,7 @@ class AutoTrader:
 
             db = ScopedSession()
 
-            settings = GlobalSettings.query.get(1)
+            settings = db.query(GlobalSettings).filter_by(id=1).first()
             if settings:
                 risk_profile = settings.autotrade_risk_profile or 'normal'
 

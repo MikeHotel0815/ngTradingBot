@@ -101,7 +101,7 @@ class TradeMonitor:
         from spread_utils import get_contract_size
 
         symbol_upper = symbol.upper()
-        contract_size = get_contract_size(symbol)
+        contract_size = get_contract_size(symbol, db_session=db)  # ✅ Pass DB session for automatic lookup
 
         # Get EUR/USD rate for USD->EUR conversion
         eurusd_rate = 1.0  # Fallback
@@ -596,27 +596,30 @@ class TradeMonitor:
                     Trade.status == 'closed',
                     Trade.close_time >= datetime.utcnow() - timedelta(minutes=2)
                 ).all()
-                
+
                 closed_tickets = []
+                trades_to_delete = []  # ✅ Track trades to delete from DB
+
                 for t in closed_trades_list:
                     closed_tickets.append({
                         'ticket': int(t.ticket),
                         'symbol': str(t.symbol),
                         'direction': str(t.direction)
                     })
-                
+                    trades_to_delete.append(t)  # ✅ Mark for deletion
+
                 del closed_trades_list
-                
+
                 for trade_data in closed_tickets:
                     ticket = trade_data['ticket']
                     symbol = trade_data['symbol']
-                    
+
                     if not hasattr(self, '_processed_closed_trades'):
                         self._processed_closed_trades = set()
-                    
+
                     if ticket not in self._processed_closed_trades:
                         self._processed_closed_trades.add(ticket)
-                        
+
                         try:
                             config = update_symbol_after_trade(ticket)
                             if config:
@@ -628,11 +631,26 @@ class TradeMonitor:
                         except Exception as e:
                             logger.error(f"Error updating symbol config for trade #{ticket}: {e}")
 
+                # ✅ Delete closed trades from database after processing
+                if trades_to_delete:
+                    deleted_count = 0
+                    for trade in trades_to_delete:
+                        try:
+                            db.delete(trade)
+                            deleted_count += 1
+                        except Exception as e:
+                            logger.error(f"Error deleting trade #{trade.ticket}: {e}")
+
+                    if deleted_count > 0:
+                        db.commit()
+                        logger.info(f"🗑️  Deleted {deleted_count} closed trade(s) from database")
+
                 if hasattr(self, '_processed_closed_trades') and len(self._processed_closed_trades) > 100:
                     self._processed_closed_trades = set(list(self._processed_closed_trades)[-100:])
 
             except Exception as e:
                 logger.error(f"Error processing closed trades: {e}")
+                db.rollback()
 
         except Exception as e:
             logger.error(f"Monitor cycle error: {e}")
@@ -677,10 +695,12 @@ class TradeMonitor:
                         Trade.status == 'closed',
                         Trade.close_time >= datetime.utcnow() - timedelta(minutes=2)
                     ).all()
-                    
+
                     # CRITICAL: Extract ALL data immediately while session is active
                     # This ensures no lazy-loading happens after the loop
                     closed_tickets = []
+                    trades_to_delete = []  # ✅ Track trades to delete from DB
+
                     for t in closed_trades_list:
                         # Force all attributes to be loaded NOW
                         closed_tickets.append({
@@ -688,16 +708,17 @@ class TradeMonitor:
                             'symbol': str(t.symbol),      # Force str conversion
                             'direction': str(t.direction) # Force str conversion
                         })
-                    
+                        trades_to_delete.append(t)  # ✅ Mark for deletion
+
                     # Delete the query result reference to help garbage collection
                     del closed_trades_list
-                    
+
                     # Process the extracted data
                     for trade_data in closed_tickets:
                         ticket = trade_data['ticket']
                         symbol = trade_data['symbol']
                         direction = trade_data['direction']
-                        
+
                         # Check if we've already processed this trade
                         if not hasattr(self, '_processed_closed_trades'):
                             self._processed_closed_trades = set()
@@ -722,12 +743,27 @@ class TradeMonitor:
                             except Exception as e:
                                 logger.error(f"Error updating symbol config for trade #{ticket}: {e}")
 
+                    # ✅ Delete closed trades from database after processing
+                    if trades_to_delete:
+                        deleted_count = 0
+                        for trade in trades_to_delete:
+                            try:
+                                db.delete(trade)
+                                deleted_count += 1
+                            except Exception as e:
+                                logger.error(f"Error deleting trade #{trade.ticket}: {e}")
+
+                        if deleted_count > 0:
+                            db.commit()
+                            logger.info(f"🗑️  Deleted {deleted_count} closed trade(s) from database")
+
                     # Clean up old processed trades (keep last 100)
                     if hasattr(self, '_processed_closed_trades') and len(self._processed_closed_trades) > 100:
                         self._processed_closed_trades = set(list(self._processed_closed_trades)[-100:])
 
                 except Exception as e:
                     logger.error(f"Error processing closed trades: {e}")
+                    db.rollback()
 
                 db.close()
 
