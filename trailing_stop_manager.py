@@ -39,22 +39,22 @@ class TrailingStopManager:
         self.default_settings = {
             'trailing_stop_enabled': True,
 
-            # Stage 1: Break-even - 🚀 EARLIER & MORE AGGRESSIVE
+            # Stage 1: Break-even - ✅ CONSERVATIVE (let profits run)
             'breakeven_enabled': True,
-            'breakeven_trigger_percent': 20.0,  # 🚀 Move to BE at 20% (was 30%)
-            'breakeven_offset_pips': 2.0,       # Offset above/below entry (covers spread)
+            'breakeven_trigger_percent': 50.0,  # ✅ Move to BE at 50% (was 20% - TOO AGGRESSIVE)
+            'breakeven_offset_pips': 8.0,       # ✅ More breathing room (was 2.0 - TOO TIGHT)
 
-            # Stage 2: Partial trailing - 🚀 EARLIER START
-            'partial_trailing_trigger_percent': 40.0,  # 🚀 Start at 40% (was 50%)
-            'partial_trailing_distance_percent': 30.0,  # 🚀 Trail 30% behind (was 40%)
+            # Stage 2: Partial trailing - ✅ BALANCED
+            'partial_trailing_trigger_percent': 60.0,  # ✅ Start at 60% (was 40%)
+            'partial_trailing_distance_percent': 40.0,  # ✅ Trail 40% behind (was 30%)
 
-            # Stage 3: Aggressive trailing - 🚀 MUCH EARLIER & TIGHTER
-            'aggressive_trailing_trigger_percent': 60.0,  # 🚀 Start at 60% (was 75%)
-            'aggressive_trailing_distance_percent': 15.0,  # 🚀 Trail 15% behind (was 25%)
+            # Stage 3: Aggressive trailing - ✅ CONSERVATIVE
+            'aggressive_trailing_trigger_percent': 75.0,  # ✅ Start at 75% (was 60%)
+            'aggressive_trailing_distance_percent': 25.0,  # ✅ Trail 25% behind (was 15%)
 
-            # Stage 4: Near TP protection - 🚀 EARLIER & SUPER TIGHT
-            'near_tp_trigger_percent': 80.0,    # 🚀 Start at 80% (was 90%)
-            'near_tp_trailing_distance_percent': 10.0,  # 🚀 Trail 10% behind (was 15%)
+            # Stage 4: Near TP protection - ✅ ONLY NEAR TP
+            'near_tp_trigger_percent': 90.0,    # ✅ Start at 90% (was 80%)
+            'near_tp_trailing_distance_percent': 15.0,  # ✅ Trail 15% behind (was 10%)
 
             # Stage 5: Dynamic TP Extension - 🎯 NEW!
             'dynamic_tp_enabled': True,         # 🎯 Enable dynamic TP raising
