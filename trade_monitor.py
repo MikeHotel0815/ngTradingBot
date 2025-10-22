@@ -598,7 +598,8 @@ class TradeMonitor:
                 ).all()
 
                 closed_tickets = []
-                trades_to_delete = []  # ✅ Track trades to delete from DB
+                # ❌ REMOVED: Auto-delete of closed trades - breaks Trade History!
+                # trades_to_delete = []  # Track trades to delete from DB
 
                 for t in closed_trades_list:
                     closed_tickets.append({
@@ -606,7 +607,8 @@ class TradeMonitor:
                         'symbol': str(t.symbol),
                         'direction': str(t.direction)
                     })
-                    trades_to_delete.append(t)  # ✅ Mark for deletion
+                    # ❌ REMOVED: Do NOT delete closed trades from DB!
+                    # trades_to_delete.append(t)  # Mark for deletion
 
                 del closed_trades_list
 
@@ -631,19 +633,20 @@ class TradeMonitor:
                         except Exception as e:
                             logger.error(f"Error updating symbol config for trade #{ticket}: {e}")
 
-                # ✅ Delete closed trades from database after processing
-                if trades_to_delete:
-                    deleted_count = 0
-                    for trade in trades_to_delete:
-                        try:
-                            db.delete(trade)
-                            deleted_count += 1
-                        except Exception as e:
-                            logger.error(f"Error deleting trade #{trade.ticket}: {e}")
-
-                    if deleted_count > 0:
-                        db.commit()
-                        logger.info(f"🗑️  Deleted {deleted_count} closed trade(s) from database")
+                # ❌ REMOVED: Auto-delete closed trades - this breaks Trade History!
+                # Closed trades should remain in database for historical analysis
+                # if trades_to_delete:
+                #     deleted_count = 0
+                #     for trade in trades_to_delete:
+                #         try:
+                #             db.delete(trade)
+                #             deleted_count += 1
+                #         except Exception as e:
+                #             logger.error(f"Error deleting trade #{trade.ticket}: {e}")
+                #
+                #     if deleted_count > 0:
+                #         db.commit()
+                #         logger.info(f"🗑️  Deleted {deleted_count} closed trade(s) from database")
 
                 if hasattr(self, '_processed_closed_trades') and len(self._processed_closed_trades) > 100:
                     self._processed_closed_trades = set(list(self._processed_closed_trades)[-100:])
@@ -699,7 +702,8 @@ class TradeMonitor:
                     # CRITICAL: Extract ALL data immediately while session is active
                     # This ensures no lazy-loading happens after the loop
                     closed_tickets = []
-                    trades_to_delete = []  # ✅ Track trades to delete from DB
+                    # ❌ REMOVED: trades_to_delete - closed trades remain in DB
+                    # trades_to_delete = []  # Track trades to delete from DB
 
                     for t in closed_trades_list:
                         # Force all attributes to be loaded NOW
@@ -708,7 +712,8 @@ class TradeMonitor:
                             'symbol': str(t.symbol),      # Force str conversion
                             'direction': str(t.direction) # Force str conversion
                         })
-                        trades_to_delete.append(t)  # ✅ Mark for deletion
+                        # ❌ REMOVED: Do NOT delete closed trades - breaks Trade History!
+                        # trades_to_delete.append(t)  # Mark for deletion
 
                     # Delete the query result reference to help garbage collection
                     del closed_trades_list
@@ -743,19 +748,20 @@ class TradeMonitor:
                             except Exception as e:
                                 logger.error(f"Error updating symbol config for trade #{ticket}: {e}")
 
-                    # ✅ Delete closed trades from database after processing
-                    if trades_to_delete:
-                        deleted_count = 0
-                        for trade in trades_to_delete:
-                            try:
-                                db.delete(trade)
-                                deleted_count += 1
-                            except Exception as e:
-                                logger.error(f"Error deleting trade #{trade.ticket}: {e}")
-
-                        if deleted_count > 0:
-                            db.commit()
-                            logger.info(f"🗑️  Deleted {deleted_count} closed trade(s) from database")
+                    # ❌ REMOVED: Auto-delete closed trades - breaks Trade History!
+                    # Closed trades should remain in database for historical analysis
+                    # if trades_to_delete:
+                    #     deleted_count = 0
+                    #     for trade in trades_to_delete:
+                    #         try:
+                    #             db.delete(trade)
+                    #             deleted_count += 1
+                    #         except Exception as e:
+                    #             logger.error(f"Error deleting trade #{trade.ticket}: {e}")
+                    #
+                    #     if deleted_count > 0:
+                    #         db.commit()
+                    #         logger.info(f"🗑️  Deleted {deleted_count} closed trade(s) from database")
 
                     # Clean up old processed trades (keep last 100)
                     if hasattr(self, '_processed_closed_trades') and len(self._processed_closed_trades) > 100:
