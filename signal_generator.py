@@ -482,13 +482,14 @@ class SignalGenerator:
             # ✅ Capture indicator snapshot for continuous validation
             indicator_snapshot = self._capture_indicator_snapshot(signal)
 
-            # Check for existing active signal
+            # ✅ FIX: Use SELECT FOR UPDATE to prevent race conditions
+            # This locks the row so other threads wait until we're done
             existing_signal = db.query(TradingSignal).filter_by(
                 account_id=self.account_id,
                 symbol=self.symbol,
                 timeframe=self.timeframe,
                 status='active'
-            ).first()
+            ).with_for_update().first()
 
             MIN_CONFIDENCE_THRESHOLD = 50  # Expire signals below this (raised from 40% for more conservative approach)
 
