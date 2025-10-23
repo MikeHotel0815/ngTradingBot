@@ -33,31 +33,27 @@ logger = logging.getLogger(__name__)
 
 def calculate_max_trades_for_confidence(confidence: float) -> int:
     """
-    Calculate max trades allowed per symbol+timeframe based on signal confidence.
-    
-    Formula: For every 10% confidence increase above 50%, allow +1 trade
-    
-    Examples:
-        50-59% confidence → 1 trade allowed
-        60-69% confidence → 2 trades allowed
-        70-79% confidence → 3 trades allowed
-        80-89% confidence → 4 trades allowed
-        90-100% confidence → 5 trades allowed (capped at 4)
-    
+    ✅ SIMPLIFIED: Always allow exactly 1 trade per signal.
+
+    PREVIOUS LOGIC WAS OVERENGINEERED:
+    - 80% confidence → allowed 4 trades → Signal #80004 opened 6 trades!
+    - Led to duplicate positions and overexposure
+
+    NEW SIMPLE RULE:
+    - Every signal = maximum 1 trade
+    - Duplicate prevention happens at symbol level (see check below)
+
     Args:
         confidence: Signal confidence as percentage (50.0 = 50%)
-    
+
     Returns:
-        Max number of trades allowed (0-4)
+        Always returns 1 (or 0 if below minimum threshold)
     """
     if confidence < 50.0:
-        return 0  # Below minimum confidence threshold (dashboard slider minimum)
-    
-    # Calculate tier: each 10% jump = +1 trade
-    confidence_tier = int((confidence - 50.0) / 10.0) + 1
-    
-    # Cap at 4 trades maximum
-    return min(confidence_tier, 4)
+        return 0  # Below minimum confidence threshold
+
+    # ✅ SIMPLE: One signal = one trade, ALWAYS
+    return 1
 
 
 class AutoTrader:
@@ -84,6 +80,7 @@ class AutoTrader:
         self.max_total_drawdown_percent = 20.0  # Stop if total drawdown exceeds 20%
         self.circuit_breaker_tripped = False
         self.circuit_breaker_reason = None
+        self.daily_loss_override = False  # Manual override for daily loss limit
 
         # Correlation limits - prevent over-exposure to correlated pairs
         self.max_correlated_positions = 2  # Max 2 positions in same currency group
@@ -194,12 +191,23 @@ class AutoTrader:
         self._save_autotrade_status_to_db()  # ✅ Persist to DB
         logger.warning("🛑 Auto-Trading DISABLED (Kill-Switch)")
 
-    def reset_circuit_breaker(self):
-        """Reset circuit breaker manually"""
+    def reset_circuit_breaker(self, override_daily_loss=False):
+        """
+        Reset circuit breaker manually
+
+        Args:
+            override_daily_loss: If True, temporarily ignore daily loss limit for this session
+        """
         self.circuit_breaker_tripped = False
         self.circuit_breaker_reason = None
         self.failed_command_count = 0
-        logger.info("Circuit breaker reset manually (failed_command_count reset to 0)")
+
+        if override_daily_loss:
+            self.daily_loss_override = True
+            logger.warning("⚠️ Circuit breaker reset with DAILY LOSS OVERRIDE enabled - trading will continue despite daily loss limit")
+        else:
+            self.daily_loss_override = False
+            logger.info("Circuit breaker reset manually (failed_command_count reset to 0)")
 
     def check_circuit_breaker(self, db: Session, account_id: int) -> bool:
         """
@@ -224,34 +232,41 @@ class AutoTrader:
                 logger.error("Account not found for circuit breaker check")
                 return False
 
-            # Check 1: Daily loss limit
+            # Check 1: Daily loss limit (skip if override is active)
             if hasattr(account, 'profit_today') and account.profit_today is not None:
                 daily_loss_percent = (float(account.profit_today) / float(account.balance)) * 100
 
                 if daily_loss_percent < -self.max_daily_loss_percent:
-                    self.circuit_breaker_tripped = True
-                    self.circuit_breaker_reason = f"Daily loss exceeded {self.max_daily_loss_percent}%: ${account.profit_today:.2f} ({daily_loss_percent:.2f}%)"
-                    self.enabled = False
+                    # Check if daily loss override is active
+                    if hasattr(self, 'daily_loss_override') and self.daily_loss_override:
+                        logger.warning(
+                            f"⚠️ Daily loss limit exceeded ({daily_loss_percent:.2f}%) but OVERRIDE is active - continuing to trade"
+                        )
+                        # Don't trip circuit breaker, allow trading to continue
+                    else:
+                        self.circuit_breaker_tripped = True
+                        self.circuit_breaker_reason = f"Daily loss exceeded {self.max_daily_loss_percent}%: ${account.profit_today:.2f} ({daily_loss_percent:.2f}%)"
+                        self.enabled = False
 
-                    logger.critical(f"🚨 CIRCUIT BREAKER TRIPPED: {self.circuit_breaker_reason}")
-                    logger.critical(f"🛑 Auto-trading STOPPED for safety")
-                    
-                    # Log to AI Decision Log
-                    from ai_decision_log import log_circuit_breaker
-                    log_circuit_breaker(
-                        account_id=account_id,
-                        failed_count=0,  # Daily loss trigger
-                        reason=self.circuit_breaker_reason,
-                        details={
-                            'trigger_type': 'daily_loss',
-                            'daily_loss_percent': daily_loss_percent,
-                            'profit_today': float(account.profit_today),
-                            'balance': float(account.balance),
-                            'max_daily_loss_percent': self.max_daily_loss_percent
-                        }
-                    )
+                        logger.critical(f"🚨 CIRCUIT BREAKER TRIPPED: {self.circuit_breaker_reason}")
+                        logger.critical(f"🛑 Auto-trading STOPPED for safety")
 
-                    return False
+                        # Log to AI Decision Log
+                        from ai_decision_log import log_circuit_breaker
+                        log_circuit_breaker(
+                            account_id=account_id,
+                            failed_count=0,  # Daily loss trigger
+                            reason=self.circuit_breaker_reason,
+                            details={
+                                'trigger_type': 'daily_loss',
+                                'daily_loss_percent': daily_loss_percent,
+                                'profit_today': float(account.profit_today),
+                                'balance': float(account.balance),
+                                'max_daily_loss_percent': self.max_daily_loss_percent
+                            }
+                        )
+
+                        return False
 
             # Check 2: Total drawdown limit
             if hasattr(account, 'initial_balance') and account.initial_balance:
@@ -564,42 +579,40 @@ class AutoTrader:
                     'reason': correlation_check['reason']
                 }
 
-            # Check per-symbol-timeframe position limit SIXTH (prevent duplicate positions)
+            # ✅ SIMPLIFIED: Check per-symbol position limit (prevent duplicate positions)
+            # REMOVED: timeframe check - now checks ONLY symbol level
+            # REASON: Prevent ANY duplicate on same symbol (even different timeframes)
             existing_positions = db.query(Trade).filter(
                 and_(
                     Trade.account_id == signal.account_id,
-                    Trade.symbol == signal.symbol,
-                    Trade.timeframe == signal.timeframe,
+                    Trade.symbol == signal.symbol,  # ✅ Symbol only, no timeframe
                     Trade.status == 'open'
                 )
             ).count()
 
-            # ✅ CRITICAL FIX: Also count pending/processing commands to prevent race conditions
+            # ✅ CRITICAL: Also count pending/processing commands to prevent race conditions
             from models import Command
             pending_commands = db.query(Command).filter(
                 and_(
                     Command.account_id == signal.account_id,
                     Command.command_type == 'OPEN_TRADE',
                     Command.status.in_(['pending', 'processing']),
-                    Command.payload['symbol'].astext == signal.symbol,
-                    Command.payload['timeframe'].astext == signal.timeframe
+                    Command.payload['symbol'].astext == signal.symbol  # ✅ Symbol only, no timeframe
                 )
             ).count()
 
             total_exposure = existing_positions + pending_commands
 
-            # ✅ DYNAMIC LIMIT: Calculate max trades based on signal confidence
-            # Formula: Every 10% confidence jump allows +1 trade (starting at 50%)
-            # 50-59% → 1 trade, 60-69% → 2 trades, 70-79% → 3 trades, 80-89% → 4 trades
+            # ✅ SIMPLIFIED: Max 1 trade per symbol (always)
             signal_confidence = float(signal.confidence) if signal.confidence else 50.0
-            max_trades_for_confidence = calculate_max_trades_for_confidence(signal_confidence)
+            max_trades_allowed = 1  # ✅ SIMPLE: Always 1
 
-            logger.info(f"🔍 Position check: {signal.symbol} {signal.timeframe} - Found {existing_positions} open trades + {pending_commands} pending commands = {total_exposure} total (max for {signal_confidence:.1f}% confidence: {max_trades_for_confidence})")
+            logger.info(f"🔍 Duplicate check: {signal.symbol} - Found {existing_positions} open + {pending_commands} pending = {total_exposure} (max: {max_trades_allowed})")
 
-            if total_exposure >= max_trades_for_confidence:
+            if total_exposure >= max_trades_allowed:
                 return {
                     'execute': False,
-                    'reason': f'Max positions for {signal_confidence:.1f}% confidence reached: {total_exposure}/{max_trades_for_confidence} ({signal.symbol} {signal.timeframe})'
+                    'reason': f'Already have open position for {signal.symbol} ({total_exposure} active)'
                 }
 
             # ✅ NEW LOGIC: No age limit! Signals are valid as long as status='active'
