@@ -58,31 +58,46 @@ def get_current_trading_session():
 def calculate_pips(entry_price, exit_price, direction, symbol='EURUSD'):
     """
     Calculate profit/loss in pips
-    
+
     Args:
         entry_price: Entry price
         exit_price: Exit price
         direction: 'BUY' or 'SELL'
         symbol: Trading symbol (for JPY pair detection)
-    
+
     Returns:
         float: Pips captured (positive = profit, negative = loss)
     """
     if not entry_price or not exit_price:
         return 0.0
-    
+
     entry = float(entry_price)
     exit = float(exit_price)
-    
-    # JPY pairs use 2 decimal places (0.01 = 1 pip)
-    # Other pairs use 4 decimal places (0.0001 = 1 pip)
-    pip_multiplier = 100 if 'JPY' in symbol.upper() else 10000
-    
+
+    symbol_upper = symbol.upper()
+
+    # ✅ FIX: Different symbols have different pip sizes
+    # JPY pairs: 0.01 = 1 pip (multiplier 100)
+    # XAUUSD (Gold), XAGUSD (Silver), indices: 0.01 = 1 pip (multiplier 100)
+    # BTCUSD, ETHUSD: 1.00 = 1 pip (multiplier 1)
+    # Standard forex: 0.0001 = 1 pip (multiplier 10000)
+
+    if 'JPY' in symbol_upper:
+        pip_multiplier = 100  # JPY pairs: 0.01 = 1 pip
+    elif symbol_upper in ['XAUUSD', 'XAGUSD', 'GOLD', 'SILVER']:
+        pip_multiplier = 100  # ✅ Gold/Silver: 0.01 = 1 pip (not 10000!)
+    elif symbol_upper in ['BTCUSD', 'ETHUSD', 'BTC', 'ETH']:
+        pip_multiplier = 1    # ✅ Crypto: 1.00 = 1 pip
+    elif symbol_upper.startswith('DE') or symbol_upper.startswith('US') or '.c' in symbol_upper:
+        pip_multiplier = 100  # ✅ Indices: 0.01 = 1 pip
+    else:
+        pip_multiplier = 10000  # Standard forex: 0.0001 = 1 pip
+
     if direction.upper() == 'BUY':
         pips = (exit - entry) * pip_multiplier
     else:  # SELL
         pips = (entry - exit) * pip_multiplier
-    
+
     return round(pips, 2)
 
 

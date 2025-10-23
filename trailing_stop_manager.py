@@ -65,6 +65,7 @@ class TrailingStopManager:
             'min_sl_distance_points': 10.0,     # Never set SL closer than this
             'max_sl_move_per_update': 100.0,    # Max points SL can move in one update
             'trailing_update_interval': 5,       # Only update every 5 seconds per trade
+            'min_hold_time_minutes': 10,         # ✅ NEW: Don't trail until trade is 10+ minutes old
         }
 
         # ✅ NEW: Symbol-specific trailing stop configuration
@@ -83,9 +84,11 @@ class TrailingStopManager:
             },
             'XAUUSD': {
                 'max_sl_move_per_update': 10000.0,  # ✅ Gold uses 0.01 point, 10k pips = 100 price points
-                'min_trailing_pips': 20.0,
-                'breakeven_trigger_percent': 20.0,
-                'aggressive_trailing_trigger_percent': 55.0,
+                'min_trailing_pips': 30.0,           # ✅ INCREASED: Minimum 30 pips trail (was 20)
+                'breakeven_trigger_percent': 60.0,   # ✅ MUCH HIGHER: Move to BE at 60% (was 20% - TOO EARLY!)
+                'aggressive_trailing_trigger_percent': 75.0,  # ✅ Later aggressive trailing (was 55%)
+                'partial_trailing_trigger_percent': 65.0,     # ✅ NEW: Slightly delayed partial trailing
+                'min_hold_time_minutes': 15,         # ✅ CRITICAL: Don't trail XAUUSD for first 15 minutes!
             },
             'DE40.c': {
                 'max_sl_move_per_update': 50000.0,  # ✅ DAX Index needs large movements (50k pips = 500 price points at 0.01 point)
@@ -274,6 +277,15 @@ class TrailingStopManager:
         try:
             if not settings.get('trailing_stop_enabled', True):
                 return None
+
+            # ✅ NEW: Minimum hold time - don't trail until trade has been open for X minutes
+            min_hold_minutes = settings.get('min_hold_time_minutes', 10)  # Default 10 minutes
+            if trade.open_time:
+                from datetime import datetime
+                trade_age_minutes = (datetime.utcnow() - trade.open_time).total_seconds() / 60
+                if trade_age_minutes < min_hold_minutes:
+                    logger.debug(f"Trade {trade.ticket} too young ({trade_age_minutes:.1f} min < {min_hold_minutes} min), skipping trailing")
+                    return None
 
             # Determine direction
             is_buy = trade.direction.upper() in ['BUY', '0'] if isinstance(trade.direction, str) else trade.direction == 0
