@@ -1173,11 +1173,12 @@ class AutoTrader:
 
                 # ✅ CRITICAL FIX: ALWAYS check if position exists for this signal
                 # This prevents duplicates on container restart when processed_signal_hashes is empty
+                # IMPORTANT: Check by symbol ONLY, not timeframe! Multiple timeframes can signal same symbol
+                # but we only want ONE position per symbol at a time
                 existing_position = db.query(Trade).filter(
                     and_(
                         Trade.account_id == signal.account_id,
                         Trade.symbol == signal.symbol,
-                        Trade.timeframe == signal.timeframe,
                         Trade.status == 'open'
                     )
                 ).first()
