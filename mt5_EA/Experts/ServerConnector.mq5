@@ -9,16 +9,16 @@
 #property strict
 #property description "⚡⚡⚡ MAXIMUM PERFORMANCE MODE ⚡⚡⚡"
 #property description "Optimized for 2 EAs - NO COMPROMISES!"
-#property description "2s Heartbeat | 250ms Command Polling"
+#property description "2s Heartbeat | 50ms Command Polling - REAL-TIME!"
 
 // MANUAL: Update this date when code is modified!
-#define CODE_LAST_MODIFIED "2025-10-21 08:33:00 - TRAILING_STOP_DETECTION"  // ✅ Added: trailing_stop flag detection in MODIFY_TRADE for correct close_reason
+#define CODE_LAST_MODIFIED "2025-10-23 - REAL_TIME_COMMANDS"  // ✅ Changed: Command polling reduced from 300ms to 50ms for real-time execution
 
 // ⚡⚡⚡ MAXIMUM PERFORMANCE INPUT PARAMETERS ⚡⚡⚡
 input string ServerURL = "http://100.97.100.50:9900";  // Python server URL (Tailscale)
 input int    ConnectionTimeout = 3000;                  // Timeout in milliseconds (3s - aggressive!)
 input int    HeartbeatInterval = 2;                     // ⚡ Heartbeat every 2 SECONDS (ultra-fast!)
-input int    TickBatchInterval = 100;                   // Tick batch interval in milliseconds
+input int    TickBatchInterval = 50;                    // Tick batch interval in milliseconds (50ms for REAL-TIME commands!)
 input int    MagicNumber = 999888;                      // Magic number to identify EA trades
 
 // Global variables
@@ -100,10 +100,10 @@ int OnInit()
    Print("║                                                          ║");
    Print("║      ngTradingBot EA - MAXIMUM PERFORMANCE MODE          ║");
    Print("║                                                          ║");
-   Print("║  ⚡ 2-Second Heartbeat | 250ms Command Polling ⚡        ║");
+   Print("║  ⚡ 2-Second Heartbeat | 50ms Command Polling ⚡         ║");
    Print("║                                                          ║");
    Print("║  Expected Performance:                                   ║");
-   Print("║  • Command Latency: 125-250ms (ULTRA-FAST!)             ║");
+   Print("║  • Command Latency: 25-50ms (REAL-TIME!)                ║");
    Print("║  • Disconnect Detection: 2-3 seconds                     ║");
    Print("║  • Position Sync: Real-time                              ║");
    Print("║                                                          ║");
@@ -234,32 +234,29 @@ void OnTimer()
       SendTickBatch();
    }
 
-   // ⚡⚡⚡ Check for pending commands every 250ms (ULTRA-FAST!) ⚡⚡⚡
-   // Using millisecond timer set to 100ms, so check every 3 timer calls (3 x 100ms = 300ms, close enough to 250ms)
-   static int timerCallCount = 0;
-   timerCallCount++;
-
-   if(timerCallCount >= 3 && serverConnected && apiKey != "")  // ⚡ Every ~300ms (3 x 100ms) - ULTRA-FAST!
+   // ⚡⚡⚡ Check for pending commands EVERY TIMER TICK (50ms) - REAL-TIME! ⚡⚡⚡
+   // Timer is set to 50ms (TickBatchInterval), so we check on EVERY tick for INSTANT responsiveness
+   // This achieves ~25ms average latency (commands arrive randomly within 50ms window)
+   if(serverConnected && apiKey != "")  // ⚡ EVERY 50ms - INSTANT COMMAND EXECUTION!
    {
       CheckForCommands();
-      timerCallCount = 0;
    }
 
-   // Check for account transactions every 30 seconds (300 timer calls at 100ms)
+   // Check for account transactions every 30 seconds (600 timer calls at 50ms)
    static int transactionTimerCount = 0;
    transactionTimerCount++;
 
-   if(transactionTimerCount >= 300 && serverConnected && apiKey != "")  // Every 30 seconds
+   if(transactionTimerCount >= 600 && serverConnected && apiKey != "")  // Every 30 seconds
    {
       CheckAccountTransactions();
       transactionTimerCount = 0;
    }
 
-   // ⚡ Sync all open positions every 10 seconds (100 timer calls at 100ms) - ULTRA-FAST!
+   // ⚡ Sync all open positions every 10 seconds (200 timer calls at 50ms) - ULTRA-FAST!
    static int positionSyncTimerCount = 0;
    positionSyncTimerCount++;
 
-   if(positionSyncTimerCount >= 100 && serverConnected && apiKey != "")  // ⚡ Every 10 seconds - REAL-TIME!
+   if(positionSyncTimerCount >= 200 && serverConnected && apiKey != "")  // ⚡ Every 10 seconds - REAL-TIME!
    {
       SyncAllPositions();
       positionSyncTimerCount = 0;

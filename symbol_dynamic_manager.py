@@ -27,15 +27,15 @@ logger = logging.getLogger(__name__)
 class SymbolDynamicManager:
     """Manages dynamic per-symbol trading configurations"""
 
-    # Configuration constants
-    MIN_CONFIDENCE_THRESHOLD = Decimal('40.0')  # Never go below 40%
+    # Configuration constants - Enhanced for loss-adaptive trading
+    MIN_CONFIDENCE_THRESHOLD = Decimal('45.0')  # Never go below 45% (raised from 40% to match new minimum)
     MAX_CONFIDENCE_THRESHOLD = Decimal('80.0')  # Never go above 80%
     MIN_RISK_MULTIPLIER = Decimal('0.1')  # Min 10% of normal risk
     MAX_RISK_MULTIPLIER = Decimal('2.0')  # Max 200% of normal risk
 
-    # Adjustment rates
-    CONFIDENCE_INCREASE_ON_LOSS = Decimal('2.0')  # Increase confidence req by 2% per loss
-    CONFIDENCE_DECREASE_ON_WIN = Decimal('1.0')  # Decrease confidence req by 1% per win
+    # Adjustment rates - More aggressive loss protection
+    CONFIDENCE_INCREASE_ON_LOSS = Decimal('5.0')  # Increase confidence req by 5% per loss (raised from 2%)
+    CONFIDENCE_DECREASE_ON_WIN = Decimal('1.0')   # Decrease confidence req by 1% per win
     RISK_INCREASE_ON_WIN_STREAK = Decimal('0.05')  # Increase risk by 5% per win in streak
     RISK_DECREASE_ON_LOSS_STREAK = Decimal('0.1')  # Decrease risk by 10% per loss in streak
 

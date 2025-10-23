@@ -76,7 +76,7 @@ class AutoTrader:
 
         # Circuit breaker settings
         self.circuit_breaker_enabled = True
-        self.max_daily_loss_percent = 5.0  # Stop trading if daily loss exceeds 5%
+        self.max_daily_loss_percent = 10.0  # Stop trading if daily loss exceeds 10% (increased from 5%)
         self.max_total_drawdown_percent = 20.0  # Stop if total drawdown exceeds 20%
         self.circuit_breaker_tripped = False
         self.circuit_breaker_reason = None
