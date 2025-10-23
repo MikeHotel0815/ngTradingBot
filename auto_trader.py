@@ -1183,8 +1183,11 @@ class AutoTrader:
                     )
                 ).first()
 
+                logger.debug(f"🔍 Position check for {signal.symbol} {signal.timeframe}: existing_position={existing_position is not None} (ticket={existing_position.ticket if existing_position else 'None'})")
+
                 if existing_position:
                     # Position exists - skip signal and mark as processed
+                    logger.info(f"⏭️  SKIPPING {signal.symbol} {signal.timeframe} signal - position #{existing_position.ticket} already open")
                     if signal_hash not in self.processed_signal_hashes:
                         # After restart, repopulate hash to prevent reprocessing
                         self.processed_signal_hashes[signal_hash] = {
