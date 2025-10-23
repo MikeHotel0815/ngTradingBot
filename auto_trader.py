@@ -1170,28 +1170,36 @@ class AutoTrader:
             for signal in signals:
                 # Generate hash based on signal properties
                 signal_hash = self._get_signal_hash(signal)
-                
-                # ✅ CRITICAL FIX: Check if we've already processed this signal AND if position still exists
-                # If position was closed, we should re-evaluate the signal even if hash exists
+
+                # ✅ CRITICAL FIX: ALWAYS check if position exists for this signal
+                # This prevents duplicates on container restart when processed_signal_hashes is empty
+                existing_position = db.query(Trade).filter(
+                    and_(
+                        Trade.account_id == signal.account_id,
+                        Trade.symbol == signal.symbol,
+                        Trade.timeframe == signal.timeframe,
+                        Trade.status == 'open'
+                    )
+                ).first()
+
+                if existing_position:
+                    # Position exists - skip signal and mark as processed
+                    if signal_hash not in self.processed_signal_hashes:
+                        # After restart, repopulate hash to prevent reprocessing
+                        self.processed_signal_hashes[signal_hash] = {
+                            'signal_id': signal.id,
+                            'processed_at': datetime.utcnow(),
+                            'symbol': signal.symbol,
+                            'timeframe': signal.timeframe
+                        }
+                    continue
+
+                # Check if we've already processed this signal hash
                 if signal_hash in self.processed_signal_hashes:
-                    # Check if there's still an open position for this signal
-                    existing_position = db.query(Trade).filter(
-                        and_(
-                            Trade.account_id == signal.account_id,
-                            Trade.symbol == signal.symbol,
-                            Trade.timeframe == signal.timeframe,
-                            Trade.status == 'open'
-                        )
-                    ).first()
-                    
-                    if existing_position:
-                        # Position still open, skip this signal
-                        continue
-                    else:
-                        # Position was closed - remove hash and re-evaluate signal
-                        logger.info(f"♻️  Signal {signal.symbol} {signal.timeframe}: Position closed, re-evaluating signal")
-                        del self.processed_signal_hashes[signal_hash]
-                
+                    # Position was closed - remove hash and re-evaluate signal
+                    logger.info(f"♻️  Signal {signal.symbol} {signal.timeframe}: Position closed, re-evaluating signal")
+                    del self.processed_signal_hashes[signal_hash]
+
                 # This is a new/updated signal version OR position was closed
                 new_count += 1
                 signals_to_process.append(signal)
