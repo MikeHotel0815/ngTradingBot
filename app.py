@@ -1001,6 +1001,7 @@ def auto_trade_status():
         'circuit_breaker_enabled': trader.circuit_breaker_enabled,
         'circuit_breaker_tripped': trader.circuit_breaker_tripped,
         'circuit_breaker_reason': trader.circuit_breaker_reason,
+        'daily_loss_override': getattr(trader, 'daily_loss_override', False),  # ✅ NEW
         'max_daily_loss_percent': trader.max_daily_loss_percent,
         'max_total_drawdown_percent': trader.max_total_drawdown_percent,
         'processed_signals': len(trader.processed_signal_hashes)
@@ -1039,6 +1040,47 @@ def set_risk_profile():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+@app_command.route('/api/auto-trade/reset-circuit-breaker', methods=['POST'])
+def reset_circuit_breaker():
+    """Reset circuit breaker and re-enable auto-trading"""
+    try:
+        from auto_trader import get_auto_trader
+        trader = get_auto_trader()
+
+        # Get override parameter from request
+        data = request.get_json() or {}
+        override_daily_loss = data.get('override_daily_loss', False)
+
+        # Check if circuit breaker is actually tripped
+        if not trader.circuit_breaker_tripped:
+            return jsonify({
+                'status': 'info',
+                'message': 'Circuit breaker is not tripped'
+            }), 200
+
+        # Reset circuit breaker with optional override
+        trader.reset_circuit_breaker(override_daily_loss=override_daily_loss)
+
+        # Re-enable auto-trading
+        trader.enable()
+
+        message = 'Circuit breaker reset and auto-trading re-enabled'
+        if override_daily_loss:
+            message += ' (Daily loss limit override ACTIVE - use with caution!)'
+            logger.warning(f"⚠️ {message}")
+        else:
+            logger.info(message)
+
+        return jsonify({
+            'status': 'success',
+            'message': message,
+            'override_active': override_daily_loss
+        }), 200
+    except Exception as e:
+        logger.error(f"Error resetting circuit breaker: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
 @app_command.route('/api/auto-trade/confidence-requirements', methods=['GET'])
 def get_confidence_requirements():
     """Get current confidence requirements for all active symbols"""
@@ -1046,7 +1088,7 @@ def get_confidence_requirements():
         from dynamic_confidence_calculator import get_confidence_calculator
         from session_volatility_analyzer import SessionVolatilityAnalyzer
         from auto_trader import get_auto_trader
-        
+
         trader = get_auto_trader()
         calculator = get_confidence_calculator()
         analyzer = SessionVolatilityAnalyzer()
@@ -4041,87 +4083,16 @@ def ignore_signal(signal_id):
 
 @app_webui.route('/api/open_trade', methods=['POST'])
 def open_trade_from_dashboard():
-    """Open trade from dashboard (one-click trading)"""
-    try:
-        from command_helper import create_command
-        from trade_helper import normalize_volume, validate_trade_params
-
-        data = request.get_json()
-        symbol = data.get('symbol')
-        order_type = data.get('order_type')
-        volume = data.get('volume', 0.01)
-        sl = data.get('sl')
-        tp = data.get('tp')
-        comment = data.get('comment', 'Dashboard Trade')
-        trailing_stop = data.get('trailing_stop')  # Optional trailing stop in pips
-        signal_id = data.get('signal_id')  # Optional signal ID for tracking
-        timeframe = data.get('timeframe')  # Optional timeframe
-
-        if not symbol or not order_type or not sl or not tp:
-            return jsonify({'status': 'error', 'message': 'Missing required fields'}), 400
-
-        db = ScopedSession()
-        try:
-            # Get first account (assuming single account setup)
-            account = db.query(Account).order_by(Account.last_heartbeat.desc()).first()  # Use active account
-            if not account:
-                return jsonify({'status': 'error', 'message': 'No account found'}), 404
-
-            # Normalize volume based on symbol specifications
-            normalized_volume = normalize_volume(account.id, symbol, float(volume))
-
-            # Validate trade parameters
-            validation = validate_trade_params(account.id, symbol, normalized_volume, sl, tp)
-            if not validation['valid']:
-                error_msg = '; '.join(validation['errors'])
-                logger.error(f"Trade validation failed for {symbol}: {error_msg}")
-                return jsonify({
-                    'status': 'error',
-                    'message': f'Trade validation failed: {error_msg}'
-                }), 400
-
-            # Create trade command
-            payload = {
-                'symbol': symbol,
-                'order_type': order_type,
-                'volume': normalized_volume,
-                'sl': float(sl),
-                'tp': float(tp),
-                'comment': comment
-            }
-
-            # Add trailing stop if provided
-            if trailing_stop is not None:
-                payload['trailing_stop'] = float(trailing_stop)
-
-            # Add signal tracking metadata
-            if signal_id is not None:
-                payload['signal_id'] = int(signal_id)
-            if timeframe is not None:
-                payload['timeframe'] = timeframe
-
-            command = create_command(
-                db=db,
-                account_id=account.id,
-                command_type='OPEN_TRADE',
-                payload=payload
-            )
-
-            logger.info(f"Trade command created: {command.id} - {order_type} {symbol} {normalized_volume} lot (normalized from {volume})")
-
-            return jsonify({
-                'status': 'success',
-                'message': 'Trade command created',
-                'command_id': command.id,
-                'normalized_volume': normalized_volume
-            }), 200
-
-        finally:
-            db.close()
-
-    except Exception as e:
-        logger.error(f"Open trade error: {e}")
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+    """
+    ❌ DISABLED: Dashboard should NOT execute trades
+    All trade execution is managed by server's auto_trader.py
+    Dashboard is VIEW-ONLY for monitoring signals and positions
+    """
+    logger.warning("⚠️  Blocked manual trade execution attempt via /api/open_trade")
+    return jsonify({
+        'status': 'error',
+        'message': 'Manual trade execution is disabled. All trades are managed by the server auto-trader.'
+    }), 403
 
 
 @app_webui.route('/api/close_trade/<int:ticket>', methods=['POST'])
@@ -5363,7 +5334,8 @@ def get_safety_monitor_status():
             'reason': auto_trader.circuit_breaker_reason,
             'failed_command_count': auto_trader.failed_command_count,
             'max_daily_loss_percent': auto_trader.max_daily_loss_percent,
-            'max_total_drawdown_percent': auto_trader.max_total_drawdown_percent
+            'max_total_drawdown_percent': auto_trader.max_total_drawdown_percent,
+            'daily_loss_override': getattr(auto_trader, 'daily_loss_override', False)  # ✅ NEW
         }
 
         # 2. Daily Drawdown Protection

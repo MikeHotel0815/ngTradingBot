@@ -1121,6 +1121,12 @@
                         <div id="circuit-breaker-status" class="safety-detail-content">
                             <div>Status: <span id="cb-status">-</span></div>
                             <div>Failed Commands: <span id="cb-failed-count">0</span></div>
+                            <div id="cb-override-warning" style="display: none; color: #ff9800; font-weight: bold; margin-top: 5px; padding: 5px; background: rgba(255, 152, 0, 0.1); border-radius: 3px;">
+                                ⚠️ Daily Loss Override ACTIVE
+                            </div>
+                            <button id="reset-circuit-breaker-btn" onclick="resetCircuitBreaker()" style="margin-top: 8px; padding: 6px 12px; background: #ff9800; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85em; display: none;">
+                                🔄 Reset & Re-enable
+                            </button>
                         </div>
                     </div>
 
@@ -3229,6 +3235,68 @@ const SymbolModal = (function() {
             }
         }
 
+        // Reset circuit breaker and re-enable auto-trading
+        async function resetCircuitBreaker() {
+            try {
+                // First, check the circuit breaker reason to determine if override is needed
+                const apiBase = window.location.protocol + '//' + window.location.hostname + ':9900';
+                const statusResponse = await fetch(apiBase + '/api/auto-trade/status');
+                const statusData = await statusResponse.json();
+
+                let overrideDailyLoss = false;
+
+                // Check if the circuit breaker was tripped due to daily loss
+                if (statusData.circuit_breaker_reason && statusData.circuit_breaker_reason.includes('Daily loss')) {
+                    // Show warning dialog
+                    const confirmed = confirm(
+                        '⚠️ WARNING: Circuit Breaker Tripped Due to Daily Loss Limit\n\n' +
+                        'Reason: ' + statusData.circuit_breaker_reason + '\n\n' +
+                        'The daily loss limit is still exceeded. If you reset without override, ' +
+                        'the circuit breaker will trip again immediately.\n\n' +
+                        'Click OK to OVERRIDE the daily loss limit (RISKY!)\n' +
+                        'Click Cancel to reset normally (will trip again)'
+                    );
+
+                    if (confirmed) {
+                        overrideDailyLoss = true;
+                        // Double confirmation for override
+                        const doubleConfirm = confirm(
+                            '⚠️⚠️ FINAL WARNING ⚠️⚠️\n\n' +
+                            'You are about to OVERRIDE the daily loss protection!\n\n' +
+                            'This means auto-trading will continue even though you have exceeded ' +
+                            'your daily loss limit. This could lead to significant additional losses.\n\n' +
+                            'Are you absolutely sure you want to proceed?'
+                        );
+
+                        if (!doubleConfirm) {
+                            return; // User cancelled
+                        }
+                    }
+                }
+
+                // Proceed with reset
+                const response = await fetch(apiBase + '/api/auto-trade/reset-circuit-breaker', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ override_daily_loss: overrideDailyLoss })
+                });
+
+                const data = await response.json();
+                if (response.ok) {
+                    console.log('✅ Circuit breaker reset:', data.message);
+                    alert('✅ ' + data.message);
+                    // Reload auto-trade status to update UI
+                    await loadAutoTradeStatus();
+                } else {
+                    console.error('❌ Failed to reset circuit breaker:', data.message);
+                    alert('❌ ' + data.message);
+                }
+            } catch (error) {
+                console.error('❌ Error resetting circuit breaker:', error);
+                alert('❌ Error resetting circuit breaker: ' + error.message);
+            }
+        }
+
         // Trade history pagination (must be declared early for WebSocket usage)
         let currentPage = 1;
 
@@ -3632,12 +3700,12 @@ const SymbolModal = (function() {
                                     })()}
                                 </div>
 
-                                <!-- Cell 12: Button spanning all rows (defined last to ensure proper z-index) -->
+                                <!-- Cell 12: Status indicator (READ-ONLY - server manages all trades) -->
                                 <div style="grid-column: 12; grid-row: 1 / 4; display: flex; align-items: center; justify-content: center;">
-                                    <button class="trade-btn trade-btn-${signalClass}" onclick="executeTrade(event, ${signal.id}, '${signal.symbol}', '${signal.signal_type}', ${signal.entry_price}, ${signal.sl_price}, ${signal.tp_price})"
-                                            style="width: 90%; height: 95%; padding: 0; font-size: 0.75em; white-space: nowrap; display: flex; align-items: center; justify-content: center;">
+                                    <div class="trade-btn-${signalClass}"
+                                            style="width: 90%; height: 95%; padding: 0; font-size: 0.75em; white-space: nowrap; display: flex; align-items: center; justify-content: center; cursor: default; opacity: 0.7;">
                                         ${signal.signal_type}
-                                    </button>
+                                    </div>
                                 </div>
                             </div>
                         `;
@@ -3693,22 +3761,9 @@ const SymbolModal = (function() {
 
                         currentSignals[signal.id] = signal;
 
-                        // Check if AutoTrade should execute this signal
-                        if (!existing && autotradeEnabled.checked && !autoTradedSignals.has(signal.id)) {
-                            // Get min_confidence from server (loaded in loadAutoTradeStatus)
-                            const autotradeConfidence = window.autoTradeMinConfidence || 50;
-                            if (signal.confidence >= autotradeConfidence) {
-                                console.log(`AutoTrade: Executing ${signal.signal_type} ${signal.symbol} (confidence: ${signal.confidence}% >= ${autotradeConfidence}%)`);
-                                // Mark signal as auto-traded immediately to prevent duplicates
-                                autoTradedSignals.add(signal.id);
-                                localStorage.setItem('autoTradedSignals', JSON.stringify([...autoTradedSignals]));
-
-                                // Execute trade automatically (delay slightly to ensure DOM is updated)
-                                setTimeout(() => {
-                                    autoExecuteTrade(signal);
-                                }, 100);
-                            }
-                        }
+                        // ❌ REMOVED: Dashboard-based auto-trade execution
+                        // All trade execution is managed by server's auto_trader.py
+                        // Dashboard only displays signals - does NOT execute trades
                     }
                 });
 
@@ -3751,106 +3806,9 @@ const SymbolModal = (function() {
             }
         }
 
-        // Execute trade from signal
-        async function executeTrade(event, signalId, symbol, orderType, entry, sl, tp) {
-            const lotSize = parseFloat(document.getElementById(`lot-${signalId}`).textContent);
-
-            // No confirmation dialog - execute directly
-            const btn = event.currentTarget;
-            btn.disabled = true;
-            btn.textContent = '⏳ Trade wird geöffnet...';
-
-            try {
-                const response = await fetch('/api/open_trade', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        symbol: symbol,
-                        order_type: orderType,
-                        volume: lotSize,
-                        sl: sl,
-                        tp: tp,
-                        comment: `Signal #${signalId}`
-                    })
-                });
-
-                const data = await response.json();
-
-                if (data.status === 'success') {
-                    btn.textContent = `✅ Trade #${data.command_id} eröffnet!`;
-                    btn.style.background = '#4CAF50';
-                    setTimeout(() => {
-                        btn.disabled = false;
-                        btn.textContent = `📈 ${orderType} Trade öffnen`;
-                        btn.style.background = '';
-                    }, 3000);
-                } else {
-                    btn.textContent = '❌ Fehler: ' + data.message;
-                    btn.style.background = '#f44336';
-                    setTimeout(() => {
-                        btn.disabled = false;
-                        btn.textContent = `📈 ${orderType} Trade öffnen`;
-                        btn.style.background = '';
-                    }, 3000);
-                }
-            } catch (error) {
-                console.error('Trade execution error:', error);
-                btn.textContent = '❌ Verbindungsfehler';
-                setTimeout(() => {
-                    btn.disabled = false;
-                    btn.textContent = `📈 ${orderType} Trade öffnen`;
-                    btn.style.background = '';
-                }, 3000);
-            }
-        }
-
-        // Auto-execute trade for AutoTrade feature
-        async function autoExecuteTrade(signal) {
-            const lotSize = parseFloat(document.getElementById(`lot-${signal.id}`)?.textContent || '0.01');
-            const trailingStopEnabled = document.getElementById('autotrade-trailing-stop').checked;
-            const trailingStopPips = parseFloat(document.getElementById(`ts-pips-${signal.id}`)?.value || '10');
-
-            console.log(`AutoTrade: Opening ${signal.signal_type} trade for ${signal.symbol}` +
-                        (trailingStopEnabled ? ` with TS ${trailingStopPips} pips` : ''));
-
-            try {
-                const tradeData = {
-                    symbol: signal.symbol,
-                    order_type: signal.signal_type,
-                    volume: lotSize,
-                    sl: signal.sl_price,
-                    tp: signal.tp_price,
-                    comment: `AutoTrade #${signal.id} ${signal.timeframe} (${Math.round(signal.confidence)}%)`,
-                    signal_id: signal.id,
-                    timeframe: signal.timeframe
-                };
-
-                // Add trailing stop if enabled
-                if (trailingStopEnabled) {
-                    tradeData.trailing_stop = trailingStopPips;
-                }
-
-                const response = await fetch('/api/open_trade', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify(tradeData)
-                });
-
-                const data = await response.json();
-
-                if (data.status === 'success') {
-                    console.log(`AutoTrade: Successfully opened trade #${data.command_id} for ${signal.symbol}`);
-                } else {
-                    console.error(`AutoTrade: Failed to open trade for ${signal.symbol}: ${data.message}`);
-                }
-            } catch (error) {
-                console.error(`AutoTrade: Error executing trade for ${signal.symbol}:`, error);
-            }
-        }
+        // ❌ REMOVED: Dashboard should NOT execute trades
+        // All trade execution is managed by server's auto_trader.py
+        // Dashboard is VIEW-ONLY for monitoring signals and positions
 
         // Calculate lot size based on risk percentage
         async function calculateLotSize(signalId, symbol, entry, sl, riskPercent) {
@@ -5891,6 +5849,18 @@ const SymbolModal = (function() {
                     safety.circuit_breaker.tripped ? '🔴 TRIPPED' : '🟢 Active';
                 document.getElementById('cb-failed-count').textContent =
                     safety.circuit_breaker.failed_command_count;
+
+                // Show/hide reset button based on circuit breaker status
+                const resetBtn = document.getElementById('reset-circuit-breaker-btn');
+                if (resetBtn) {
+                    resetBtn.style.display = safety.circuit_breaker.tripped ? 'block' : 'none';
+                }
+
+                // Show/hide override warning
+                const overrideWarning = document.getElementById('cb-override-warning');
+                if (overrideWarning) {
+                    overrideWarning.style.display = safety.circuit_breaker.daily_loss_override ? 'block' : 'none';
+                }
 
                 // Position Limits
                 document.getElementById('pos-open').textContent =
