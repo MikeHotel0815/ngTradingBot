@@ -5987,10 +5987,15 @@ const SymbolModal = (function() {
 
                 // Update detail cards
                 // Circuit Breaker
-                document.getElementById('cb-status').textContent =
-                    safety.circuit_breaker.tripped ? '🔴 TRIPPED' : '🟢 Active';
-                document.getElementById('cb-failed-count').textContent =
-                    safety.circuit_breaker.failed_command_count;
+                const cbStatus = document.getElementById('cb-status');
+                const cbFailedCount = document.getElementById('cb-failed-count');
+
+                if (cbStatus && safety.circuit_breaker) {
+                    cbStatus.textContent = safety.circuit_breaker.tripped ? '🔴 TRIPPED' : '🟢 Active';
+                }
+                if (cbFailedCount && safety.circuit_breaker) {
+                    cbFailedCount.textContent = safety.circuit_breaker.failed_command_count;
+                }
 
                 // Show/hide reset button based on circuit breaker status
                 const resetBtn = document.getElementById('reset-circuit-breaker-btn');
@@ -6000,28 +6005,37 @@ const SymbolModal = (function() {
 
                 // Show/hide override warning
                 const overrideWarning = document.getElementById('cb-override-warning');
-                if (overrideWarning) {
+                if (overrideWarning && safety.circuit_breaker) {
                     overrideWarning.style.display = safety.circuit_breaker.daily_loss_override ? 'block' : 'none';
                 }
 
                 // Position Limits
-                document.getElementById('pos-open').textContent =
-                    safety.position_limits.open_positions;
-                document.getElementById('pos-max').textContent =
-                    safety.position_limits.max_positions;
-                document.getElementById('pos-util').textContent =
-                    safety.position_limits.utilization_percent + '%';
+                const posOpen = document.getElementById('pos-open');
+                const posMax = document.getElementById('pos-max');
+                const posUtil = document.getElementById('pos-util');
+
+                if (posOpen && safety.position_limits) {
+                    posOpen.textContent = safety.position_limits.open_positions;
+                }
+                if (posMax && safety.position_limits) {
+                    posMax.textContent = safety.position_limits.max_positions;
+                }
+                if (posUtil && safety.position_limits) {
+                    posUtil.textContent = safety.position_limits.utilization_percent + '%';
+                }
 
                 // Daily Drawdown
-                if (safety.daily_drawdown.daily_pnl !== undefined) {
+                const ddPnl = document.getElementById('dd-pnl');
+                const ddLimit = document.getElementById('dd-limit');
+
+                if (ddPnl && safety.daily_drawdown && safety.daily_drawdown.daily_pnl !== undefined) {
                     const pnl = safety.daily_drawdown.daily_pnl;
                     const pnlFormatted = `€${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}`;
-                    document.getElementById('dd-pnl').textContent = pnlFormatted;
-                    document.getElementById('dd-pnl').style.color = pnl >= 0 ? '#4CAF50' : '#F44336';
+                    ddPnl.textContent = pnlFormatted;
+                    ddPnl.style.color = pnl >= 0 ? '#4CAF50' : '#F44336';
                 }
-                if (safety.daily_drawdown.limit_eur !== undefined) {
-                    document.getElementById('dd-limit').textContent =
-                        `€${safety.daily_drawdown.limit_eur.toFixed(2)}`;
+                if (ddLimit && safety.daily_drawdown && safety.daily_drawdown.limit_eur !== undefined) {
+                    ddLimit.textContent = `€${safety.daily_drawdown.limit_eur.toFixed(2)}`;
                 }
 
                 // SL-Hit Cooldowns
