@@ -5645,6 +5645,110 @@ def proxy_update_spread_config(symbol):
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+# ============================================================================
+# GLOBAL SETTINGS API (app_webui) - Duplicate from app_command for browser access
+# ============================================================================
+
+@app_webui.route('/api/settings')
+def get_settings_webui():
+    """Get global settings (WebUI version on port 9905)"""
+    try:
+        from models import GlobalSettings
+        db = ScopedSession()
+        try:
+            settings = GlobalSettings.get_settings(db)
+            return jsonify({
+                'max_positions': settings.max_positions,
+                'max_positions_per_symbol_timeframe': settings.max_positions_per_symbol_timeframe,
+                'risk_per_trade_percent': float(settings.risk_per_trade_percent),
+                'position_size_percent': float(settings.position_size_percent),
+                'max_drawdown_percent': float(settings.max_drawdown_percent),
+                'min_signal_confidence': float(settings.min_signal_confidence),
+                'signal_max_age_minutes': settings.signal_max_age_minutes,
+                'sl_cooldown_minutes': settings.sl_cooldown_minutes,
+                'min_bars_required': settings.min_bars_required,
+                'min_bars_d1': settings.min_bars_d1,
+                'realistic_profit_factor': float(settings.realistic_profit_factor),
+                'autotrade_enabled': settings.autotrade_enabled,
+                'autotrade_min_confidence': float(settings.autotrade_min_confidence),
+                'updated_at': settings.updated_at.isoformat() if settings.updated_at else None
+            }), 200
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"❌ Error getting settings (webui): {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app_webui.route('/api/settings', methods=['POST'])
+def update_settings_webui():
+    """Update global settings (WebUI version on port 9905)"""
+    try:
+        from models import GlobalSettings
+        data = request.get_json()
+
+        db = ScopedSession()
+        try:
+            settings = GlobalSettings.get_settings(db)
+
+            # Update fields if provided
+            if 'max_positions' in data:
+                settings.max_positions = int(data['max_positions'])
+            if 'max_positions_per_symbol_timeframe' in data:
+                settings.max_positions_per_symbol_timeframe = int(data['max_positions_per_symbol_timeframe'])
+            if 'risk_per_trade_percent' in data:
+                settings.risk_per_trade_percent = float(data['risk_per_trade_percent'])
+            if 'position_size_percent' in data:
+                settings.position_size_percent = validate_numeric_range(
+                    data['position_size_percent'], 'position_size_percent', 0.001, 100.0
+                )
+            if 'max_drawdown_percent' in data:
+                settings.max_drawdown_percent = validate_numeric_range(
+                    data['max_drawdown_percent'], 'max_drawdown_percent', 1.0, 100.0
+                )
+            if 'min_signal_confidence' in data:
+                settings.min_signal_confidence = validate_confidence(
+                    data['min_signal_confidence'], 'min_signal_confidence'
+                ) / 100.0
+            if 'signal_max_age_minutes' in data:
+                settings.signal_max_age_minutes = int(validate_numeric_range(
+                    data['signal_max_age_minutes'], 'signal_max_age_minutes', 1, 1440
+                ))
+            if 'sl_cooldown_minutes' in data:
+                settings.sl_cooldown_minutes = int(validate_numeric_range(
+                    data['sl_cooldown_minutes'], 'sl_cooldown_minutes', 0, 1440
+                ))
+            if 'min_bars_required' in data:
+                settings.min_bars_required = int(validate_numeric_range(
+                    data['min_bars_required'], 'min_bars_required', 10, 500
+                ))
+            if 'min_bars_d1' in data:
+                settings.min_bars_d1 = int(validate_numeric_range(
+                    data['min_bars_d1'], 'min_bars_d1', 10, 500
+                ))
+            if 'realistic_profit_factor' in data:
+                settings.realistic_profit_factor = validate_numeric_range(
+                    data['realistic_profit_factor'], 'realistic_profit_factor', 0.1, 10.0
+                )
+
+            settings.updated_at = datetime.utcnow()
+            settings.updated_by = 'webui'
+
+            db.commit()
+
+            logger.info(f"Global settings updated (webui): {data.keys()}")
+            return jsonify({'status': 'success', 'message': 'Settings updated'}), 200
+
+        finally:
+            db.close()
+    except ValueError as ve:
+        logger.warning(f"Validation error updating settings (webui): {ve}")
+        return jsonify({'status': 'error', 'message': str(ve)}), 400
+    except Exception as e:
+        logger.error(f"Error updating settings (webui): {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 # ✅ Register Unified Daily Loss Protection API
 try:
     from api_protection import register_protection_endpoints

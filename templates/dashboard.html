@@ -5552,8 +5552,7 @@ const SymbolModal = (function() {
     <script>
         async function showSettingsModal() {
             try {
-                const apiBase = window.location.protocol + '//' + window.location.hostname + ':9900';
-                const response = await fetch(apiBase + '/api/settings');
+                const response = await fetch('/api/settings');
                 const settings = await response.json();
 
                 // Populate form
@@ -5647,8 +5646,7 @@ const SymbolModal = (function() {
                     realistic_profit_factor: parseFloat(document.getElementById('set-realistic-factor').value)
                 };
 
-                const apiBase = window.location.protocol + '//' + window.location.hostname + ':9900';
-                const response = await fetch(apiBase + '/api/settings', {
+                const response = await fetch('/api/settings', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify(settings)
