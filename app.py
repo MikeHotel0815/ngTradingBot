@@ -5645,6 +5645,14 @@ def proxy_update_spread_config(symbol):
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+# ✅ Register Unified Daily Loss Protection API
+try:
+    from api_protection import register_protection_endpoints
+    register_protection_endpoints(app)
+except Exception as e:
+    logger.error(f"Failed to register protection API: {e}")
+
+
 if __name__ == '__main__':
     logger.info("=" * 60)
     logger.info("ngTradingBot Server Starting...")

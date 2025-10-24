@@ -16,7 +16,7 @@ Configuration per account:
 import logging
 from datetime import datetime, timedelta, time
 from typing import Optional, Dict
-from sqlalchemy import Column, Integer, Numeric, Date, Boolean, func
+from sqlalchemy import Column, Integer, Numeric, Date, Boolean, DateTime, Text, func
 from database import get_db, Base
 from models import Account, Trade
 from ai_decision_log import log_risk_limit
@@ -25,21 +25,50 @@ logger = logging.getLogger(__name__)
 
 
 class DailyDrawdownLimit(Base):
-    """Daily Drawdown Tracking"""
+    """
+    Unified Daily Loss Protection System
+
+    Single source of truth for ALL daily loss protection mechanisms:
+    - Daily loss limits (percentage and absolute EUR)
+    - Circuit breaker (persistent across restarts)
+    - Auto-pause system (consecutive losses)
+    - Total drawdown protection
+
+    Replaces fragmented protection logic in:
+    - auto_trader.py (circuit_breaker_enabled, max_daily_loss_percent)
+    - symbol_trading_config (auto_pause_enabled, pause_after_consecutive_losses)
+    """
     __tablename__ = 'daily_drawdown_limits'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     account_id = Column(Integer, nullable=False, unique=True)
 
-    # Configuration
-    max_daily_loss_percent = Column(Numeric(5, 2), default=2.0)  # 2% default
+    # Master Protection Switch
+    protection_enabled = Column(Boolean, default=True, nullable=False)
+
+    # Daily Loss Limits
+    max_daily_loss_percent = Column(Numeric(5, 2), default=10.0)  # 10% default
     max_daily_loss_eur = Column(Numeric(10, 2))  # Optional absolute limit
+
+    # Auto-Pause System (per-symbol consecutive losses)
+    auto_pause_enabled = Column(Boolean, default=False, nullable=False)  # Disabled by default for testing
+    pause_after_consecutive_losses = Column(Integer, default=3)
+
+    # Total Drawdown Protection
+    max_total_drawdown_percent = Column(Numeric(5, 2), default=20.0)
+
+    # Circuit Breaker Status (persistent across restarts)
+    circuit_breaker_tripped = Column(Boolean, default=False, nullable=False)
 
     # Current day tracking
     tracking_date = Column(Date, default=datetime.utcnow().date)
     daily_pnl = Column(Numeric(10, 2), default=0.0)
     limit_reached = Column(Boolean, default=False)
     auto_trading_disabled_at = Column(Date)
+
+    # Metadata
+    last_reset_at = Column(DateTime)
+    notes = Column(Text)
 
 
 class DailyDrawdownProtection:
@@ -239,6 +268,111 @@ class DailyDrawdownProtection:
         except Exception as e:
             logger.error(f"Error updating drawdown config: {e}")
             db.rollback()
+        finally:
+            db.close()
+
+
+    def enable_protection(self, enabled: bool = True):
+        """Enable or disable daily loss protection"""
+        db = next(get_db())
+        try:
+            limit = db.query(DailyDrawdownLimit).filter_by(
+                account_id=self.account_id
+            ).first()
+
+            if limit:
+                limit.protection_enabled = enabled
+                db.commit()
+                status = "enabled" if enabled else "disabled"
+                logger.info(f"✅ Daily loss protection {status} for account {self.account_id}")
+
+        except Exception as e:
+            logger.error(f"Error setting protection status: {e}")
+            db.rollback()
+        finally:
+            db.close()
+
+    def reset_circuit_breaker(self):
+        """Reset circuit breaker manually"""
+        db = next(get_db())
+        try:
+            limit = db.query(DailyDrawdownLimit).filter_by(
+                account_id=self.account_id
+            ).first()
+
+            if limit:
+                limit.circuit_breaker_tripped = False
+                limit.limit_reached = False
+                limit.last_reset_at = datetime.utcnow()
+                db.commit()
+                logger.info(f"✅ Circuit breaker reset for account {self.account_id}")
+
+        except Exception as e:
+            logger.error(f"Error resetting circuit breaker: {e}")
+            db.rollback()
+        finally:
+            db.close()
+
+    def update_full_config(
+        self,
+        protection_enabled: Optional[bool] = None,
+        max_daily_loss_percent: Optional[float] = None,
+        max_daily_loss_eur: Optional[float] = None,
+        auto_pause_enabled: Optional[bool] = None,
+        pause_after_consecutive_losses: Optional[int] = None,
+        max_total_drawdown_percent: Optional[float] = None,
+        notes: Optional[str] = None
+    ):
+        """Update all protection settings at once (for Dashboard UI)"""
+        db = next(get_db())
+
+        try:
+            limit = db.query(DailyDrawdownLimit).filter_by(
+                account_id=self.account_id
+            ).first()
+
+            if not limit:
+                self._ensure_limit_exists()
+                limit = db.query(DailyDrawdownLimit).filter_by(
+                    account_id=self.account_id
+                ).first()
+
+            if protection_enabled is not None:
+                limit.protection_enabled = protection_enabled
+
+            if max_daily_loss_percent is not None:
+                limit.max_daily_loss_percent = max_daily_loss_percent
+
+            if max_daily_loss_eur is not None:
+                limit.max_daily_loss_eur = max_daily_loss_eur
+
+            if auto_pause_enabled is not None:
+                limit.auto_pause_enabled = auto_pause_enabled
+
+            if pause_after_consecutive_losses is not None:
+                limit.pause_after_consecutive_losses = pause_after_consecutive_losses
+
+            if max_total_drawdown_percent is not None:
+                limit.max_total_drawdown_percent = max_total_drawdown_percent
+
+            if notes is not None:
+                limit.notes = notes
+
+            db.commit()
+            logger.info(f"✅ Updated full protection config for account {self.account_id}")
+
+            return {
+                'success': True,
+                'message': 'Protection settings updated successfully'
+            }
+
+        except Exception as e:
+            logger.error(f"Error updating full config: {e}")
+            db.rollback()
+            return {
+                'success': False,
+                'message': f'Error: {str(e)}'
+            }
         finally:
             db.close()
 

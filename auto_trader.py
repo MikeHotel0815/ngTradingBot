@@ -74,11 +74,15 @@ class AutoTrader:
         self.pending_commands = {}
         self.failed_command_count = 0
 
-        # Circuit breaker settings
-        self.circuit_breaker_enabled = True
-        self.max_daily_loss_percent = 10.0  # Stop trading if daily loss exceeds 10% (increased from 5%)
-        self.max_total_drawdown_percent = 20.0  # Stop if total drawdown exceeds 20%
+        # ✅ UNIFIED PROTECTION: Load from database (single source of truth)
+        # These will be loaded from daily_drawdown_limits table in _load_protection_settings()
+        self.circuit_breaker_enabled = True  # Default fallback
+        self.max_daily_loss_percent = 10.0  # Default fallback
+        self.max_total_drawdown_percent = 20.0  # Default fallback
         self.circuit_breaker_tripped = False
+        self.auto_pause_enabled = False  # Default fallback
+        self.pause_after_consecutive_losses = 3  # Default fallback
+        self.protection_enabled = True  # Master switch
         self.circuit_breaker_reason = None
         self.daily_loss_override = False  # Manual override for daily loss limit
 
@@ -104,8 +108,13 @@ class AutoTrader:
         self.min_autotrade_confidence = 60.0  # Default fallback
         self.risk_profile = 'normal'  # Default: moderate/normal/aggressive
         self._load_autotrade_status_from_db()
+        self._load_protection_settings()  # ✅ Load unified protection settings from DB
 
-        logger.info(f"Auto-Trader initialized (enabled={self.enabled}, risk_profile={self.risk_profile}, min_confidence={self.min_autotrade_confidence}%)")
+        logger.info(
+            f"Auto-Trader initialized (enabled={self.enabled}, risk_profile={self.risk_profile}, "
+            f"min_confidence={self.min_autotrade_confidence}%, protection_enabled={self.protection_enabled}, "
+            f"daily_loss_limit={self.max_daily_loss_percent}%)"
+        )
 
     def _load_settings(self, db: Session):
         """Load global settings from database"""
@@ -152,6 +161,52 @@ class AutoTrader:
         except Exception as e:
             logger.error(f"❌ Failed to save auto-trade status to DB: {e}")
 
+    def _load_protection_settings(self):
+        """✅ NEW: Load unified protection settings from daily_drawdown_limits table"""
+        try:
+            from daily_drawdown_protection import DailyDrawdownLimit
+            db = ScopedSession()
+            try:
+                # Load for default account (account_id=3 for testing, should be configurable)
+                limit = db.query(DailyDrawdownLimit).filter_by(account_id=3).first()
+
+                if limit:
+                    self.protection_enabled = bool(limit.protection_enabled)
+                    self.max_daily_loss_percent = float(limit.max_daily_loss_percent) if limit.max_daily_loss_percent else 10.0
+                    self.max_total_drawdown_percent = float(limit.max_total_drawdown_percent) if limit.max_total_drawdown_percent else 20.0
+                    self.circuit_breaker_tripped = bool(limit.circuit_breaker_tripped)
+                    self.auto_pause_enabled = bool(limit.auto_pause_enabled)
+                    self.pause_after_consecutive_losses = int(limit.pause_after_consecutive_losses) if limit.pause_after_consecutive_losses else 3
+
+                    logger.info(
+                        f"✅ Protection settings loaded from DB: "
+                        f"enabled={self.protection_enabled}, daily_loss={self.max_daily_loss_percent}%, "
+                        f"total_drawdown={self.max_total_drawdown_percent}%, auto_pause={self.auto_pause_enabled}, "
+                        f"circuit_breaker_tripped={self.circuit_breaker_tripped}"
+                    )
+                else:
+                    logger.warning("No protection settings found in DB, using defaults")
+
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"❌ Failed to load protection settings from DB: {e}")
+            logger.info("Using default protection values")
+
+    def _persist_circuit_breaker_status(self, db: Session, account_id: int, tripped: bool):
+        """✅ Persist circuit breaker status to database"""
+        try:
+            from daily_drawdown_protection import DailyDrawdownLimit
+            limit = db.query(DailyDrawdownLimit).filter_by(account_id=account_id).first()
+
+            if limit:
+                limit.circuit_breaker_tripped = tripped
+                db.commit()
+                logger.info(f"✅ Circuit breaker status persisted to DB: tripped={tripped}")
+
+        except Exception as e:
+            logger.error(f"❌ Failed to persist circuit breaker status: {e}")
+
     def set_min_confidence(self, min_confidence: float):
         """Set minimum confidence threshold for auto-trading"""
         self.min_autotrade_confidence = float(min_confidence)
@@ -191,16 +246,33 @@ class AutoTrader:
         self._save_autotrade_status_to_db()  # ✅ Persist to DB
         logger.warning("🛑 Auto-Trading DISABLED (Kill-Switch)")
 
-    def reset_circuit_breaker(self, override_daily_loss=False):
+    def reset_circuit_breaker(self, override_daily_loss=False, account_id: int = 3):
         """
         Reset circuit breaker manually
 
         Args:
             override_daily_loss: If True, temporarily ignore daily loss limit for this session
+            account_id: Account ID to reset circuit breaker for
         """
         self.circuit_breaker_tripped = False
         self.circuit_breaker_reason = None
         self.failed_command_count = 0
+
+        # ✅ Persist to database
+        try:
+            from daily_drawdown_protection import DailyDrawdownLimit
+            db = ScopedSession()
+            try:
+                limit = db.query(DailyDrawdownLimit).filter_by(account_id=account_id).first()
+                if limit:
+                    limit.circuit_breaker_tripped = False
+                    limit.limit_reached = False
+                    db.commit()
+                    logger.info(f"✅ Circuit breaker status persisted to DB: tripped=False")
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"❌ Failed to persist circuit breaker reset: {e}")
 
         if override_daily_loss:
             self.daily_loss_override = True
@@ -213,13 +285,19 @@ class AutoTrader:
         """
         Check if circuit breaker should trip to prevent catastrophic losses.
 
+        ✅ UNIFIED PROTECTION: Loads settings from daily_drawdown_limits table
         Circuit breaker trips if:
-        1. Daily loss exceeds max_daily_loss_percent (default 5%)
-        2. Total drawdown exceeds max_total_drawdown_percent (default 20%)
+        1. Protection is enabled (protection_enabled=true)
+        2. Daily loss exceeds max_daily_loss_percent
+        3. Total drawdown exceeds max_total_drawdown_percent
 
         Returns:
             True if safe to trade, False if circuit breaker tripped
         """
+        # ✅ Master switch: If protection disabled, allow all trading
+        if not self.protection_enabled:
+            return True
+
         if not self.circuit_breaker_enabled:
             return True  # Circuit breaker disabled
 
@@ -247,6 +325,9 @@ class AutoTrader:
                         self.circuit_breaker_tripped = True
                         self.circuit_breaker_reason = f"Daily loss exceeded {self.max_daily_loss_percent}%: ${account.profit_today:.2f} ({daily_loss_percent:.2f}%)"
                         self.enabled = False
+
+                        # ✅ Persist to database
+                        self._persist_circuit_breaker_status(db, account_id, tripped=True)
 
                         logger.critical(f"🚨 CIRCUIT BREAKER TRIPPED: {self.circuit_breaker_reason}")
                         logger.critical(f"🛑 Auto-trading STOPPED for safety")
