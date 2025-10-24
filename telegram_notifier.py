@@ -154,29 +154,41 @@ class TelegramNotifier:
         """Send trade execution alert"""
 
         symbol = trade_info.get('symbol')
-        direction = trade_info.get('direction')
+        direction = trade_info.get('direction', '').upper()
         entry = trade_info.get('entry_price')
         sl = trade_info.get('sl')
         tp = trade_info.get('tp')
         confidence = trade_info.get('confidence', 0)
+        volume = trade_info.get('volume', 0)
 
+        # Calculate risk/reward
+        if entry and sl and tp:
+            risk = abs(float(entry) - float(sl))
+            reward = abs(float(tp) - float(entry))
+            rr_ratio = reward / risk if risk > 0 else 0
+        else:
+            rr_ratio = 0
+
+        # ✅ NEW FORMAT: Symbol + Direction FIRST, then compact details
         message = f"""
-📊 <b>NEW TRADE OPENED</b>
+🔔 <b>{symbol} {direction}</b> | {confidence:.0f}%
 
-<b>{symbol}</b> {direction}
-<b>Entry:</b> {entry:.5f}
-<b>SL:</b> {sl:.5f}
-<b>TP:</b> {tp:.5f}
-<b>Confidence:</b> {confidence:.1f}%
+Entry: {entry:.5f}
+SL: {sl:.5f} | TP: {tp:.5f}"""
 
-<i>Good luck! 🍀</i>
-"""
+        # Add R/R ratio if available
+        if rr_ratio > 0:
+            message += f"\nR:R 1:{rr_ratio:.1f}"
+
+        # Add volume if available
+        if volume:
+            message += f" | Vol: {volume}"
 
         return self.send_message(message, silent=True)
 
     def send_trade_closed_alert(self, trade_info: Dict, account_balance: float) -> bool:
         """Send trade closed notification with current account balance"""
-        
+
         ticket = trade_info.get('ticket')
         symbol = trade_info.get('symbol')
         direction = trade_info.get('direction', '').upper()
@@ -188,59 +200,51 @@ class TelegramNotifier:
         commission = trade_info.get('commission', 0)
         close_reason = trade_info.get('close_reason', 'Unknown')
         duration = trade_info.get('duration', '')
-        
+
         # Calculate total P&L
         total_pnl = float(profit or 0) + float(swap or 0) + float(commission or 0)
-        
+
         # Choose emoji based on profit
         if total_pnl > 0:
-            pnl_emoji = '💚✅'
+            pnl_emoji = '✅'
             result_text = 'WIN'
         elif total_pnl < 0:
-            pnl_emoji = '❤️❌'
+            pnl_emoji = '❌'
             result_text = 'LOSS'
         else:
-            pnl_emoji = '💛'
+            pnl_emoji = '➖'
             result_text = 'BREAKEVEN'
-        
-        # Format close reason
+
+        # Format close reason (compact)
         reason_map = {
-            'TP_HIT': '🎯 Take Profit',
-            'SL_HIT': '🛑 Stop Loss',
-            'MANUAL': '👤 Manual Close',
-            'TRAILING_STOP': '📈 Trailing Stop',
-            'TIME_EXIT': '⏰ Time Exit',
-            'STRATEGY_INVALID': '📊 Strategy Invalid',
-            'EMERGENCY_CLOSE': '🚨 Emergency Close',
-            'PARTIAL_CLOSE': '✂️ Partial Close'
+            'TP_HIT': 'TP',
+            'SL_HIT': 'SL',
+            'MANUAL': 'Manual',
+            'TRAILING_STOP': 'Trail',
+            'TIME_EXIT': 'Time',
+            'STRATEGY_INVALID': 'Invalid',
+            'EMERGENCY_CLOSE': 'Emergency',
+            'PARTIAL_CLOSE': 'Partial'
         }
-        close_reason_formatted = reason_map.get(close_reason, close_reason)
-        
+        close_reason_short = reason_map.get(close_reason, close_reason)
+
+        # ✅ NEW FORMAT: Emoji + Amount FIRST, then details
         message = f"""
-{pnl_emoji} <b>TRADE CLOSED - {result_text}</b>
+{pnl_emoji} <b>€{total_pnl:+.2f}</b> | {symbol} {direction}
 
-<b>#{ticket}</b> | {symbol} {direction} {volume}
+#{ticket} | {close_reason_short}{f' | {duration}' if duration else ''}
+Entry: {open_price:.5f} → Exit: {close_price:.5f}
 
-<b>Entry:</b> {open_price:.5f}
-<b>Exit:</b> {close_price:.5f}
-<b>Reason:</b> {close_reason_formatted}
-{f'<b>Duration:</b> {duration}' if duration else ''}
-
-<b>━━━━━━━━━━━━━━━━━</b>
-<b>Profit:</b> €{profit:.2f}
-<b>Swap:</b> €{swap:.2f}
-<b>Commission:</b> €{commission:.2f}
-<b>━━━━━━━━━━━━━━━━━</b>
-<b>Total P&L:</b> €{total_pnl:+.2f}
-
-<b>💰 Current Balance: €{account_balance:.2f}</b>
-
-<i>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</i>
+💰 Balance: €{account_balance:.2f}
 """
-        
+
+        # Add detailed breakdown only for significant trades (|P&L| > 1 EUR)
+        if abs(total_pnl) > 1.0:
+            message += f"\n<i>P: €{profit:.2f} | S: €{swap:.2f} | C: €{commission:.2f}</i>"
+
         # Don't silence if it's a loss (so you notice)
         silent = (total_pnl >= 0)
-        
+
         return self.send_message(message, silent=silent)
 
     def send_daily_summary(self, stats: Dict) -> bool:
@@ -249,17 +253,24 @@ class TelegramNotifier:
         trades_today = stats.get('trades_today', 0)
         profit_today = stats.get('profit_today', 0)
         win_rate = stats.get('win_rate', 0)
+        wins = stats.get('wins', 0)
+        losses = stats.get('losses', 0)
 
-        profit_emoji = '💚' if profit_today > 0 else '❤️' if profit_today < 0 else '💛'
+        # Choose emoji based on profit
+        if profit_today > 0:
+            profit_emoji = '✅'
+        elif profit_today < 0:
+            profit_emoji = '❌'
+        else:
+            profit_emoji = '➖'
 
+        # ✅ NEW FORMAT: Profit FIRST, then compact stats
         message = f"""
-📈 <b>DAILY SUMMARY</b>
+📊 <b>Daily Summary</b> | {datetime.now().strftime('%d.%m.%Y')}
 
-<b>Trades:</b> {trades_today}
-<b>Profit:</b> {profit_emoji} €{profit_today:.2f}
-<b>Win Rate:</b> {win_rate:.1f}%
+{profit_emoji} <b>€{profit_today:+.2f}</b>
 
-<i>{datetime.now().strftime('%Y-%m-%d')}</i>
+{trades_today} Trades | {win_rate:.0f}% WR ({wins}W/{losses}L)
 """
 
         return self.send_message(message, silent=True)
