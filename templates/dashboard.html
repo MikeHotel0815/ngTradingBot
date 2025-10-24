@@ -5466,6 +5466,76 @@ const SymbolModal = (function() {
                         </div>
                     </div>
                 </div>
+
+                <!-- Daily Loss Protection (NEW) -->
+                <div style="grid-column: 1 / -1; background: #2a2a2a; padding: 15px; border-radius: 8px; border: 2px solid #FF5722;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                        <h3 style="margin: 0; color: #FF5722;">🛡️ Daily Loss Protection</h3>
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <span id="protection-status-badge" style="padding: 4px 12px; border-radius: 4px; font-size: 0.85em; font-weight: 600;">Loading...</span>
+                            <label style="display: flex; align-items: center; cursor: pointer;">
+                                <input type="checkbox" id="protection-enabled" onchange="toggleProtection()" style="width: 20px; height: 20px; cursor: pointer;">
+                                <span style="margin-left: 8px; color: #e0e0e0;">Enable Protection</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px;">
+                        <div>
+                            <label style="display: block; margin-bottom: 5px; color: #888;">Max Daily Loss (%):</label>
+                            <input type="number" id="max-daily-loss-percent" min="0" max="100" step="1" style="width: 100%; padding: 8px; background: #1a1a1a; border: 1px solid #444; color: #e0e0e0; border-radius: 4px;">
+                            <div style="font-size: 0.85em; color: #666; margin-top: 5px;">Stop trading at % loss</div>
+                        </div>
+                        <div>
+                            <label style="display: block; margin-bottom: 5px; color: #888;">Max Daily Loss (EUR):</label>
+                            <input type="number" id="max-daily-loss-eur" min="0" max="1000" step="5" style="width: 100%; padding: 8px; background: #1a1a1a; border: 1px solid #444; color: #e0e0e0; border-radius: 4px;" placeholder="Optional">
+                            <div style="font-size: 0.85em; color: #666; margin-top: 5px;">Absolute limit (optional)</div>
+                        </div>
+                        <div>
+                            <label style="display: block; margin-bottom: 5px; color: #888;">Max Total Drawdown (%):</label>
+                            <input type="number" id="max-total-drawdown" min="0" max="100" step="1" style="width: 100%; padding: 8px; background: #1a1a1a; border: 1px solid #444; color: #e0e0e0; border-radius: 4px;">
+                            <div style="font-size: 0.85em; color: #666; margin-top: 5px;">Account-level protection</div>
+                        </div>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 15px;">
+                        <div>
+                            <label style="display: flex; align-items: center; cursor: pointer; margin-bottom: 10px;">
+                                <input type="checkbox" id="auto-pause-enabled" style="width: 18px; height: 18px; cursor: pointer;">
+                                <span style="margin-left: 8px; color: #e0e0e0;">Enable Auto-Pause (per symbol)</span>
+                            </label>
+                            <label style="display: block; margin-bottom: 5px; color: #888;">Pause after consecutive losses:</label>
+                            <input type="number" id="pause-after-losses" min="1" max="10" step="1" style="width: 100%; padding: 8px; background: #1a1a1a; border: 1px solid #444; color: #e0e0e0; border-radius: 4px;">
+                            <div style="font-size: 0.85em; color: #666; margin-top: 5px;">Default: 3 losses</div>
+                        </div>
+                        <div>
+                            <label style="display: block; margin-bottom: 5px; color: #888;">Current Status:</label>
+                            <div style="background: #1a1a1a; padding: 12px; border-radius: 4px; border: 1px solid #444;">
+                                <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                                    <span style="color: #888;">Today's P&L:</span>
+                                    <span id="current-daily-pnl" style="font-weight: 600; color: #4CAF50;">€0.00</span>
+                                </div>
+                                <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                                    <span style="color: #888;">Circuit Breaker:</span>
+                                    <span id="circuit-breaker-status" style="font-weight: 600;">OK</span>
+                                </div>
+                                <button id="reset-circuit-breaker-btn" onclick="resetCircuitBreaker()" style="width: 100%; margin-top: 10px; background: #FF5722; color: white; border: none; padding: 8px; border-radius: 4px; cursor: pointer; font-size: 0.9em; display: none;">
+                                    🔄 Reset Circuit Breaker
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 15px; padding: 12px; background: #1a1a1a; border-radius: 4px; border-left: 4px solid #FF5722;">
+                        <div style="font-size: 0.9em; color: #888; line-height: 1.6;">
+                            <strong style="color: #FF5722;">⚠️ Protection System:</strong><br>
+                            • <strong>Daily Loss Limit:</strong> Stops trading when daily loss exceeds percentage or EUR limit<br>
+                            • <strong>Total Drawdown:</strong> Stops trading when account drawdown exceeds limit<br>
+                            • <strong>Auto-Pause:</strong> Temporarily pauses individual symbols after consecutive losses<br>
+                            • <strong>Circuit Breaker:</strong> Persistent safety switch that survives restarts
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <div style="display: flex; gap: 10px; margin-top: 25px; justify-content: flex-end;">
@@ -5498,9 +5568,64 @@ const SymbolModal = (function() {
                 document.getElementById('set-min-bars-d1').value = settings.min_bars_d1;
                 document.getElementById('set-realistic-factor').value = settings.realistic_profit_factor.toFixed(2);
 
+                // Load protection settings
+                await loadProtectionSettings();
+
                 document.getElementById('settings-modal').style.display = 'flex';
             } catch (error) {
                 alert('Error loading settings: ' + error.message);
+            }
+        }
+
+        async function loadProtectionSettings() {
+            try {
+                const apiBase = window.location.protocol + '//' + window.location.hostname + ':9900';
+                const response = await fetch(apiBase + '/api/protection/?account_id=3');
+                const data = await response.json();
+
+                if (data.success && data.protection) {
+                    const prot = data.protection;
+
+                    // Populate protection fields
+                    document.getElementById('protection-enabled').checked = prot.protection_enabled;
+                    document.getElementById('max-daily-loss-percent').value = prot.max_daily_loss_percent || 10;
+                    document.getElementById('max-daily-loss-eur').value = prot.max_daily_loss_eur || '';
+                    document.getElementById('max-total-drawdown').value = prot.max_total_drawdown_percent || 20;
+                    document.getElementById('auto-pause-enabled').checked = prot.auto_pause_enabled;
+                    document.getElementById('pause-after-losses').value = prot.pause_after_consecutive_losses || 3;
+
+                    // Update status displays
+                    const dailyPnl = prot.daily_pnl || 0;
+                    document.getElementById('current-daily-pnl').textContent = '€' + dailyPnl.toFixed(2);
+                    document.getElementById('current-daily-pnl').style.color = dailyPnl >= 0 ? '#4CAF50' : '#F44336';
+
+                    // Circuit breaker status
+                    const cbStatus = document.getElementById('circuit-breaker-status');
+                    const resetBtn = document.getElementById('reset-circuit-breaker-btn');
+                    if (prot.circuit_breaker_tripped) {
+                        cbStatus.textContent = '🚨 TRIPPED';
+                        cbStatus.style.color = '#F44336';
+                        resetBtn.style.display = 'block';
+                    } else {
+                        cbStatus.textContent = '✅ OK';
+                        cbStatus.style.color = '#4CAF50';
+                        resetBtn.style.display = 'none';
+                    }
+
+                    // Status badge
+                    const badge = document.getElementById('protection-status-badge');
+                    if (prot.protection_enabled) {
+                        badge.textContent = '🛡️ ACTIVE';
+                        badge.style.background = '#4CAF50';
+                        badge.style.color = 'white';
+                    } else {
+                        badge.textContent = '⚠️ DISABLED';
+                        badge.style.background = '#F44336';
+                        badge.style.color = 'white';
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading protection settings:', error);
             }
         }
 
@@ -5530,8 +5655,26 @@ const SymbolModal = (function() {
                     body: JSON.stringify(settings)
                 });
 
-                if (response.ok) {
-                    alert('✅ Settings saved successfully!');
+                // Save protection settings
+                const protectionData = {
+                    account_id: 3,
+                    protection_enabled: document.getElementById('protection-enabled').checked,
+                    max_daily_loss_percent: parseFloat(document.getElementById('max-daily-loss-percent').value),
+                    max_daily_loss_eur: document.getElementById('max-daily-loss-eur').value ? parseFloat(document.getElementById('max-daily-loss-eur').value) : null,
+                    max_total_drawdown_percent: parseFloat(document.getElementById('max-total-drawdown').value),
+                    auto_pause_enabled: document.getElementById('auto-pause-enabled').checked,
+                    pause_after_consecutive_losses: parseInt(document.getElementById('pause-after-losses').value),
+                    notes: 'Updated via Dashboard'
+                };
+
+                const protResponse = await fetch(apiBase + '/api/protection/', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(protectionData)
+                });
+
+                if (response.ok && protResponse.ok) {
+                    alert('✅ All settings saved successfully!');
                     closeSettingsModal();
                 } else {
                     const data = await response.json();
@@ -7136,6 +7279,72 @@ const SymbolModal = (function() {
                 });
             });
         })();
+    </script>
+
+    <!-- Protection Settings Functions -->
+    <script>
+        async function toggleProtection() {
+            try {
+                const enabled = document.getElementById('protection-enabled').checked;
+                const apiBase = window.location.protocol + '//' + window.location.hostname + ':9900';
+
+                const response = await fetch(apiBase + '/api/protection/enable', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ account_id: 3, enabled: enabled })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    const badge = document.getElementById('protection-status-badge');
+                    if (enabled) {
+                        badge.textContent = '🛡️ ACTIVE';
+                        badge.style.background = '#4CAF50';
+                    } else {
+                        badge.textContent = '⚠️ DISABLED';
+                        badge.style.background = '#F44336';
+                    }
+                    console.log('Protection toggled:', enabled ? 'enabled' : 'disabled');
+                } else {
+                    alert('Error toggling protection: ' + data.message);
+                    // Revert checkbox
+                    document.getElementById('protection-enabled').checked = !enabled;
+                }
+            } catch (error) {
+                console.error('Error toggling protection:', error);
+                alert('Error toggling protection: ' + error.message);
+            }
+        }
+
+        async function resetCircuitBreaker() {
+            if (!confirm('Reset Circuit Breaker? This will re-enable trading despite daily losses.')) {
+                return;
+            }
+
+            try {
+                const apiBase = window.location.protocol + '//' + window.location.hostname + ':9900';
+
+                const response = await fetch(apiBase + '/api/protection/reset', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ account_id: 3 })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    alert('✅ Circuit Breaker reset successfully!');
+                    // Reload protection settings to update UI
+                    await loadProtectionSettings();
+                } else {
+                    alert('Error resetting circuit breaker: ' + data.message);
+                }
+            } catch (error) {
+                console.error('Error resetting circuit breaker:', error);
+                alert('Error: ' + error.message);
+            }
+        }
     </script>
 
     <!-- Initialize Symbol Modal after all HTML is loaded -->
