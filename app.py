@@ -5648,7 +5648,8 @@ def proxy_update_spread_config(symbol):
 # ✅ Register Unified Daily Loss Protection API
 try:
     from api_protection import register_protection_endpoints
-    register_protection_endpoints(app)
+    register_protection_endpoints(app_webui)  # Register with webui app (port 9905)
+    logger.info("✅ Protection API endpoints registered")
 except Exception as e:
     logger.error(f"Failed to register protection API: {e}")
 

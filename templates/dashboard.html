@@ -5579,8 +5579,7 @@ const SymbolModal = (function() {
 
         async function loadProtectionSettings() {
             try {
-                const apiBase = window.location.protocol + '//' + window.location.hostname + ':9900';
-                const response = await fetch(apiBase + '/api/protection/?account_id=3');
+                const response = await fetch('/api/protection/?account_id=3');
                 const data = await response.json();
 
                 if (data.success && data.protection) {
@@ -5667,7 +5666,7 @@ const SymbolModal = (function() {
                     notes: 'Updated via Dashboard'
                 };
 
-                const protResponse = await fetch(apiBase + '/api/protection/', {
+                const protResponse = await fetch('/api/protection/', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify(protectionData)
@@ -7286,9 +7285,8 @@ const SymbolModal = (function() {
         async function toggleProtection() {
             try {
                 const enabled = document.getElementById('protection-enabled').checked;
-                const apiBase = window.location.protocol + '//' + window.location.hostname + ':9900';
 
-                const response = await fetch(apiBase + '/api/protection/enable', {
+                const response = await fetch('/api/protection/enable', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ account_id: 3, enabled: enabled })
@@ -7323,9 +7321,7 @@ const SymbolModal = (function() {
             }
 
             try {
-                const apiBase = window.location.protocol + '//' + window.location.hostname + ':9900';
-
-                const response = await fetch(apiBase + '/api/protection/reset', {
+                const response = await fetch('/api/protection/reset', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ account_id: 3 })
