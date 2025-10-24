@@ -101,6 +101,30 @@ class SignalGenerator:
                 signal['sl_price'] = sl
                 signal['tp_price'] = tp
 
+                # ✅ CRITICAL: SL ENFORCEMENT - Reject signals without valid SL
+                if not sl or sl == 0:
+                    logger.error(
+                        f"🚨 Signal REJECTED: {self.symbol} {self.timeframe} {signal['signal_type']} | "
+                        f"SL is ZERO (entry={entry}, sl={sl}, tp={tp}). "
+                        f"All signals MUST have Stop Loss!"
+                    )
+                    return None
+
+                # Validate SL direction
+                if signal['signal_type'] == 'BUY' and sl >= entry:
+                    logger.error(
+                        f"🚨 Signal REJECTED: {self.symbol} BUY | "
+                        f"SL ({sl}) must be BELOW entry ({entry})"
+                    )
+                    return None
+
+                if signal['signal_type'] == 'SELL' and sl <= entry:
+                    logger.error(
+                        f"🚨 Signal REJECTED: {self.symbol} SELL | "
+                        f"SL ({sl}) must be ABOVE entry ({entry})"
+                    )
+                    return None
+
                 # Check if signal direction changed from existing active signal
                 self._check_signal_direction_change(signal['signal_type'])
 

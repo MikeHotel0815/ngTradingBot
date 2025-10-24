@@ -1066,6 +1066,53 @@ class AutoTrader:
 
             logger.info(f"✓ Duplicate check passed: No open {signal.symbol} {signal.timeframe} positions or pending commands")
 
+            # ✅ CRITICAL: SL ENFORCEMENT - Validate SL before trade execution
+            from sl_enforcement import get_sl_enforcement
+            sl_enforcer = get_sl_enforcement()
+
+            sl_validation = sl_enforcer.validate_trade_sl(
+                db=db,
+                symbol=signal.symbol,
+                signal_type=signal.signal_type,
+                entry_price=float(signal.entry_price),
+                sl_price=float(adjusted_sl) if adjusted_sl else 0,
+                volume=float(volume)
+            )
+
+            if not sl_validation['valid']:
+                logger.error(
+                    f"🚨 TRADE REJECTED: {signal.symbol} {signal.signal_type} | "
+                    f"{sl_validation['reason']} | "
+                    f"Potential Loss: {sl_validation['max_loss_eur']:.2f} EUR"
+                )
+
+                # Log to AI Decision Log
+                from ai_decision_log import log_auto_trade_decision
+                log_auto_trade_decision(
+                    account_id=signal.account_id,
+                    symbol=signal.symbol,
+                    timeframe=signal.timeframe,
+                    signal_id=signal.id,
+                    decision='REJECTED',
+                    reason=f"SL Enforcement: {sl_validation['reason']}",
+                    confidence=float(signal.confidence) if signal.confidence else 0,
+                    details={
+                        'entry_price': float(signal.entry_price),
+                        'sl_price': float(adjusted_sl) if adjusted_sl else 0,
+                        'volume': float(volume),
+                        'max_loss_eur': sl_validation['max_loss_eur'],
+                        'suggested_sl': sl_validation.get('suggested_sl')
+                    }
+                )
+
+                return  # ABORT trade execution
+
+            logger.info(
+                f"✅ SL Validation passed: {signal.symbol} | "
+                f"Max Loss: {sl_validation['max_loss_eur']:.2f} EUR | "
+                f"SL: {adjusted_sl:.5f}"
+            )
+
             # Store signal_id and timeframe in payload for trade linking
             payload_data = {
                 'symbol': signal.symbol,
