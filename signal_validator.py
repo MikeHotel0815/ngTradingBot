@@ -132,17 +132,19 @@ class SignalValidator:
                 return (False, reasons)
 
             # Initialize indicator calculators
+            # NOTE: TradingSignal is GLOBAL (no account_id), but indicators/patterns
+            # still need account_id for cache keys. Use default account_id=1.
             indicators = TechnicalIndicators(
-                signal.account_id,
-                signal.symbol,
-                signal.timeframe,
+                account_id=1,  # Default account for validation
+                symbol=signal.symbol,
+                timeframe=signal.timeframe,
                 cache_ttl=0  # No cache - always get fresh values
             )
 
             patterns = PatternRecognizer(
-                signal.account_id,
-                signal.symbol,
-                signal.timeframe,
+                account_id=1,  # Default account for validation
+                symbol=signal.symbol,
+                timeframe=signal.timeframe,
                 cache_ttl=0
             )
 

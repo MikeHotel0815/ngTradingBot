@@ -336,8 +336,8 @@ class PatternRecognizer:
                 'volume': float(o.volume) if o.volume else 0
             } for o in reversed(ohlc)]
 
+            # PatternDetection is GLOBAL (no account_id)
             detection = PatternDetection(
-                account_id=self.account_id,
                 symbol=self.symbol,
                 timeframe=self.timeframe,
                 pattern_name=pattern['name'],
