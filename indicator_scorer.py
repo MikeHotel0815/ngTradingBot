@@ -41,8 +41,9 @@ class IndicatorScorer:
         """
         db = ScopedSession()
         try:
+            # IndicatorScore is now GLOBAL (no account_id)
             score_obj = IndicatorScore.get_or_create(
-                db, self.account_id, self.symbol, self.timeframe, indicator_name
+                db, self.symbol, self.timeframe, indicator_name
             )
 
             # Convert score (0-100) to weight (0.0-1.0)
@@ -91,8 +92,9 @@ class IndicatorScorer:
         """
         db = ScopedSession()
         try:
+            # IndicatorScore is now GLOBAL (no account_id)
             score_obj = IndicatorScore.get_or_create(
-                db, self.account_id, self.symbol, self.timeframe, indicator_name
+                db, self.symbol, self.timeframe, indicator_name
             )
 
             old_score = score_obj.score
