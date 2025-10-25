@@ -19,7 +19,7 @@ class SignalGenerator:
     Generate trading signals by combining patterns and indicators
     """
 
-    def __init__(self, account_id: int, symbol: str, timeframe: str):
+    def __init__(self, account_id: int, symbol: str, timeframe: str, risk_profile: str = 'normal'):
         """
         Initialize Signal Generator
 
@@ -27,12 +27,15 @@ class SignalGenerator:
             account_id: Account ID
             symbol: Trading symbol
             timeframe: Timeframe (M5, M15, H1, H4, D1)
+            risk_profile: Risk profile (aggressive, normal, moderate) - affects regime filtering
         """
         self.account_id = account_id
         self.symbol = symbol
         self.timeframe = timeframe
+        self.risk_profile = risk_profile
         # Reduced cache TTL from 300s (default) to 15s for faster signal updates in live trading
-        self.indicators = TechnicalIndicators(account_id, symbol, timeframe, cache_ttl=15)
+        # Pass risk_profile to TechnicalIndicators for regime filter adjustments
+        self.indicators = TechnicalIndicators(account_id, symbol, timeframe, cache_ttl=15, risk_profile=risk_profile)
         self.patterns = PatternRecognizer(account_id, symbol, timeframe, cache_ttl=15)
 
     def generate_signal(self) -> Optional[Dict]:

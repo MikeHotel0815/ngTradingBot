@@ -124,8 +124,9 @@ class SignalWorker:
                 logger.warning("No account found")
                 return 0
 
-            # Extract account ID immediately to avoid detached instance issues
+            # Extract account ID and risk_profile immediately to avoid detached instance issues
             account_id = account.id
+            risk_profile = getattr(account, 'risk_profile', 'normal')
 
             # Check drawdown protection - pause signals if drawdown too high
             account_equity = float(account.equity) if account.equity else 0
@@ -223,10 +224,12 @@ class SignalWorker:
                         # Candle has closed - generate fresh signal
                         self.cache_misses += 1
 
+                        # Pass risk_profile to SignalGenerator for regime filtering
                         generator = SignalGenerator(
                             account_id,
                             symbol_name,
-                            timeframe
+                            timeframe,
+                            risk_profile
                         )
 
                         signal = generator.generate_signal()

@@ -435,6 +435,9 @@ def import_worker_functions():
                 accounts = db.query(Account).all()
 
                 for account in accounts:
+                    # Get account risk profile (default to 'normal' if not set)
+                    risk_profile = getattr(account, 'risk_profile', 'normal')
+
                     subscribed = db.query(SubscribedSymbol).filter(
                         SubscribedSymbol.account_id == account.id,
                         SubscribedSymbol.active == True
@@ -443,7 +446,8 @@ def import_worker_functions():
                     for sub in subscribed:
                         for timeframe in ['H1', 'H4']:
                             try:
-                                generator = SignalGenerator(account.id, sub.symbol, timeframe)
+                                # Pass risk_profile to SignalGenerator for regime filtering
+                                generator = SignalGenerator(account.id, sub.symbol, timeframe, risk_profile)
                                 signal = generator.generate_signal()
                                 if signal:
                                     signals_generated += 1

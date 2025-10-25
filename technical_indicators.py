@@ -27,7 +27,7 @@ class TechnicalIndicators:
     Calculate technical indicators with Redis caching
     """
 
-    def __init__(self, account_id: int, symbol: str, timeframe: str, cache_ttl: int = 300):
+    def __init__(self, account_id: int, symbol: str, timeframe: str, cache_ttl: int = 300, risk_profile: str = 'normal'):
         """
         Initialize Technical Indicators
 
@@ -36,11 +36,13 @@ class TechnicalIndicators:
             symbol: Trading symbol (e.g., EURUSD)
             timeframe: Timeframe (M5, M15, H1, H4, D1)
             cache_ttl: Cache TTL in seconds (default: 300 = 5 minutes)
+            risk_profile: Risk profile (aggressive, normal, moderate) - affects regime filtering
         """
         self.account_id = account_id
         self.symbol = symbol
         self.timeframe = timeframe
         self.cache_ttl = cache_ttl
+        self.risk_profile = risk_profile
         self.redis = get_redis()
 
     def _cache_key(self, indicator_name: str) -> str:
@@ -1933,6 +1935,11 @@ class TechnicalIndicators:
         """
         Filter signals based on market regime to avoid conflicting strategies
 
+        ✅ NEW: Risk profile affects filtering strictness:
+        - aggressive: Loose filtering (allows more signals in RANGING markets)
+        - normal: Standard filtering (as before)
+        - moderate: Strict filtering (very conservative)
+
         Args:
             signals: List of all signals
             regime: Market regime (TRENDING, RANGING, TOO_WEAK, or UNKNOWN)
@@ -1941,9 +1948,14 @@ class TechnicalIndicators:
             Filtered signals appropriate for the regime
         """
         if regime == 'TOO_WEAK':
-            # Market too weak - no signals should be generated
-            logger.info(f"{self.symbol} {self.timeframe} Market too weak - all signals filtered")
-            return []
+            # Market too weak - no signals should be generated (unless aggressive mode)
+            if self.risk_profile == 'aggressive':
+                logger.warning(f"{self.symbol} {self.timeframe} Market too weak - but AGGRESSIVE mode allows neutral signals")
+                # In aggressive mode, allow neutral signals even in weak markets
+                return [s for s in signals if s.get('strategy_type') == 'neutral']
+            else:
+                logger.info(f"{self.symbol} {self.timeframe} Market too weak - all signals filtered")
+                return []
 
         if regime == 'UNKNOWN':
             # If regime unclear, keep all signals but log warning
@@ -1959,14 +1971,30 @@ class TechnicalIndicators:
                 # In trending markets: prioritize trend-following, exclude mean-reversion
                 if strategy_type in ['trend_following', 'neutral']:
                     filtered.append(sig)
+                elif self.risk_profile == 'aggressive':
+                    # AGGRESSIVE: Allow mean-reversion signals too (more trades)
+                    filtered.append(sig)
+                    logger.debug(f"{self.symbol} AGGRESSIVE: Included {sig['indicator']} (mean-reversion in trending market)")
                 else:
                     logger.debug(f"{self.symbol} Excluded {sig['indicator']} (mean-reversion in trending market)")
 
             elif regime == 'RANGING':
-                # In ranging markets: prioritize mean-reversion, exclude trend-following
+                # In ranging markets: prioritize mean-reversion
                 if strategy_type in ['mean_reversion', 'neutral']:
                     filtered.append(sig)
+                elif self.risk_profile == 'aggressive':
+                    # AGGRESSIVE: Allow trend-following signals too (more trades)
+                    # This helps catch early trend reversals in ranging markets
+                    filtered.append(sig)
+                    logger.debug(f"{self.symbol} AGGRESSIVE: Included {sig['indicator']} (trend-following in ranging market)")
+                elif self.risk_profile == 'moderate':
+                    # MODERATE: Only allow neutral (very conservative in ranging)
+                    if strategy_type == 'neutral':
+                        filtered.append(sig)
+                    logger.debug(f"{self.symbol} MODERATE: Excluded {sig['indicator']} (strict filtering)")
                 else:
+                    # NORMAL: Standard behavior (exclude trend-following)
                     logger.debug(f"{self.symbol} Excluded {sig['indicator']} (trend-following in ranging market)")
 
+        logger.debug(f"{self.symbol} {self.timeframe} Regime filter ({self.risk_profile}): {len(signals)} → {len(filtered)} signals")
         return filtered
