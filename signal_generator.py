@@ -607,6 +607,9 @@ class SignalGenerator:
         """
         Capture current state of all indicators and patterns for validation
 
+        IMPORTANT: Now captures ALL indicators from signal['indicators_used'],
+        not just a whitelist. This ensures complete data for retrospective analysis.
+
         Args:
             signal: Signal dictionary with indicators_used and patterns_detected
 
@@ -619,62 +622,31 @@ class SignalGenerator:
                 'signal_type': signal['signal_type'],
                 'indicators': {},
                 'patterns': signal.get('patterns_detected', []),
-                'price_levels': {}
+                'price_levels': {},
+                'market_regime': {}
             }
 
-            # Capture indicator values
+            # Capture ALL indicator values directly from signal
+            # This ensures we capture EVERY indicator that contributed to the signal
             for indicator_name, value in signal.get('indicators_used', {}).items():
                 try:
-                    if indicator_name == 'RSI':
-                        rsi_data = self.indicators.calculate_rsi()
-                        snapshot['indicators']['RSI'] = {
-                            'value': rsi_data['value'],
-                            'overbought': rsi_data.get('overbought', 70),
-                            'oversold': rsi_data.get('oversold', 30)
-                        }
-                    elif indicator_name == 'MACD':
-                        macd_data = self.indicators.calculate_macd()
-                        snapshot['indicators']['MACD'] = {
-                            'macd': macd_data['macd'],
-                            'signal': macd_data['signal'],
-                            'histogram': macd_data['histogram']
-                        }
-                    elif indicator_name == 'BB':
-                        bb_data = self.indicators.calculate_bollinger_bands()
-                        snapshot['indicators']['BB'] = {
-                            'upper': bb_data['upper'],
-                            'middle': bb_data['middle'],
-                            'lower': bb_data['lower']
-                        }
-                    elif indicator_name == 'Stochastic':
-                        stoch_data = self.indicators.calculate_stochastic()
-                        snapshot['indicators']['Stochastic'] = {
-                            'k': stoch_data['k'],
-                            'd': stoch_data['d']
-                        }
-                    elif indicator_name == 'ADX':
-                        adx_data = self.indicators.calculate_adx()
-                        snapshot['indicators']['ADX'] = {
-                            'adx': adx_data['value'],
-                            'plus_di': adx_data.get('plus_di'),
-                            'minus_di': adx_data.get('minus_di')
-                        }
-                    elif indicator_name == 'ATR':
-                        atr_data = self.indicators.calculate_atr()
-                        snapshot['indicators']['ATR'] = {
-                            'value': atr_data['value']
-                        }
-                    elif indicator_name == 'EMA':
-                        ema_data = self.indicators.calculate_ema()
-                        snapshot['indicators']['EMA'] = ema_data
-                    elif indicator_name == 'OBV':
-                        obv_data = self.indicators.calculate_obv()
-                        snapshot['indicators']['OBV'] = {
-                            'value': obv_data['value'],
-                            'trend': obv_data.get('trend')
-                        }
+                    # Store the indicator value as-is (already contains all relevant data)
+                    snapshot['indicators'][indicator_name] = value
                 except Exception as e:
                     logger.warning(f"Failed to capture {indicator_name} snapshot: {e}")
+
+            # Capture market regime information (critical for retrospective analysis)
+            try:
+                regime = self.indicators.detect_market_regime()
+                if regime:
+                    snapshot['market_regime'] = {
+                        'state': regime.get('regime'),  # TRENDING/RANGING/TOO_WEAK
+                        'trend_strength': regime.get('trend_strength'),
+                        'volatility': regime.get('volatility'),
+                        'direction': regime.get('direction')  # bullish/bearish/neutral
+                    }
+            except Exception as e:
+                logger.warning(f"Failed to capture market regime: {e}")
 
             # Capture current price for reference
             from models import Tick
@@ -687,6 +659,7 @@ class SignalGenerator:
                 if latest_tick:
                     snapshot['price_levels']['bid'] = float(latest_tick.bid)
                     snapshot['price_levels']['ask'] = float(latest_tick.ask)
+                    snapshot['price_levels']['spread'] = float(latest_tick.ask) - float(latest_tick.bid)
             finally:
                 db.close()
 
