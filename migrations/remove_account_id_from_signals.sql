@@ -1,14 +1,15 @@
--- Migration: Remove account_id from trading_signals (GLOBAL model)
+-- Migration: Remove account_id from GLOBAL models
 -- Date: 2025-10-25
--- Reason: TradingSignal is GLOBAL (shared across accounts), not account-specific
+-- Reason: TradingSignal and PatternDetection are GLOBAL (shared across accounts), not account-specific
 -- Related: COMPREHENSIVE_BOT_AUDIT_2025.md, BTCUSD_NO_SIGNALS_ANALYSIS.md
 
--- Step 1: Drop the NOT NULL constraint first (in case we want to rollback)
-ALTER TABLE trading_signals ALTER COLUMN account_id DROP NOT NULL;
+-- Remove account_id from trading_signals (GLOBAL model)
+ALTER TABLE trading_signals DROP COLUMN account_id CASCADE;
 
--- Step 2: Drop the column entirely
-ALTER TABLE trading_signals DROP COLUMN account_id;
+-- Remove account_id from pattern_detections (GLOBAL model)
+ALTER TABLE pattern_detections DROP COLUMN account_id CASCADE;
 
--- Verification query (run after migration)
+-- Verification queries (run after migration)
 -- \d trading_signals
--- Should show NO account_id column
+-- \d pattern_detections
+-- Should show NO account_id column in either table
