@@ -122,10 +122,12 @@ class SessionVolatilityAnalyzer:
         """
         Calculate recent volatility multiplier based on tick data
 
+        NOTE: Tick data is now GLOBAL (no account_id).
+
         Args:
             symbol: Trading symbol
             db: Database session
-            account_id: Account ID for tick data
+            account_id: DEPRECATED - Tick data is now global
             lookback_minutes: How far back to look for volatility calculation
 
         Returns:
@@ -136,13 +138,12 @@ class SessionVolatilityAnalyzer:
             if isinstance(db, str):
                 logger.error(f"calculate_recent_volatility received string instead of Session: {db}")
                 return 1.0
-            
-            # Get recent ticks
+
+            # Get recent ticks (GLOBAL - no account_id)
             cutoff_time = tz.to_db(tz.now_utc() - timedelta(minutes=lookback_minutes))
-            
+
             ticks = db.query(Tick).filter(
                 Tick.symbol == symbol,
-                Tick.account_id == account_id,
                 Tick.timestamp >= cutoff_time
             ).order_by(Tick.timestamp.desc()).limit(100).all()
 
