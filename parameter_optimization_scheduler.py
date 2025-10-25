@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from weekly_performance_analyzer import WeeklyPerformanceAnalyzer
 from monthly_parameter_optimizer import MonthlyParameterOptimizer
+from top_performers_analyzer import TopPerformersAnalyzer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -61,8 +62,23 @@ class ParameterOptimizationScheduler:
             replace_existing=True
         )
 
+        # Top Performers Analysis - Every Friday at 22:30 UTC (after weekly report)
+        self.scheduler.add_job(
+            self.run_top_performers_analysis,
+            trigger=CronTrigger(
+                day_of_week='fri',
+                hour=22,
+                minute=30,
+                timezone='UTC'
+            ),
+            id='top_performers_analysis',
+            name='Top Performers Analysis',
+            replace_existing=True
+        )
+
         logger.info("✅ Scheduled jobs configured:")
         logger.info("   - Weekly Performance Report: Every Friday 22:00 UTC")
+        logger.info("   - Top Performers Analysis: Every Friday 22:30 UTC")
         logger.info("   - Monthly Optimization: Last Friday of month 23:00 UTC")
 
     def run_weekly_analysis(self):
@@ -94,6 +110,22 @@ class ParameterOptimizationScheduler:
 
         except Exception as e:
             logger.error(f"❌ Error running monthly optimization: {e}", exc_info=True)
+
+    def run_top_performers_analysis(self):
+        """Run top performers analysis"""
+        logger.info("🔄 Starting top performers analysis...")
+
+        try:
+            analyzer = TopPerformersAnalyzer(days_back=14)
+            success = analyzer.generate_report()
+
+            if success:
+                logger.info("✅ Top performers analysis complete")
+            else:
+                logger.warning("⚠️  Top performers analysis completed with no data")
+
+        except Exception as e:
+            logger.error(f"❌ Error running top performers analysis: {e}", exc_info=True)
 
     def start(self):
         """Start the scheduler"""

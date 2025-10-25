@@ -79,20 +79,20 @@ class MonthlyParameterOptimizer:
             return None
 
         total_trades = len(trades)
-        winning_trades = [t for t in trades if t.pnl and float(t.pnl) > 0]
-        losing_trades = [t for t in trades if t.pnl and float(t.pnl) < 0]
+        winning_trades = [t for t in trades if t.profit and float(t.profit) > 0]
+        losing_trades = [t for t in trades if t.profit and float(t.profit) < 0]
 
         win_rate = (len(winning_trades) / total_trades * 100) if total_trades > 0 else 0
-        total_pnl = sum(float(t.pnl) for t in trades if t.pnl)
+        total_pnl = sum(float(t.profit) for t in trades if t.profit)
         avg_pnl = total_pnl / total_trades if total_trades > 0 else 0
 
-        avg_win = sum(float(t.pnl) for t in winning_trades if t.pnl) / len(winning_trades) if winning_trades else 0
-        avg_loss = abs(sum(float(t.pnl) for t in losing_trades if t.pnl)) / len(losing_trades) if losing_trades else 0
+        avg_win = sum(float(t.profit) for t in winning_trades if t.profit) / len(winning_trades) if winning_trades else 0
+        avg_loss = abs(sum(float(t.profit) for t in losing_trades if t.profit)) / len(losing_trades) if losing_trades else 0
         rr_ratio = avg_win / avg_loss if avg_loss > 0 else 0
 
         # Calculate profit factor
-        total_wins = sum(float(t.pnl) for t in winning_trades if t.pnl)
-        total_losses = abs(sum(float(t.pnl) for t in losing_trades if t.pnl))
+        total_wins = sum(float(t.profit) for t in winning_trades if t.profit)
+        total_losses = abs(sum(float(t.profit) for t in losing_trades if t.profit))
         profit_factor = total_wins / total_losses if total_losses > 0 else 0
 
         # Max drawdown (simplified)
@@ -100,8 +100,8 @@ class MonthlyParameterOptimizer:
         peak = 0
         max_dd = 0
         for trade in trades:
-            if trade.pnl:
-                cumulative_pnl += float(trade.pnl)
+            if trade.profit:
+                cumulative_pnl += float(trade.profit)
                 if cumulative_pnl > peak:
                     peak = cumulative_pnl
                 drawdown = peak - cumulative_pnl

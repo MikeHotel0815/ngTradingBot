@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from database import SessionLocal
 from models import Trade, TradingSignal
+from telegram_notifier import get_telegram_notifier
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,6 +39,11 @@ class WeeklyPerformanceAnalyzer:
         self.session = db_session or SessionLocal()
         self.indicator_name = 'HEIKEN_ASHI_TREND'
         self.lookback_periods = [7, 30, 90]
+        self.telegram = get_telegram_notifier()
+        self.ai_reports_dir = '/app/ai_analysis_reports'
+
+        # Create AI reports directory if it doesn't exist
+        os.makedirs(self.ai_reports_dir, exist_ok=True)
 
     def analyze_symbol_performance(
         self,
@@ -71,16 +77,16 @@ class WeeklyPerformanceAnalyzer:
 
         # Calculate metrics
         total_trades = len(trades)
-        winning_trades = [t for t in trades if t.pnl and float(t.pnl) > 0]
-        losing_trades = [t for t in trades if t.pnl and float(t.pnl) < 0]
+        winning_trades = [t for t in trades if t.profit and float(t.profit) > 0]
+        losing_trades = [t for t in trades if t.profit and float(t.profit) < 0]
 
         win_rate = (len(winning_trades) / total_trades * 100) if total_trades > 0 else 0
 
-        total_pnl = sum(float(t.pnl) for t in trades if t.pnl)
+        total_pnl = sum(float(t.profit) for t in trades if t.profit)
         avg_pnl = total_pnl / total_trades if total_trades > 0 else 0
 
-        avg_win = sum(float(t.pnl) for t in winning_trades if t.pnl) / len(winning_trades) if winning_trades else 0
-        avg_loss = abs(sum(float(t.pnl) for t in losing_trades if t.pnl)) / len(losing_trades) if losing_trades else 0
+        avg_win = sum(float(t.profit) for t in winning_trades if t.profit) / len(winning_trades) if winning_trades else 0
+        avg_loss = abs(sum(float(t.profit) for t in losing_trades if t.profit)) / len(losing_trades) if losing_trades else 0
 
         rr_ratio = avg_win / avg_loss if avg_loss > 0 else 0
 
@@ -88,11 +94,11 @@ class WeeklyPerformanceAnalyzer:
         buy_trades = [t for t in trades if t.direction == 'BUY']
         sell_trades = [t for t in trades if t.direction == 'SELL']
 
-        buy_win_rate = (len([t for t in buy_trades if t.pnl and float(t.pnl) > 0]) / len(buy_trades) * 100) if buy_trades else 0
-        sell_win_rate = (len([t for t in sell_trades if t.pnl and float(t.pnl) > 0]) / len(sell_trades) * 100) if sell_trades else 0
+        buy_win_rate = (len([t for t in buy_trades if t.profit and float(t.profit) > 0]) / len(buy_trades) * 100) if buy_trades else 0
+        sell_win_rate = (len([t for t in sell_trades if t.profit and float(t.profit) > 0]) / len(sell_trades) * 100) if sell_trades else 0
 
-        buy_pnl = sum(float(t.pnl) for t in buy_trades if t.pnl)
-        sell_pnl = sum(float(t.pnl) for t in sell_trades if t.pnl)
+        buy_pnl = sum(float(t.profit) for t in buy_trades if t.profit)
+        sell_pnl = sum(float(t.profit) for t in sell_trades if t.profit)
 
         return {
             'symbol': symbol,
@@ -344,6 +350,139 @@ SYMBOLS ANALYZED: {len(symbol_metrics)}
 
         return "\n".join(recommendations)
 
+    def send_telegram_notification(
+        self,
+        summary: str,
+        warnings: List[Dict],
+        symbol_metrics: List[Dict]
+    ) -> bool:
+        """Send weekly report via Telegram"""
+
+        if not self.telegram.enabled:
+            logger.warning("Telegram not enabled - skipping notification")
+            return False
+
+        # Format for Telegram (compact, readable)
+        now = datetime.utcnow()
+        week_num = now.isocalendar()[1]
+
+        total_trades = sum(m['total_trades'] for m in symbol_metrics)
+        total_pnl = sum(m['total_pnl'] for m in symbol_metrics)
+        weighted_wr = sum(m['win_rate'] * m['total_trades'] for m in symbol_metrics) / total_trades if total_trades > 0 else 0
+
+        # Emoji based on performance
+        if total_pnl > 0:
+            pnl_emoji = '✅'
+        elif total_pnl < 0:
+            pnl_emoji = '❌'
+        else:
+            pnl_emoji = '➖'
+
+        # Build message
+        message = f"""📊 <b>HEIKEN ASHI Weekly Report</b>
+Week {week_num}/2025 | {now.strftime('%d.%m.%Y')}
+
+{pnl_emoji} <b>€{total_pnl:+.2f}</b> | {total_trades} Trades
+Win Rate: {weighted_wr:.1f}%
+
+<b>SYMBOLS:</b>"""
+
+        # Add symbol details (top 3 by P/L)
+        sorted_metrics = sorted(symbol_metrics, key=lambda m: m['total_pnl'], reverse=True)
+        for m in sorted_metrics[:3]:
+            emoji = '✅' if m['total_pnl'] > 0 else '❌'
+            message += f"\n{emoji} {m['symbol']} {m['timeframe']}: €{m['total_pnl']:+.2f} ({m['win_rate']:.0f}%, {m['total_trades']}T)"
+
+        if len(sorted_metrics) > 3:
+            message += f"\n... +{len(sorted_metrics) - 3} more"
+
+        # Add critical warnings
+        critical_warnings = [w for w in warnings if w['severity'] == 'critical']
+        if critical_warnings:
+            message += f"\n\n🚨 <b>CRITICAL:</b> {len(critical_warnings)} issues"
+            for w in critical_warnings[:2]:
+                message += f"\n• {w['symbol']} {w['timeframe']}: {w['message']}"
+
+        # Add info footer
+        message += f"\n\n<i>Full report: ai_analysis_reports/weekly_report_{now.strftime('%Y%m%d')}.json</i>"
+
+        try:
+            return self.telegram.send_message(message, silent=False)
+        except Exception as e:
+            logger.error(f"Error sending Telegram notification: {e}")
+            return False
+
+    def save_ai_analysis_report(
+        self,
+        report_id: int,
+        symbol_metrics: List[Dict],
+        comparisons: Dict,
+        warnings: List[Dict],
+        summary: str,
+        recommendations: str
+    ) -> str:
+        """Save detailed analysis report for AI access"""
+
+        import json
+
+        now = datetime.utcnow()
+        filename = f"weekly_report_{now.strftime('%Y%m%d_%H%M%S')}.json"
+        filepath = os.path.join(self.ai_reports_dir, filename)
+
+        # Build comprehensive report for AI
+        ai_report = {
+            'report_metadata': {
+                'report_id': report_id,
+                'generated_at': now.isoformat(),
+                'report_type': 'weekly_performance',
+                'indicator': self.indicator_name,
+                'week_number': now.isocalendar()[1],
+                'year': now.year
+            },
+            'overall_performance': {
+                'total_trades': sum(m['total_trades'] for m in symbol_metrics),
+                'total_pnl': sum(m['total_pnl'] for m in symbol_metrics),
+                'weighted_win_rate': sum(m['win_rate'] * m['total_trades'] for m in symbol_metrics) / sum(m['total_trades'] for m in symbol_metrics) if sum(m['total_trades'] for m in symbol_metrics) > 0 else 0,
+                'avg_rr_ratio': sum(m['rr_ratio'] for m in symbol_metrics) / len(symbol_metrics) if symbol_metrics else 0
+            },
+            'symbol_performance': symbol_metrics,
+            'baseline_comparison': comparisons,
+            'warnings': warnings,
+            'analysis': {
+                'summary': summary,
+                'recommendations': recommendations,
+                'critical_count': len([w for w in warnings if w['severity'] == 'critical']),
+                'warning_count': len([w for w in warnings if w['severity'] == 'warning']),
+                'symbols_tracked': len(symbol_metrics)
+            },
+            'ai_insights': {
+                'best_performer': max(symbol_metrics, key=lambda m: m['total_pnl']) if symbol_metrics else None,
+                'worst_performer': min(symbol_metrics, key=lambda m: m['total_pnl']) if symbol_metrics else None,
+                'highest_wr': max(symbol_metrics, key=lambda m: m['win_rate']) if symbol_metrics else None,
+                'lowest_wr': min(symbol_metrics, key=lambda m: m['win_rate']) if symbol_metrics else None,
+                'degradation_detected': [k for k, v in comparisons.items() if v.get('status') in ['warning', 'critical']],
+                'symbols_needing_attention': [w['symbol'] + '_' + w['timeframe'] for w in warnings if w['severity'] == 'critical']
+            }
+        }
+
+        # Save to file
+        try:
+            with open(filepath, 'w') as f:
+                json.dump(ai_report, f, indent=2, default=str)
+
+            logger.info(f"✅ AI analysis report saved: {filepath}")
+
+            # Also save a "latest.json" for easy AI access
+            latest_path = os.path.join(self.ai_reports_dir, 'latest_weekly_report.json')
+            with open(latest_path, 'w') as f:
+                json.dump(ai_report, f, indent=2, default=str)
+
+            return filepath
+
+        except Exception as e:
+            logger.error(f"Error saving AI analysis report: {e}")
+            return None
+
     def generate_weekly_report(self) -> Optional[int]:
         """Generate complete weekly performance report"""
 
@@ -433,6 +572,25 @@ SYMBOLS ANALYZED: {len(symbol_metrics)}
         logger.info(f"✅ Weekly report generated (ID: {report.id})")
         logger.info(f"\n{summary}")
         logger.info(f"\nRECOMMENDATIONS:\n{recommendations}")
+
+        # Send Telegram notification
+        telegram_sent = self.send_telegram_notification(summary, warnings, all_metrics)
+        if telegram_sent:
+            logger.info("✅ Telegram notification sent")
+        else:
+            logger.warning("⚠️  Telegram notification not sent")
+
+        # Save AI-accessible report
+        ai_report_path = self.save_ai_analysis_report(
+            report.id,
+            all_metrics,
+            comparisons,
+            warnings,
+            summary,
+            recommendations
+        )
+        if ai_report_path:
+            logger.info(f"✅ AI analysis report saved: {ai_report_path}")
 
         return report.id
 
