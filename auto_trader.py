@@ -591,8 +591,14 @@ class AutoTrader:
             logger.error(f"Error checking risk limits: {e}")
             return {'allowed': False, 'reason': str(e)}
 
-    def should_execute_signal(self, signal: TradingSignal, db: Session) -> Dict:
-        """Determine if signal should be executed"""
+    def should_execute_signal(self, signal: TradingSignal, db: Session, account_id: int) -> Dict:
+        """Determine if signal should be executed
+
+        Args:
+            signal: Trading signal (GLOBAL - no account_id field)
+            db: Database session
+            account_id: Account ID to execute signal for
+        """
         # 🔒 CRITICAL: Redis lock to prevent race conditions on position checks
         # This prevents multiple workers from opening duplicate positions simultaneously
         # NOTE: Lock is NOT acquired here anymore - moved to process_new_signals()
@@ -617,7 +623,7 @@ class AutoTrader:
 
             # Check DAILY DRAWDOWN PROTECTION SECOND (most critical check)
             from daily_drawdown_protection import get_drawdown_protection
-            dd_protection = get_drawdown_protection(signal.account_id)
+            dd_protection = get_drawdown_protection(account_id)
             dd_check = dd_protection.check_and_update(auto_trading_enabled=self.enabled)
 
             if not dd_check['allowed']:
@@ -628,7 +634,7 @@ class AutoTrader:
 
             # Check NEWS FILTER SECOND (prevent trading during high-impact news)
             from news_filter import get_news_filter
-            news_filter = get_news_filter(signal.account_id)
+            news_filter = get_news_filter(account_id)
             news_check = news_filter.check_trading_allowed(signal.symbol)
 
             if not news_check['allowed']:
@@ -638,14 +644,14 @@ class AutoTrader:
                 }
 
             # Check circuit breaker THIRD
-            if not self.check_circuit_breaker(db, signal.account_id):
+            if not self.check_circuit_breaker(db, account_id):
                 return {
                     'execute': False,
                     'reason': f'Circuit breaker tripped: {self.circuit_breaker_reason}'
                 }
 
             # ✅ NEW: Check max open positions limit FOURTH (prevent overexposure)
-            position_limit_check = self.check_position_limits(db, signal.account_id)
+            position_limit_check = self.check_position_limits(db, account_id)
             if not position_limit_check['allowed']:
                 return {
                     'execute': False,
@@ -653,7 +659,7 @@ class AutoTrader:
                 }
 
             # Check correlation exposure FIFTH (prevent over-exposure to correlated pairs)
-            correlation_check = self.check_correlation_exposure(db, signal.account_id, signal.symbol)
+            correlation_check = self.check_correlation_exposure(db, account_id, signal.symbol)
             if not correlation_check['allowed']:
                 return {
                     'execute': False,
@@ -665,7 +671,7 @@ class AutoTrader:
             # REASON: Prevent ANY duplicate on same symbol (even different timeframes)
             existing_positions = db.query(Trade).filter(
                 and_(
-                    Trade.account_id == signal.account_id,
+                    Trade.account_id == account_id,
                     Trade.symbol == signal.symbol,  # ✅ Symbol only, no timeframe
                     Trade.status == 'open'
                 )
@@ -675,7 +681,7 @@ class AutoTrader:
             from models import Command
             pending_commands = db.query(Command).filter(
                 and_(
-                    Command.account_id == signal.account_id,
+                    Command.account_id == account_id,
                     Command.command_type == 'OPEN_TRADE',
                     Command.status.in_(['pending', 'processing']),
                     Command.payload['symbol'].astext == signal.symbol  # ✅ Symbol only, no timeframe
@@ -703,7 +709,7 @@ class AutoTrader:
             # ✅ ENHANCED: Check SL-Hit Protection (automatic pause after multiple SL hits)
             from sl_hit_protection import get_sl_hit_protection
             sl_protection = get_sl_hit_protection()
-            sl_check = sl_protection.check_sl_hits(db, signal.account_id, signal.symbol, max_hits=2, timeframe_hours=4)
+            sl_check = sl_protection.check_sl_hits(db, account_id, signal.symbol, max_hits=2, timeframe_hours=4)
 
             if sl_check['should_pause']:
                 logger.warning(f"🚨 {signal.symbol} auto-trade BLOCKED: {sl_check['reason']}")
@@ -728,11 +734,11 @@ class AutoTrader:
                 from symbol_dynamic_manager import SymbolDynamicManager
                 from technical_indicators import TechnicalIndicators
 
-                symbol_manager = SymbolDynamicManager(account_id=signal.account_id)
+                symbol_manager = SymbolDynamicManager(account_id=account_id)
 
                 # Get market regime for this symbol
                 try:
-                    ti = TechnicalIndicators(signal.account_id, signal.symbol, signal.timeframe)
+                    ti = TechnicalIndicators(account_id, signal.symbol, signal.timeframe)
                     regime_info = ti.detect_market_regime()
                     market_regime = regime_info.get('regime', 'UNKNOWN')
                 except Exception as e:
@@ -782,7 +788,7 @@ class AutoTrader:
                 
                 # Get current session and volatility
                 session_name, _ = analyzer.get_current_session()
-                volatility = analyzer.calculate_recent_volatility(db, signal.symbol, signal.account_id)
+                volatility = analyzer.calculate_recent_volatility(db, signal.symbol, account_id)
                 
                 # Calculate required confidence
                 required_conf, breakdown = calculator.calculate_required_confidence(
@@ -948,7 +954,7 @@ class AutoTrader:
                 # Log spread rejection to AI Decision Log
                 from ai_decision_log import log_spread_rejection
                 log_spread_rejection(
-                    account_id=signal.account_id,
+                    account_id=account_id,
                     symbol=signal.symbol,
                     current_spread=spread_check.get('current_spread', 0),
                     max_spread=spread_check.get('max_spread', 0),
@@ -999,7 +1005,7 @@ class AutoTrader:
 
             try:
                 from technical_indicators import TechnicalIndicators
-                ti = TechnicalIndicators(signal.account_id, signal.symbol, signal.timeframe)
+                ti = TechnicalIndicators(account_id, signal.symbol, signal.timeframe)
                 supertrend = ti.calculate_supertrend()
 
                 if supertrend and supertrend['value']:
@@ -1121,7 +1127,7 @@ class AutoTrader:
             # 🛑 CRITICAL FAILSAFE: Double-check for duplicate positions AND pending commands before creating command
             duplicate_trades = db.query(Trade).filter(
                 and_(
-                    Trade.account_id == signal.account_id,
+                    Trade.account_id == account_id,
                     Trade.symbol == signal.symbol,
                     Trade.timeframe == signal.timeframe,
                     Trade.status == 'open'
@@ -1131,7 +1137,7 @@ class AutoTrader:
             # ✅ CRITICAL: Also check for pending commands (race condition prevention)
             duplicate_commands = db.query(Command).filter(
                 and_(
-                    Command.account_id == signal.account_id,
+                    Command.account_id == account_id,
                     Command.command_type == 'OPEN_TRADE',
                     Command.status.in_(['pending', 'processing']),
                     Command.payload['symbol'].astext == signal.symbol,
@@ -1170,7 +1176,7 @@ class AutoTrader:
                 # Log to AI Decision Log
                 from ai_decision_log import log_auto_trade_decision
                 log_auto_trade_decision(
-                    account_id=signal.account_id,
+                    account_id=account_id,
                     symbol=signal.symbol,
                     timeframe=signal.timeframe,
                     signal_id=signal.id,
@@ -1208,7 +1214,7 @@ class AutoTrader:
 
             command = Command(
                 id=command_id,
-                account_id=signal.account_id,
+                account_id=account_id,
                 command_type='OPEN_TRADE',
                 payload=payload_data,
                 status='pending',
@@ -1231,7 +1237,7 @@ class AutoTrader:
                 'comment': payload_data['comment']
             }
 
-            self.redis.push_command(signal.account_id, command_data)
+            self.redis.push_command(account_id, command_data)
 
             logger.info(f"✅ Trade command created: {command_id} - {signal.signal_type} {volume} {signal.symbol} @ {signal.entry_price} | SL: {adjusted_sl:.5f} | TP: {tp_price:.5f}")
 
@@ -1240,7 +1246,7 @@ class AutoTrader:
                 self.pending_commands = {}
             self.pending_commands[command_id] = {
                 'signal_id': signal.id,
-                'account_id': signal.account_id,  # ✅ NEW: Store account_id for logging
+                'account_id': account_id,  # ✅ NEW: Store account_id for logging
                 'symbol': signal.symbol,
                 'created_at': datetime.utcnow(),
                 'timeout_at': datetime.utcnow() + timedelta(minutes=5),
@@ -1265,9 +1271,10 @@ class AutoTrader:
 
         # Create hash from key signal properties
         # Include signal ID and timestamp to ensure uniqueness
+        # NOTE: Signals are GLOBAL (no account_id) since database migration
         timestamp_str = signal.created_at.isoformat() if signal.created_at else 'no_time'
         hash_string = (
-            f"{signal.id}_{signal.account_id}_{signal.symbol}_{signal.timeframe}_"
+            f"{signal.id}_{signal.symbol}_{signal.timeframe}_"
             f"{signal.signal_type}_{signal.confidence:.2f}_{signal.entry_price:.5f}_"
             f"{timestamp_str}"
         )
@@ -1276,6 +1283,14 @@ class AutoTrader:
     def process_new_signals(self, db: Session):
         """Process new trading signals"""
         try:
+            # ✅ FIX: Get account_id since signals are now GLOBAL (no account_id field)
+            from models import Account
+            account = db.query(Account).first()
+            if not account:
+                logger.error("❌ No account found in database - cannot process signals")
+                return
+            account_id = account.id
+
             # Get recent signals (last 10 minutes OR status='active')
             # This catches both new and updated signals
             cutoff_time = datetime.utcnow() - timedelta(minutes=10)
@@ -1305,7 +1320,7 @@ class AutoTrader:
                 # but we only want ONE position per symbol at a time
                 existing_position = db.query(Trade).filter(
                     and_(
-                        Trade.account_id == signal.account_id,
+                        Trade.account_id == account_id,
                         Trade.symbol == signal.symbol,
                         Trade.status == 'open'
                     )
@@ -1350,7 +1365,7 @@ class AutoTrader:
             for signal in signals_to_process:
                 # 🔒 CRITICAL FIX: Acquire Redis lock BEFORE position checks and hold until trade command created
                 # This prevents race conditions where multiple workers open duplicate positions
-                lock_key = f"position_check:{signal.account_id}:{signal.symbol}:{signal.timeframe}"
+                lock_key = f"position_check:{account_id}:{signal.symbol}:{signal.timeframe}"
                 lock_acquired = False
 
                 try:
@@ -1371,7 +1386,7 @@ class AutoTrader:
                     # Continue without lock (fail-open for availability)
 
                 # Check if should execute
-                should_exec = self.should_execute_signal(signal, db)
+                should_exec = self.should_execute_signal(signal, db, account_id)
                 if not should_exec['execute']:
                     logger.info(f"⏭️  Skipping signal #{signal.id} ({signal.symbol} {signal.timeframe}): {should_exec['reason']}")
                     # Release lock before continuing
@@ -1386,7 +1401,7 @@ class AutoTrader:
                     from ai_decision_log import AIDecisionLogger
                     decision_logger = AIDecisionLogger()
                     decision_logger.log_decision(
-                        account_id=signal.account_id,
+                        account_id=account_id,
                         decision_type='SIGNAL_SKIP',
                         decision='REJECTED',
                         primary_reason=should_exec['reason'],
@@ -1408,7 +1423,7 @@ class AutoTrader:
                     # Check if symbol is disabled - create shadow trade
                     from models import SymbolPerformanceTracking
                     perf = db.query(SymbolPerformanceTracking).filter(
-                        SymbolPerformanceTracking.account_id == signal.account_id,
+                        SymbolPerformanceTracking.account_id == account_id,
                         SymbolPerformanceTracking.symbol == signal.symbol,
                         SymbolPerformanceTracking.status == 'disabled'
                     ).order_by(SymbolPerformanceTracking.evaluation_date.desc()).first()
@@ -1431,7 +1446,7 @@ class AutoTrader:
                 # Check if better signal warrants closing existing trades
                 replacement_result = trm.process_opportunity_cost_management(
                     db=db,
-                    account_id=signal.account_id,
+                    account_id=account_id,
                     new_signal=signal
                 )
 
@@ -1445,7 +1460,7 @@ class AutoTrader:
                     from ai_decision_log import AIDecisionLogger
                     decision_logger = AIDecisionLogger()
                     decision_logger.log_decision(
-                        account_id=signal.account_id,
+                        account_id=account_id,
                         decision_type='TRADE_REPLACEMENT',
                         decision='APPROVED',
                         primary_reason=f"Replaced {replacement_result['trades_closed']} trades for better opportunity",
@@ -1466,7 +1481,7 @@ class AutoTrader:
                 # ✅ DYNAMIC LIMIT: Count existing trades and compare against confidence-based limit
                 existing_trades_count = db.query(Trade).filter(
                     and_(
-                        Trade.account_id == signal.account_id,
+                        Trade.account_id == account_id,
                         Trade.symbol == signal.symbol,
                         Trade.timeframe == signal.timeframe,
                         Trade.status == 'open'
@@ -1486,18 +1501,18 @@ class AutoTrader:
                     continue
 
                 # Check risk limits
-                risk_check = self.check_risk_limits(db, signal.account_id)
+                risk_check = self.check_risk_limits(db, account_id)
                 if not risk_check['allowed']:
                     logger.warning(f"⚠️  Risk limit blocked signal #{signal.id}: {risk_check['reason']}")
                     continue
 
                 # Calculate position size with dynamic risk adjustment
-                base_volume = self.calculate_position_size(db, signal.account_id, signal)
+                base_volume = self.calculate_position_size(db, account_id, signal)
 
                 # ✅ NEW: Apply symbol-specific risk multiplier
                 try:
                     from symbol_dynamic_manager import SymbolDynamicManager
-                    symbol_manager = SymbolDynamicManager(account_id=signal.account_id)
+                    symbol_manager = SymbolDynamicManager(account_id=account_id)
                     config = symbol_manager.get_config(db, signal.symbol, signal.signal_type)
 
                     # Apply risk multiplier
@@ -1536,7 +1551,7 @@ class AutoTrader:
                     from ai_decision_log import AIDecisionLogger
                     decision_logger = AIDecisionLogger()
                     decision_logger.log_decision(
-                        account_id=signal.account_id,
+                        account_id=account_id,
                         decision_type='TRADE_OPEN',
                         decision='APPROVED',
                         primary_reason=f"Signal #{signal.id} approved for trading",
