@@ -1996,5 +1996,5 @@ class TechnicalIndicators:
                     # NORMAL: Standard behavior (exclude trend-following)
                     logger.debug(f"{self.symbol} Excluded {sig['indicator']} (trend-following in ranging market)")
 
-        logger.debug(f"{self.symbol} {self.timeframe} Regime filter ({self.risk_profile}): {len(signals)} → {len(filtered)} signals")
+        logger.info(f"{self.symbol} {self.timeframe} Regime filter ({self.risk_profile}): {len(signals)} → {len(filtered)} signals")
         return filtered
