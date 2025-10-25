@@ -124,9 +124,13 @@ class SignalWorker:
                 logger.warning("No account found")
                 return 0
 
-            # Extract account ID and risk_profile immediately to avoid detached instance issues
+            # Extract account ID immediately to avoid detached instance issues
             account_id = account.id
-            risk_profile = getattr(account, 'risk_profile', 'normal')
+
+            # Load risk_profile from GlobalSettings (not Account)
+            from models import GlobalSettings
+            settings = GlobalSettings.get_settings(db)
+            risk_profile = settings.autotrade_risk_profile or 'normal'
 
             # Check drawdown protection - pause signals if drawdown too high
             account_equity = float(account.equity) if account.equity else 0
