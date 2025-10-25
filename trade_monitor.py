@@ -384,10 +384,15 @@ class TradeMonitor:
                     trade.status = 'closed'
                     trade.close_time = datetime.utcnow()
                     trade.close_reason = 'STALE_RECONCILIATION'
+
+                    # Calculate trade metrics
+                    from trade_utils import calculate_trade_metrics_on_close
+                    calculate_trade_metrics_on_close(trade)
+
                     stale_closed_count += 1
                     logger.warning(f"🔄 Auto-closed stale trade #{trade.ticket} {trade.symbol} (last update: {trade.updated_at})")
                     open_trades.remove(trade)  # Remove from list so we don't try to monitor it
-            
+
             if stale_closed_count > 0:
                 db.commit()
                 logger.info(f"✅ Reconciliation: Closed {stale_closed_count} stale trade(s)")

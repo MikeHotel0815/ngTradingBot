@@ -25,8 +25,11 @@ Port 9903 (Logging):
 - POST /api/log - EA log messages
 
 Author: ngTradingBot
-Last Modified: 2025-10-17
+Last Modified: 2025-10-25
 """
+
+# Import trade utilities for metadata enrichment
+from trade_utils import enrich_trade_metadata
 
 from flask import request, jsonify
 import logging
@@ -587,10 +590,16 @@ def register_trade_endpoints(app):
                     open_time=datetime.fromtimestamp(timestamp) if timestamp else datetime.utcnow(),
                     current_sl=sl,
                     current_tp=tp,
+                    initial_sl=sl,  # Store initial SL for R:R calculation
+                    initial_tp=tp,  # Store initial TP for R:R calculation
                     status='open',
                     source='ea_notification',
                     entry_reason=comment
                 )
+
+                # Enrich trade with session and other metadata
+                enrich_trade_metadata(trade)
+
                 db.add(trade)
                 db.commit()
                 
@@ -666,7 +675,11 @@ def register_trade_endpoints(app):
                 trade.profit = profit
                 trade.swap = swap
                 trade.commission = commission
-                
+
+                # Calculate trade metrics (R:R, duration, pips)
+                from trade_utils import calculate_trade_metrics_on_close
+                calculate_trade_metrics_on_close(trade)
+
                 db.commit()
                 
                 logger.info(

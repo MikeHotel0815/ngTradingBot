@@ -486,6 +486,11 @@ class CoreCommunicationManager:
                     trade.status = 'closed'
                     trade.close_time = datetime.utcnow()
                     trade.close_reason = 'EA_SYNC_CLOSED'
+
+                    # Calculate trade metrics
+                    from trade_utils import calculate_trade_metrics_on_close
+                    calculate_trade_metrics_on_close(trade)
+
                     reconciliation['changes'].append(
                         f"Closed trade {ticket} (not found in EA)"
                     )
@@ -507,10 +512,17 @@ class CoreCommunicationManager:
                         open_time=datetime.fromtimestamp(ea_trade['open_time']) if 'open_time' in ea_trade else datetime.utcnow(),
                         current_sl=ea_trade.get('sl', 0.0),
                         current_tp=ea_trade.get('tp', 0.0),
+                        initial_sl=ea_trade.get('sl', 0.0),
+                        initial_tp=ea_trade.get('tp', 0.0),
                         status='open',
                         source='ea_sync',
                         entry_reason='Found in EA during sync'
                     )
+
+                    # Enrich with session metadata
+                    from trade_utils import enrich_trade_metadata
+                    enrich_trade_metadata(new_trade)
+
                     db.add(new_trade)
                     reconciliation['changes'].append(
                         f"Added trade {ticket} from EA"
