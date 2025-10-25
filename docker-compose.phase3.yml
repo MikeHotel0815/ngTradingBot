@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  phase3-scheduler:
+    image: ngtradingbot-workers
+    container_name: ngtradingbot_phase3_scheduler
+    command: python3 phase3_scheduler.py
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-8454891267:AAHKrGTcGCVfXjb0LNjq6QAC816Un9ig7VA}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-557944459}
+      - DATABASE_URL=postgresql://trader:tradingbot_secret_2025@postgres:5432/ngtradingbot
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    volumes:
+      - ./:/app
+      - /tmp:/tmp
+    networks:
+      - tradingbot_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import os; exit(0 if os.path.exists('/tmp/phase3_scheduler_running') else 1)"]
+      interval: 1h
+      timeout: 10s
+      retries: 3
+
+networks:
+  tradingbot_network:
+    external: true

@@ -19,7 +19,7 @@ from models import Trade
 from sqlalchemy import and_
 
 # ==================== KONFIGURATION ====================
-NOTIFICATION_METHOD = "file"  # "file", "email", "telegram", "webhook"
+NOTIFICATION_METHOD = "telegram"  # "file", "email", "telegram", "webhook"
 
 # Email Settings (wenn NOTIFICATION_METHOD = "email")
 EMAIL_TO = "deine@email.de"
@@ -30,8 +30,9 @@ SMTP_USER = "deine@email.de"
 SMTP_PASSWORD = "dein_password"
 
 # Telegram Settings (wenn NOTIFICATION_METHOD = "telegram")
-TELEGRAM_BOT_TOKEN = "dein_bot_token"
-TELEGRAM_CHAT_ID = "deine_chat_id"
+# TODO: Füge hier deine Werte ein (siehe get_telegram_chat_id.py)
+TELEGRAM_BOT_TOKEN = "DEIN_BOT_TOKEN_HIER"  # Von @BotFather
+TELEGRAM_CHAT_ID = "DEINE_CHAT_ID_HIER"     # Von get_telegram_chat_id.py
 
 # Webhook Settings (wenn NOTIFICATION_METHOD = "webhook")
 WEBHOOK_URL = "https://your-webhook-url.com/notify"
