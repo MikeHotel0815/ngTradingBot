@@ -4696,7 +4696,7 @@ def update_settings():
                 )
             if 'max_drawdown_percent' in data:
                 settings.max_drawdown_percent = validate_numeric_range(
-                    data['max_drawdown_percent'], 'max_drawdown_percent', 1.0, 100.0
+                    data['max_drawdown_percent'], 'max_drawdown_percent', 0.01, 1.0
                 )
             if 'min_signal_confidence' in data:
                 settings.min_signal_confidence = validate_confidence(
@@ -5704,7 +5704,7 @@ def update_settings_webui():
                 )
             if 'max_drawdown_percent' in data:
                 settings.max_drawdown_percent = validate_numeric_range(
-                    data['max_drawdown_percent'], 'max_drawdown_percent', 1.0, 100.0
+                    data['max_drawdown_percent'], 'max_drawdown_percent', 0.01, 1.0
                 )
             if 'min_signal_confidence' in data:
                 settings.min_signal_confidence = validate_confidence(

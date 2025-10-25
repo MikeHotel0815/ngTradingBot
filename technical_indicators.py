@@ -13,6 +13,11 @@ from redis_client import get_redis
 from database import ScopedSession
 from models import OHLCData, IndicatorValue
 import json
+from heiken_ashi_config import (
+    get_heiken_ashi_config,
+    is_heiken_ashi_enabled,
+    calculate_ha_confidence
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1037,6 +1042,420 @@ class TechnicalIndicators:
             logger.error(f"SuperTrend calculation error: {e}")
             return None
 
+    def calculate_heiken_ashi(self) -> Optional[Dict]:
+        """
+        Calculate Heiken Ashi candles and trend signals
+
+        Heiken Ashi smooths price action and filters out market noise.
+        Strong trend signals:
+        - Bullish: Green candles with no lower wick (strong buyers)
+        - Bearish: Red candles with no upper wick (strong sellers)
+
+        Returns:
+            Dict with HA OHLC values, trend, and signal strength
+        """
+        indicator_name = 'HEIKEN_ASHI'
+
+        # Check cache
+        cached = self._get_cached(indicator_name)
+        if cached:
+            return cached
+
+        # Get OHLC data
+        df = self._get_ohlc_data(limit=50)
+        if df is None or len(df) < 10:
+            return None
+
+        try:
+            open_price = df['open'].values
+            high = df['high'].values
+            low = df['low'].values
+            close = df['close'].values
+
+            # Initialize Heiken Ashi arrays
+            ha_open = np.zeros(len(close))
+            ha_close = np.zeros(len(close))
+            ha_high = np.zeros(len(close))
+            ha_low = np.zeros(len(close))
+
+            # First HA candle
+            ha_open[0] = (open_price[0] + close[0]) / 2
+            ha_close[0] = (open_price[0] + high[0] + low[0] + close[0]) / 4
+            ha_high[0] = high[0]
+            ha_low[0] = low[0]
+
+            # Calculate subsequent HA candles
+            for i in range(1, len(close)):
+                # HA Close = (O + H + L + C) / 4
+                ha_close[i] = (open_price[i] + high[i] + low[i] + close[i]) / 4
+
+                # HA Open = (previous HA Open + previous HA Close) / 2
+                ha_open[i] = (ha_open[i-1] + ha_close[i-1]) / 2
+
+                # HA High = max(H, HA Open, HA Close)
+                ha_high[i] = max(high[i], ha_open[i], ha_close[i])
+
+                # HA Low = min(L, HA Open, HA Close)
+                ha_low[i] = min(low[i], ha_open[i], ha_close[i])
+
+            # Current HA candle
+            current_ha_open = float(ha_open[-1])
+            current_ha_close = float(ha_close[-1])
+            current_ha_high = float(ha_high[-1])
+            current_ha_low = float(ha_low[-1])
+
+            # Determine candle color
+            is_bullish = current_ha_close > current_ha_open
+            is_bearish = current_ha_close < current_ha_open
+
+            # Calculate body and wicks
+            body_size = abs(current_ha_close - current_ha_open)
+            upper_wick = current_ha_high - max(current_ha_open, current_ha_close)
+            lower_wick = min(current_ha_open, current_ha_close) - current_ha_low
+
+            # Strong trend detection (no opposite wick)
+            has_no_lower_wick = lower_wick < (body_size * 0.1)  # Lower wick < 10% of body
+            has_no_upper_wick = upper_wick < (body_size * 0.1)  # Upper wick < 10% of body
+
+            # Count consecutive same-color candles (trend strength)
+            consecutive_count = 1
+            for i in range(len(ha_close) - 2, max(0, len(ha_close) - 6), -1):
+                if is_bullish and ha_close[i] > ha_open[i]:
+                    consecutive_count += 1
+                elif is_bearish and ha_close[i] < ha_open[i]:
+                    consecutive_count += 1
+                else:
+                    break
+
+            # Check for recent reversal (recent opposite color candle in last 4 bars)
+            recent_reversal = False
+            lookback = min(4, len(ha_close) - 1)
+            for i in range(len(ha_close) - 2, len(ha_close) - lookback - 1, -1):
+                if is_bullish and ha_close[i] < ha_open[i]:
+                    recent_reversal = True
+                    break
+                elif is_bearish and ha_close[i] > ha_open[i]:
+                    recent_reversal = True
+                    break
+
+            # Determine signal
+            signal = 'neutral'
+            trend = 'neutral'
+            strength = 0
+
+            if is_bullish and has_no_lower_wick:
+                signal = 'strong_buy'
+                trend = 'strong_bullish'
+                strength = min(100, 60 + (consecutive_count * 10))
+            elif is_bullish:
+                signal = 'buy'
+                trend = 'bullish'
+                strength = min(100, 40 + (consecutive_count * 8))
+            elif is_bearish and has_no_upper_wick:
+                signal = 'strong_sell'
+                trend = 'strong_bearish'
+                strength = min(100, 60 + (consecutive_count * 10))
+            elif is_bearish:
+                signal = 'sell'
+                trend = 'bearish'
+                strength = min(100, 40 + (consecutive_count * 8))
+
+            result = {
+                'ha_open': round(current_ha_open, 5),
+                'ha_close': round(current_ha_close, 5),
+                'ha_high': round(current_ha_high, 5),
+                'ha_low': round(current_ha_low, 5),
+                'trend': trend,
+                'signal': signal,
+                'is_bullish': is_bullish,
+                'is_bearish': is_bearish,
+                'has_no_lower_wick': has_no_lower_wick,
+                'has_no_upper_wick': has_no_upper_wick,
+                'consecutive_count': consecutive_count,
+                'recent_reversal': recent_reversal,
+                'strength': strength,
+                'body_size': round(body_size, 5),
+                'upper_wick': round(upper_wick, 5),
+                'lower_wick': round(lower_wick, 5),
+                'calculated_at': datetime.utcnow().isoformat()
+            }
+
+            # Cache result
+            self._set_cache(indicator_name, result)
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Heiken Ashi calculation error: {e}")
+            return None
+
+    def calculate_volume_analysis(self, period: int = 20) -> Optional[Dict]:
+        """
+        Analyze volume strength relative to average
+
+        Args:
+            period: Lookback period for volume average (default: 20)
+
+        Returns:
+            Dict with volume analysis and strength signal
+        """
+        indicator_name = f'VOLUME_ANALYSIS_{period}'
+
+        # Check cache
+        cached = self._get_cached(indicator_name)
+        if cached:
+            return cached
+
+        # Get OHLC data
+        df = self._get_ohlc_data(limit=period + 10)
+        if df is None or len(df) < period:
+            return None
+
+        try:
+            volume = df['volume'].values
+
+            # Calculate average volume
+            avg_volume = np.mean(volume[-period:])
+            current_volume = float(volume[-1])
+
+            # Volume strength (relative to average)
+            volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
+
+            # Determine signal
+            signal = 'neutral'
+            strength = 'normal'
+
+            if volume_ratio >= 1.5:
+                signal = 'high_volume'
+                strength = 'very_high'
+            elif volume_ratio >= 1.2:
+                signal = 'above_average'
+                strength = 'high'
+            elif volume_ratio <= 0.6:
+                signal = 'low_volume'
+                strength = 'very_low'
+            elif volume_ratio <= 0.8:
+                signal = 'below_average'
+                strength = 'low'
+
+            result = {
+                'current_volume': round(current_volume, 2),
+                'average_volume': round(avg_volume, 2),
+                'volume_ratio': round(volume_ratio, 2),
+                'signal': signal,
+                'strength': strength,
+                'period': period,
+                'calculated_at': datetime.utcnow().isoformat()
+            }
+
+            # Cache result
+            self._set_cache(indicator_name, result)
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Volume analysis error: {e}")
+            return None
+
+    def calculate_heiken_ashi_trend(
+        self,
+        ema_fast: int = 8,
+        ema_slow: int = 30
+    ) -> Optional[Dict]:
+        """
+        Calculate Heiken Ashi Trend w/vol Signals
+
+        Combines:
+        - Heiken Ashi candle patterns (strong trend detection)
+        - EMA confirmation (8/30 period)
+        - Volume analysis (strength confirmation)
+
+        Entry Signals:
+        - LONG: Strong bullish HA candle + price above EMAs + recent reversal + high volume
+        - SHORT: Strong bearish HA candle + price below EMAs + recent reversal + high volume
+
+        Args:
+            ema_fast: Fast EMA period (default: 8)
+            ema_slow: Slow EMA period (default: 30)
+
+        Returns:
+            Dict with complete signal analysis and entry/exit signals
+        """
+        # Check if enabled for this symbol/timeframe
+        if not is_heiken_ashi_enabled(self.symbol, self.timeframe):
+            return None
+
+        indicator_name = f'HA_TREND_{ema_fast}_{ema_slow}'
+
+        # Check cache
+        cached = self._get_cached(indicator_name)
+        if cached:
+            return cached
+
+        try:
+            # Get Heiken Ashi data
+            ha = self.calculate_heiken_ashi()
+            if not ha:
+                return None
+
+            # Get EMA data
+            ema_fast_data = self.calculate_ema(ema_fast)
+            ema_slow_data = self.calculate_ema(ema_slow)
+            if not ema_fast_data or not ema_slow_data:
+                return None
+
+            # Get volume analysis
+            volume = self.calculate_volume_analysis()
+            if not volume:
+                return None
+
+            # Get current price
+            df = self._get_ohlc_data(limit=5)
+            if df is None or len(df) < 1:
+                return None
+            current_price = float(df['close'].values[-1])
+
+            # EMA values
+            ema_fast_value = ema_fast_data['value']
+            ema_slow_value = ema_slow_data['value']
+
+            # Check EMA alignment
+            price_above_emas = current_price > ema_fast_value and current_price > ema_slow_value
+            price_below_emas = current_price < ema_fast_value and current_price < ema_slow_value
+            ema_bullish_aligned = ema_fast_value > ema_slow_value
+            ema_bearish_aligned = ema_fast_value < ema_slow_value
+
+            # Volume confirmation
+            high_volume = volume['signal'] in ['high_volume', 'above_average']
+            volume_multiplier = 1.0
+            if volume['signal'] == 'high_volume':
+                volume_multiplier = 1.3
+            elif volume['signal'] == 'above_average':
+                volume_multiplier = 1.15
+            elif volume['signal'] in ['low_volume', 'below_average']:
+                volume_multiplier = 0.85
+
+            # Generate signals
+            signal = 'neutral'
+            signal_type = None
+            confidence = 0
+            reasons = []
+
+            # LONG ENTRY CONDITIONS
+            if (ha['signal'] in ['strong_buy', 'buy'] and
+                ha['has_no_lower_wick'] and
+                price_above_emas and
+                ema_bullish_aligned and
+                ha['recent_reversal']):
+
+                signal = 'buy'
+                signal_type = 'LONG_ENTRY'
+
+                # Use recalibrated confidence calculation
+                confidence = calculate_ha_confidence(
+                    ha_signal=ha['signal'],
+                    has_no_wick=ha['has_no_lower_wick'],
+                    ema_aligned=ema_bullish_aligned,
+                    recent_reversal=ha['recent_reversal'],
+                    volume_ratio=volume['volume_ratio']
+                )
+
+                # Build reasons list
+                if ha['signal'] == 'strong_buy':
+                    reasons.append('Strong bullish HA candle (no lower wick)')
+                else:
+                    reasons.append('Bullish HA candle')
+
+                if price_above_emas and ema_bullish_aligned:
+                    reasons.append(f'Price above EMAs ({ema_fast}/{ema_slow})')
+
+                if ha['recent_reversal']:
+                    reasons.append('Recent reversal detected')
+
+                if high_volume:
+                    reasons.append(f'Volume {volume["signal"]} (ratio: {volume["volume_ratio"]:.2f}x)')
+
+            # SHORT ENTRY CONDITIONS
+            elif (ha['signal'] in ['strong_sell', 'sell'] and
+                  ha['has_no_upper_wick'] and
+                  price_below_emas and
+                  ema_bearish_aligned and
+                  ha['recent_reversal']):
+
+                signal = 'sell'
+                signal_type = 'SHORT_ENTRY'
+
+                # Use recalibrated confidence calculation
+                confidence = calculate_ha_confidence(
+                    ha_signal=ha['signal'],
+                    has_no_wick=ha['has_no_upper_wick'],
+                    ema_aligned=ema_bearish_aligned,
+                    recent_reversal=ha['recent_reversal'],
+                    volume_ratio=volume['volume_ratio']
+                )
+
+                # Build reasons list
+                if ha['signal'] == 'strong_sell':
+                    reasons.append('Strong bearish HA candle (no upper wick)')
+                else:
+                    reasons.append('Bearish HA candle')
+
+                if price_below_emas and ema_bearish_aligned:
+                    reasons.append(f'Price below EMAs ({ema_fast}/{ema_slow})')
+
+                if ha['recent_reversal']:
+                    reasons.append('Recent reversal detected')
+
+                if high_volume:
+                    reasons.append(f'Volume {volume["signal"]} (ratio: {volume["volume_ratio"]:.2f}x)')
+
+            # EXIT SIGNALS (opposing candle color appears)
+            elif ha['is_bearish'] and ha['consecutive_count'] == 1:
+                signal = 'exit_long'
+                signal_type = 'LONG_EXIT'
+                confidence = 50
+                reasons.append('Opposing bearish candle (exit long)')
+
+            elif ha['is_bullish'] and ha['consecutive_count'] == 1:
+                signal = 'exit_short'
+                signal_type = 'SHORT_EXIT'
+                confidence = 50
+                reasons.append('Opposing bullish candle (exit short)')
+
+            # Cap confidence at 100
+            confidence = min(100, confidence)
+
+            result = {
+                'signal': signal,
+                'signal_type': signal_type,
+                'confidence': confidence,
+                'reasons': reasons,
+                'ha_trend': ha['trend'],
+                'ha_consecutive': ha['consecutive_count'],
+                'ha_has_no_lower_wick': ha['has_no_lower_wick'],
+                'ha_has_no_upper_wick': ha['has_no_upper_wick'],
+                'ha_recent_reversal': ha['recent_reversal'],
+                'price_above_emas': price_above_emas,
+                'price_below_emas': price_below_emas,
+                'ema_bullish_aligned': ema_bullish_aligned,
+                'ema_bearish_aligned': ema_bearish_aligned,
+                'ema_fast': round(ema_fast_value, 5),
+                'ema_slow': round(ema_slow_value, 5),
+                'volume_signal': volume['signal'],
+                'volume_ratio': volume['volume_ratio'],
+                'current_price': round(current_price, 5),
+                'calculated_at': datetime.utcnow().isoformat()
+            }
+
+            # Cache result
+            self._set_cache(indicator_name, result)
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Heiken Ashi Trend calculation error: {e}")
+            return None
+
     def calculate_all(self) -> Dict[str, any]:
         """
         Calculate all indicators
@@ -1049,7 +1468,9 @@ class TechnicalIndicators:
         # Trend indicators
         indicators['RSI'] = self.calculate_rsi()
         indicators['MACD'] = self.calculate_macd()
+        indicators['EMA_8'] = self.calculate_ema(8)
         indicators['EMA_20'] = self.calculate_ema(20)
+        indicators['EMA_30'] = self.calculate_ema(30)
         indicators['EMA_50'] = self.calculate_ema(50)
         indicators['EMA_200'] = self.calculate_ema(200)
         indicators['SMA_20'] = self.calculate_sma(20)
@@ -1058,6 +1479,7 @@ class TechnicalIndicators:
         indicators['ADX'] = self.calculate_adx()
         indicators['ICHIMOKU'] = self.calculate_ichimoku()
         indicators['SUPERTREND'] = self.calculate_supertrend()
+        indicators['HEIKEN_ASHI_TREND'] = self.calculate_heiken_ashi_trend()
 
         # Volatility indicators
         indicators['BB'] = self.calculate_bollinger_bands()
@@ -1069,6 +1491,7 @@ class TechnicalIndicators:
         # Volume indicators
         indicators['OBV'] = self.calculate_obv()
         indicators['VWAP'] = self.calculate_vwap()
+        indicators['VOLUME'] = self.calculate_volume_analysis()
 
         return indicators
 
@@ -1414,6 +1837,48 @@ class TechnicalIndicators:
                     'reason': 'Price below VWAP (institutional resistance)',
                     'strength': 'weak',
                     'strategy_type': 'neutral'
+                })
+
+        # Heiken Ashi Trend signals (Trend-Following with volume confirmation)
+        if indicators['HEIKEN_ASHI_TREND']:
+            ha_trend = indicators['HEIKEN_ASHI_TREND']
+            if ha_trend['signal'] == 'buy' and ha_trend['signal_type'] == 'LONG_ENTRY':
+                # Map confidence to strength
+                if ha_trend['confidence'] >= 80:
+                    strength = 'very_strong'
+                elif ha_trend['confidence'] >= 70:
+                    strength = 'strong'
+                elif ha_trend['confidence'] >= 60:
+                    strength = 'medium'
+                else:
+                    strength = 'weak'
+
+                signals.append({
+                    'indicator': 'HEIKEN_ASHI_TREND',
+                    'type': 'BUY',
+                    'reason': f"HA Trend: {', '.join(ha_trend['reasons'])}",
+                    'strength': strength,
+                    'strategy_type': 'trend_following',
+                    'confidence': ha_trend['confidence']
+                })
+            elif ha_trend['signal'] == 'sell' and ha_trend['signal_type'] == 'SHORT_ENTRY':
+                # Map confidence to strength
+                if ha_trend['confidence'] >= 80:
+                    strength = 'very_strong'
+                elif ha_trend['confidence'] >= 70:
+                    strength = 'strong'
+                elif ha_trend['confidence'] >= 60:
+                    strength = 'medium'
+                else:
+                    strength = 'weak'
+
+                signals.append({
+                    'indicator': 'HEIKEN_ASHI_TREND',
+                    'type': 'SELL',
+                    'reason': f"HA Trend: {', '.join(ha_trend['reasons'])}",
+                    'strength': strength,
+                    'strategy_type': 'trend_following',
+                    'confidence': ha_trend['confidence']
                 })
 
         # SuperTrend signals (Trend-Following with dynamic SL)

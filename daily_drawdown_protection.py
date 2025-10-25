@@ -126,6 +126,11 @@ class DailyDrawdownProtection:
             if not limit:
                 return {'allowed': True, 'daily_pnl': 0.0, 'reason': 'No limit configured'}
 
+            # ✅ RESPECT PROTECTION_ENABLED FLAG - If protection is disabled, allow all trading
+            if not limit.protection_enabled:
+                logger.info(f"⚠️ Daily drawdown protection DISABLED for account {self.account_id} - allowing all trades")
+                return {'allowed': True, 'daily_pnl': 0.0, 'reason': 'Protection disabled by user'}
+
             account = db.query(Account).filter_by(id=self.account_id).first()
             if not account:
                 return {'allowed': False, 'reason': 'Account not found'}
