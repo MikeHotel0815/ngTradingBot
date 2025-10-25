@@ -434,9 +434,12 @@ def import_worker_functions():
                 signals_generated = 0
                 accounts = db.query(Account).all()
 
+                # Load risk_profile from GlobalSettings (not Account)
+                from models import GlobalSettings
+                settings = GlobalSettings.get_settings(db)
+                risk_profile = settings.autotrade_risk_profile or 'normal'
+
                 for account in accounts:
-                    # Get account risk profile (default to 'normal' if not set)
-                    risk_profile = getattr(account, 'risk_profile', 'normal')
 
                     subscribed = db.query(SubscribedSymbol).filter(
                         SubscribedSymbol.account_id == account.id,
