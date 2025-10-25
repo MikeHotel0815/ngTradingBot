@@ -120,9 +120,9 @@ class TelegramDailyReporter:
     def get_system_status(self) -> Dict:
         """Get system health status"""
         # Check recent signals (last hour)
+        # Note: Signals are now global (no account_id)
         since_1h = datetime.utcnow() - timedelta(hours=1)
         signals = self.db.query(TradingSignal).filter(
-            TradingSignal.account_id == self.account_id,
             TradingSignal.created_at >= since_1h
         ).count()
 

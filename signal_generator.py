@@ -508,8 +508,8 @@ class SignalGenerator:
 
             # ✅ FIX: Use SELECT FOR UPDATE to prevent race conditions
             # This locks the row so other threads wait until we're done
+            # Note: Signals are now global (no account_id)
             existing_signal = db.query(TradingSignal).filter_by(
-                account_id=self.account_id,
                 symbol=self.symbol,
                 timeframe=self.timeframe,
                 status='active'
@@ -564,9 +564,8 @@ class SignalGenerator:
                     f"expiring old signal [ID:{existing_signal.id}]"
                 )
 
-            # Case 3: Create new signal with indicator snapshot
+            # Case 3: Create new signal with indicator snapshot (signals are now global)
             new_signal = TradingSignal(
-                account_id=self.account_id,
                 symbol=self.symbol,
                 timeframe=self.timeframe,
                 signal_type=signal['signal_type'],
@@ -729,9 +728,8 @@ class SignalGenerator:
         """
         db = ScopedSession()
         try:
-            # Find active signal for this symbol/timeframe
+            # Find active signal for this symbol/timeframe (signals are now global)
             active_signal = db.query(TradingSignal).filter(
-                TradingSignal.account_id == self.account_id,
                 TradingSignal.symbol == self.symbol,
                 TradingSignal.timeframe == self.timeframe,
                 TradingSignal.status == 'active'
@@ -761,9 +759,8 @@ class SignalGenerator:
         """
         db = ScopedSession()
         try:
-            # Find active signals for this symbol/timeframe
+            # Find active signals for this symbol/timeframe (signals are now global)
             active_signals = db.query(TradingSignal).filter(
-                TradingSignal.account_id == self.account_id,
                 TradingSignal.symbol == self.symbol,
                 TradingSignal.timeframe == self.timeframe,
                 TradingSignal.status == 'active'

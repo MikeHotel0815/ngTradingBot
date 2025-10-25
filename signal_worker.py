@@ -434,28 +434,25 @@ class SignalWorker:
 
         db = ScopedSession()
         try:
-            # Find duplicates
+            # Find duplicates (signals are now global - no account_id)
             duplicates = db.query(
                 TradingSignal.symbol,
-                TradingSignal.timeframe,
-                TradingSignal.account_id
+                TradingSignal.timeframe
             ).filter(
                 TradingSignal.status == 'active'
             ).group_by(
                 TradingSignal.symbol,
-                TradingSignal.timeframe,
-                TradingSignal.account_id
+                TradingSignal.timeframe
             ).having(
                 func.count(TradingSignal.id) > 1
             ).all()
 
             cleaned = 0
-            for symbol, timeframe, account_id in duplicates:
-                # Get all signals for this combination
+            for symbol, timeframe in duplicates:
+                # Get all signals for this combination (signals are now global)
                 signals = db.query(TradingSignal).filter_by(
                     symbol=symbol,
                     timeframe=timeframe,
-                    account_id=account_id,
                     status='active'
                 ).all()
 

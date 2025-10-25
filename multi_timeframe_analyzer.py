@@ -102,8 +102,8 @@ class MultiTimeframeAnalyzer:
                 return result
 
             # Get active signals for this symbol (all timeframes)
+            # Note: Signals are now global (no account_id)
             active_signals = db.query(TradingSignal).filter(
-                TradingSignal.account_id == account_id,
                 TradingSignal.symbol == symbol,
                 TradingSignal.status == 'active'
             ).all()
@@ -230,8 +230,8 @@ class MultiTimeframeAnalyzer:
             close_db = True
 
         try:
+            # Note: Signals are now global (no account_id)
             active_signals = db.query(TradingSignal).filter(
-                TradingSignal.account_id == account_id,
                 TradingSignal.symbol == symbol,
                 TradingSignal.status == 'active'
             ).order_by(TradingSignal.timeframe).all()

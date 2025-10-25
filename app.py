@@ -3926,9 +3926,9 @@ def get_signals():
                 return jsonify({'status': 'error', 'message': 'No account found'}), 404
 
             # Expire old signals BEFORE querying (clean up on every refresh)
+            # Note: Signals are now global (no account_id filter)
             now = datetime.utcnow()
             expired_count = db.query(TradingSignal).filter(
-                TradingSignal.account_id == account.id,
                 TradingSignal.status == 'active',
                 TradingSignal.expires_at <= now
             ).update({'status': 'expired'}, synchronize_session=False)
@@ -3940,8 +3940,8 @@ def get_signals():
             # Build query for active signals
             # Note: Signal validation (pattern/indicator check) is now handled automatically
             # by signal_worker when it calls generate_signal() every 10-20s
+            # Note: Signals are now global (no account_id)
             query = db.query(TradingSignal).filter_by(
-                account_id=account.id,
                 status='active'
             )
 
@@ -5386,8 +5386,8 @@ def get_safety_monitor_status():
             # 6. Multi-Timeframe Conflicts
             from models import TradingSignal
 
+            # Note: Signals are now global (no account_id)
             active_signals = db.query(TradingSignal).filter(
-                TradingSignal.account_id == account_id,
                 TradingSignal.status == 'active'
             ).all()
 

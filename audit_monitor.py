@@ -78,9 +78,8 @@ class AuditMonitor:
 
         since = datetime.utcnow() - timedelta(hours=1)
 
-        # Get signals created in last hour
+        # Get signals created in last hour (signals are now global)
         signals = self.db.query(TradingSignal).filter(
-            TradingSignal.account_id == self.account_id,
             TradingSignal.created_at >= since
         ).all()
 
@@ -112,9 +111,8 @@ class AuditMonitor:
 
         since = datetime.utcnow() - timedelta(hours=24)
 
-        # Get all signals
+        # Get all signals (signals are now global)
         signals = self.db.query(TradingSignal).filter(
-            TradingSignal.account_id == self.account_id,
             TradingSignal.created_at >= since
         ).all()
 
