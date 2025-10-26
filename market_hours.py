@@ -79,62 +79,62 @@ class MarketHours:
             6: None
         },
 
-        # COMMODITIES - 23h trading with 1h break
+        # COMMODITIES - Standardized to Forex hours
         'XAUUSD': {
-            0: (23, 23),  # Sunday: Opens 23:00 UTC
-            1: (1, 23),   # Monday-Thursday: 01:00-23:00 (23h break 00:00-01:00)
-            2: (1, 23),
-            3: (1, 23),
-            4: (1, 23),
-            5: (0, 21),   # Friday: 00:00-21:00
-            6: None
-        },
-        'XAGUSD': {
-            0: (23, 23),  # Sunday: Opens 23:00 UTC
-            1: (1, 23),   # Monday-Thursday: 01:00-23:00
-            2: (1, 23),
-            3: (1, 23),
-            4: (1, 23),
-            5: (1, 21),   # Friday: 01:00-21:00
-            6: None
-        },
-
-        # INDICES
-        'DE40.c': {
-            0: None,      # Sunday: Closed
-            1: (8, 22),   # Monday-Thursday: 09:00-22:00 CET (08:00-21:00 UTC in winter)
-            2: (8, 22),
-            3: (8, 22),
-            4: (8, 22),
-            5: (6, 22),   # Friday: Opens earlier at 06:00 UTC
-            6: None       # Saturday: Closed
-        },
-        'US500.c': {
-            0: (18, 23),  # Sunday: Opens 18:00 UTC (6pm ET futures open)
-            1: (0, 23),   # Monday-Thursday: Nearly 24h
+            0: (22, 23),  # Sunday: Opens 22:00 UTC
+            1: (0, 23),   # Monday-Thursday: Full 24h
             2: (0, 23),
             3: (0, 23),
             4: (0, 23),
             5: (0, 21),   # Friday: Closes 21:00 UTC
-            6: None
+            6: None       # Saturday: Closed
+        },
+        'XAGUSD': {
+            0: (22, 23),  # Sunday: Opens 22:00 UTC
+            1: (0, 23),   # Monday-Thursday: Full 24h
+            2: (0, 23),
+            3: (0, 23),
+            4: (0, 23),
+            5: (0, 21),   # Friday: Closes 21:00 UTC
+            6: None       # Saturday: Closed
+        },
+
+        # INDICES - Standardized to Forex hours
+        'DE40.c': {
+            0: (22, 23),  # Sunday: Opens 22:00 UTC
+            1: (0, 23),   # Monday-Thursday: Full 24h
+            2: (0, 23),
+            3: (0, 23),
+            4: (0, 23),
+            5: (0, 21),   # Friday: Closes 21:00 UTC
+            6: None       # Saturday: Closed
+        },
+        'US500.c': {
+            0: (22, 23),  # Sunday: Opens 22:00 UTC
+            1: (0, 23),   # Monday-Thursday: Full 24h
+            2: (0, 23),
+            3: (0, 23),
+            4: (0, 23),
+            5: (0, 21),   # Friday: Closes 21:00 UTC
+            6: None       # Saturday: Closed
         },
         'US30': {
-            0: (18, 23),
-            1: (0, 23),
+            0: (22, 23),  # Sunday: Opens 22:00 UTC
+            1: (0, 23),   # Monday-Thursday: Full 24h
             2: (0, 23),
             3: (0, 23),
             4: (0, 23),
-            5: (0, 21),
-            6: None
+            5: (0, 21),   # Friday: Closes 21:00 UTC
+            6: None       # Saturday: Closed
         },
-        'USTEC': {  # Nasdaq
-            0: (18, 23),
-            1: (0, 23),
+        'USTEC': {  # Nasdaq - Standardized to Forex hours
+            0: (22, 23),  # Sunday: Opens 22:00 UTC
+            1: (0, 23),   # Monday-Thursday: Full 24h
             2: (0, 23),
             3: (0, 23),
             4: (0, 23),
-            5: (0, 21),
-            6: None
+            5: (0, 21),   # Friday: Closes 21:00 UTC
+            6: None       # Saturday: Closed
         },
 
         # CRYPTO - 24/7

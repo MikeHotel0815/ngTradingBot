@@ -5835,20 +5835,29 @@ def trigger_ml_training():
         force = data.get('force', False)
 
         from ml.ml_training_pipeline import MLTrainingPipeline
-        from config import DEFAULT_ACCOUNT_ID
+        from models import Account
 
         db = ScopedSession()
         try:
-            pipeline = MLTrainingPipeline(db, account_id=DEFAULT_ACCOUNT_ID)
+            # Get the first account (or you could pass account_id from request)
+            account = db.query(Account).first()
+            if not account:
+                return jsonify({'error': 'No account found'}), 404
+
+            account_id = account.id
 
             # Train in background (async)
             import threading
             def train_async():
+                db_async = ScopedSession()
                 try:
+                    pipeline = MLTrainingPipeline(db_async, account_id=account_id)
                     result = pipeline.train_model(symbol=symbol, days_back=days_back, force=force)
                     logger.info(f"ML training completed for {symbol or 'GLOBAL'}: {result}")
                 except Exception as e:
                     logger.error(f"ML training failed for {symbol or 'GLOBAL'}: {e}")
+                finally:
+                    db_async.close()
 
             thread = threading.Thread(target=train_async, daemon=True)
             thread.start()
