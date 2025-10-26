@@ -27,6 +27,7 @@ import logging
 import os
 from datetime import datetime, timedelta
 from typing import Dict, Optional, List, Tuple
+import numpy as np
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
@@ -34,6 +35,21 @@ from models import MLModel, MLPrediction, MLABTest
 from ml.ml_confidence_model import XGBoostConfidenceModel
 
 logger = logging.getLogger(__name__)
+
+
+def convert_numpy_to_python(obj):
+    """Convert numpy types to Python native types for JSON serialization"""
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {k: convert_numpy_to_python(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [convert_numpy_to_python(item) for item in obj]
+    return obj
 
 
 class MLModelManager:
@@ -500,20 +516,20 @@ class MLModelManager:
                     prev_model.is_active = False
                     logger.info(f"Deactivated previous model #{prev_model.id}")
 
-            # Create new model record
+            # Create new model record (convert numpy types for JSON serialization)
             model = MLModel(
                 model_type=model_type,
                 model_name=f"{model_type}_{symbol or 'global'}",
                 symbol=symbol,
                 version=version,
                 file_path=file_path,
-                accuracy=validation_metrics.get('accuracy', 0.0),
-                precision=validation_metrics.get('precision', 0.0),
-                recall=validation_metrics.get('recall', 0.0),
-                f1_score=validation_metrics.get('f1_score', 0.0),
-                auc_roc=validation_metrics.get('auc_roc', 0.0),
-                hyperparameters=hyperparameters,
-                feature_importance=feature_importance,
+                accuracy=float(validation_metrics.get('accuracy', 0.0)),
+                precision=float(validation_metrics.get('precision', 0.0)),
+                recall=float(validation_metrics.get('recall', 0.0)),
+                f1_score=float(validation_metrics.get('f1_score', 0.0)),
+                auc_roc=float(validation_metrics.get('auc_roc', 0.0)),
+                hyperparameters=convert_numpy_to_python(hyperparameters),
+                feature_importance=convert_numpy_to_python(feature_importance) if feature_importance else None,
                 is_active=is_active,
                 created_at=datetime.utcnow()
             )

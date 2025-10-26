@@ -53,6 +53,29 @@ from ml.ml_features import FeatureEngineer
 logger = logging.getLogger(__name__)
 
 
+def convert_numpy_to_python(obj):
+    """
+    Convert numpy types to Python native types for JSON serialization
+
+    Args:
+        obj: Any object that might contain numpy types
+
+    Returns:
+        JSON-serializable object
+    """
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {k: convert_numpy_to_python(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [convert_numpy_to_python(item) for item in obj]
+    return obj
+
+
 class XGBoostConfidenceModel:
     """XGBoost model for signal confidence prediction"""
 
@@ -281,9 +304,11 @@ class XGBoostConfidenceModel:
             'auc_roc': auc_roc
         }
 
-        # Feature importance
+        # Feature importance (convert numpy to Python types for JSON)
         importance = self.model.feature_importances_
-        self.feature_importance = dict(zip(self.feature_names, importance))
+        self.feature_importance = convert_numpy_to_python(
+            dict(zip(self.feature_names, importance))
+        )
 
         # Sort by importance
         sorted_importance = sorted(

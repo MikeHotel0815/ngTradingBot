@@ -5774,18 +5774,18 @@ def get_ml_models():
                 'models': [{
                     'id': m.id,
                     'model_type': m.model_type,
-                    'symbol': m.symbol,
+                    'model_name': m.model_name,
+                    'symbol': m.symbol or 'GLOBAL',
                     'version': m.version,
                     'is_active': m.is_active,
-                    'accuracy': float(m.accuracy) if m.accuracy else None,
-                    'precision': float(m.precision) if m.precision else None,
-                    'recall': float(m.recall) if m.recall else None,
-                    'f1_score': float(m.f1_score) if m.f1_score else None,
+                    'accuracy': float(m.accuracy) if m.accuracy else 0.0,
+                    'precision': float(m.precision) if m.precision else 0.0,
+                    'recall': float(m.recall) if m.recall else 0.0,
+                    'f1_score': float(m.f1_score) if m.f1_score else 0.0,
+                    'auc_roc': float(m.auc_roc) if m.auc_roc else 0.0,
                     'training_samples': m.training_samples,
-                    'validation_samples': m.validation_samples,
-                    'created_at': m.created_at.isoformat() if m.created_at else None,
-                    'last_used': m.last_used.isoformat() if m.last_used else None,
-                    'usage_count': m.usage_count
+                    'training_date': m.training_date.isoformat() if m.training_date else None,
+                    'created_at': m.created_at.isoformat() if m.created_at else None
                 } for m in models]
             })
         finally:
