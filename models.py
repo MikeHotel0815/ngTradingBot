@@ -1390,16 +1390,16 @@ class MLTrainingRun(Base):
     id = Column(Integer, primary_key=True)
     model_type = Column(String(50), nullable=False)
     symbol = Column(String(20))  # NULL = global model
-    started_at = Column(DateTime, default=datetime.utcnow, index=True)
-    completed_at = Column(DateTime)
+    started_at = Column('start_time', DateTime, default=datetime.utcnow, index=True)
+    completed_at = Column('end_time', DateTime)
     duration_seconds = Column(Integer)
     status = Column(String(20), default='running')  # 'running', 'completed', 'failed'
     model_id = Column(Integer, ForeignKey('ml_models.id'))
     training_samples = Column(Integer)
     validation_samples = Column(Integer)
-    training_params = Column(JSONB)
-    validation_accuracy = Column(Numeric(5, 4))
-    validation_loss = Column(Numeric(10, 6))
+    training_params = Column('validation_metrics', JSONB)
+    validation_accuracy = Column('final_validation_loss', Numeric(10, 6))
+    validation_loss = Column('final_training_loss', Numeric(10, 6))
     model_metadata = Column(JSONB)
     error_message = Column(Text)
 
