@@ -1,0 +1,888 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <title>ngTradingBot Ultimate Dashboard</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>🤖</text></svg>">
+
+    <!-- Socket.IO Client -->
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', 'Arial', sans-serif;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            padding: 20px;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1800px;
+            margin: 0 auto;
+        }
+
+        /* Header */
+        header {
+            text-align: center;
+            padding: 20px 0;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #4CAF50;
+        }
+
+        h1 {
+            font-size: 2.5em;
+            color: #4CAF50;
+            margin-bottom: 10px;
+        }
+
+        .header-meta {
+            color: #888;
+            font-size: 0.9em;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 5px;
+            animation: pulse 2s infinite;
+        }
+
+        .status-connected {
+            background-color: #4CAF50;
+        }
+
+        .status-disconnected {
+            background-color: #F44336;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Grid Layout */
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        @media (max-width: 1400px) {
+            .dashboard-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        @media (max-width: 900px) {
+            .dashboard-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Cards */
+        .card {
+            background: linear-gradient(135deg, #1a1a1a 0%, #252525 100%);
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            border: 1px solid #333;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #333;
+        }
+
+        .card-title {
+            font-size: 1.2em;
+            font-weight: 600;
+            color: #4CAF50;
+        }
+
+        .card-badge {
+            background: #4CAF50;
+            color: #000;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.85em;
+            font-weight: 600;
+        }
+
+        .card-badge.warning {
+            background: #FF9800;
+        }
+
+        .card-badge.danger {
+            background: #F44336;
+        }
+
+        /* Tables */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9em;
+        }
+
+        thead {
+            background: #2a2a2a;
+        }
+
+        th {
+            padding: 10px;
+            text-align: left;
+            font-weight: 600;
+            color: #4CAF50;
+            border-bottom: 2px solid #4CAF50;
+        }
+
+        td {
+            padding: 10px;
+            border-bottom: 1px solid #333;
+        }
+
+        tbody tr:hover {
+            background: rgba(76, 175, 80, 0.1);
+        }
+
+        .text-right {
+            text-align: right;
+        }
+
+        .text-center {
+            text-align: center;
+        }
+
+        /* Status badges */
+        .status-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.85em;
+            font-weight: 600;
+        }
+
+        .status-active {
+            background: #4CAF50;
+            color: #000;
+        }
+
+        .status-shadow {
+            background: #FF9800;
+            color: #000;
+        }
+
+        .status-paused {
+            background: #F44336;
+            color: #fff;
+        }
+
+        /* PNL Colors */
+        .pnl-positive {
+            color: #4CAF50;
+            font-weight: 600;
+        }
+
+        .pnl-negative {
+            color: #F44336;
+            font-weight: 600;
+        }
+
+        .pnl-neutral {
+            color: #888;
+        }
+
+        /* Progress Bars */
+        .progress-bar-container {
+            width: 100%;
+            height: 20px;
+            background: #2a2a2a;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #4CAF50, #45a049);
+            transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.8em;
+            font-weight: 600;
+        }
+
+        .progress-bar.warning {
+            background: linear-gradient(90deg, #FF9800, #FB8C00);
+        }
+
+        .progress-bar.danger {
+            background: linear-gradient(90deg, #F44336, #E53935);
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin: 15px 0;
+        }
+
+        .stat-box {
+            background: #2a2a2a;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            border-left: 3px solid #4CAF50;
+        }
+
+        .stat-label {
+            font-size: 0.85em;
+            color: #888;
+            margin-bottom: 8px;
+        }
+
+        .stat-value {
+            font-size: 1.8em;
+            font-weight: 700;
+            color: #4CAF50;
+        }
+
+        /* Charts */
+        .chart-container {
+            margin: 20px 0;
+            padding: 15px;
+            background: #1a1a1a;
+            border-radius: 8px;
+            border: 1px solid #333;
+        }
+
+        .chart-container img {
+            width: 100%;
+            height: auto;
+            border-radius: 4px;
+        }
+
+        /* Loading Spinner */
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #333;
+            border-top-color: #4CAF50;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Tooltips */
+        .tooltip {
+            position: relative;
+            cursor: help;
+            border-bottom: 1px dotted #888;
+        }
+
+        .tooltip:hover::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            bottom: 125%;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #333;
+            color: #fff;
+            padding: 8px 12px;
+            border-radius: 4px;
+            white-space: nowrap;
+            font-size: 0.85em;
+            z-index: 1000;
+        }
+
+        /* Full Width Sections */
+        .section-full {
+            grid-column: 1 / -1;
+        }
+
+        /* Alert Box */
+        .alert {
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+            font-weight: 500;
+        }
+
+        .alert-info {
+            background: rgba(33, 150, 243, 0.1);
+            border-left: 4px solid #2196F3;
+            color: #2196F3;
+        }
+
+        .alert-warning {
+            background: rgba(255, 152, 0, 0.1);
+            border-left: 4px solid #FF9800;
+            color: #FF9800;
+        }
+
+        .alert-danger {
+            background: rgba(244, 67, 54, 0.1);
+            border-left: 4px solid #F44336;
+            color: #F44336;
+        }
+
+        /* Footer */
+        footer {
+            text-align: center;
+            padding: 20px 0;
+            margin-top: 40px;
+            border-top: 1px solid #333;
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        /* Animations */
+        .fade-in {
+            animation: fadeIn 0.5s ease-in;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header>
+            <h1>🤖 ngTradingBot Ultimate Dashboard</h1>
+            <div class="header-meta">
+                <span class="status-indicator status-disconnected" id="connection-status"></span>
+                <span id="connection-text">Connecting...</span>
+                &nbsp;|&nbsp;
+                Last Update: <span id="last-update">--</span>
+                &nbsp;|&nbsp;
+                Auto-Refresh: <span id="refresh-interval">15s</span>
+            </div>
+        </header>
+
+        <!-- Main Dashboard Grid -->
+        <div class="dashboard-grid">
+            <!-- Section 1: Trading Overview -->
+            <div class="card section-full">
+                <div class="card-header">
+                    <div class="card-title">📊 Live Trading Status</div>
+                    <div class="card-badge" id="total-positions-badge">0 Positions</div>
+                </div>
+
+                <div class="stats-grid">
+                    <div class="stat-box">
+                        <div class="stat-label">Today P&L</div>
+                        <div class="stat-value" id="today-pnl">€0.00</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-label">Win Rate</div>
+                        <div class="stat-value" id="win-rate">0%</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-label">Signals Today</div>
+                        <div class="stat-value" id="signals-today">0</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-label">Trades Today</div>
+                        <div class="stat-value" id="trades-today">0</div>
+                    </div>
+                </div>
+
+                <table id="symbols-table">
+                    <thead>
+                        <tr>
+                            <th>Symbol</th>
+                            <th class="text-center">Status</th>
+                            <th class="text-right">Open Pos</th>
+                            <th class="text-right">Today P&L</th>
+                            <th class="text-right">Win Rate</th>
+                            <th class="text-right">Signals</th>
+                        </tr>
+                    </thead>
+                    <tbody id="symbols-tbody">
+                        <tr>
+                            <td colspan="6" class="text-center">Loading...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Section 3: Risk Management -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">🛡️ Risk Management</div>
+                    <div class="card-badge" id="risk-badge">SAFE</div>
+                </div>
+
+                <div id="risk-content">
+                    <div style="margin-bottom: 20px;">
+                        <div class="stat-label">Daily Drawdown</div>
+                        <div class="stat-value" id="drawdown-value">€0.00</div>
+                        <div class="progress-bar-container">
+                            <div class="progress-bar" id="drawdown-progress" style="width: 0%"></div>
+                        </div>
+                        <div style="font-size: 0.85em; color: #888; margin-top: 5px;">
+                            Warning: <span id="dd-warning">€-20.00</span> |
+                            Critical: <span id="dd-critical">€-30.00</span>
+                        </div>
+                    </div>
+
+                    <div style="margin-bottom: 20px;">
+                        <div class="stat-label">Position Limits</div>
+                        <div style="font-size: 1.2em; margin: 10px 0;">
+                            <span id="current-positions">0</span> / <span id="max-positions">5</span>
+                            (<span id="position-usage">0%</span> used)
+                        </div>
+                        <div class="progress-bar-container">
+                            <div class="progress-bar" id="position-progress" style="width: 0%"></div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <div class="stat-label">SL Enforcement</div>
+                        <div id="sl-enforcement-status" class="stat-value" style="font-size: 1.2em;">✅ OK</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Section 4: Live Positions -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">📈 Open Positions</div>
+                    <div class="card-badge" id="unrealized-pnl-badge">€0.00</div>
+                </div>
+
+                <table id="positions-table">
+                    <thead>
+                        <tr>
+                            <th>Symbol</th>
+                            <th>Dir</th>
+                            <th class="text-right">Entry</th>
+                            <th class="text-right">Current</th>
+                            <th class="text-right">P&L</th>
+                        </tr>
+                    </thead>
+                    <tbody id="positions-tbody">
+                        <tr>
+                            <td colspan="5" class="text-center">No open positions</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Section 8: Performance -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">📈 Performance (24h)</div>
+                    <div class="card-badge" id="perf-badge">0 Trades</div>
+                </div>
+
+                <div class="stats-grid">
+                    <div class="stat-box">
+                        <div class="stat-label">Total Trades</div>
+                        <div class="stat-value" id="perf-total">0</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-label">Win Rate</div>
+                        <div class="stat-value" id="perf-wr">0%</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-label">Total P&L</div>
+                        <div class="stat-value" id="perf-pnl">€0.00</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-label">Profit Factor</div>
+                        <div class="stat-value" id="perf-pf">0.00</div>
+                    </div>
+                </div>
+
+                <div style="margin-top: 15px; font-size: 0.9em;">
+                    <div><strong>Avg Win:</strong> <span id="perf-avg-win">€0.00</span></div>
+                    <div><strong>Avg Loss:</strong> <span id="perf-avg-loss">€0.00</span></div>
+                    <div><strong>Expectancy:</strong> <span id="perf-expectancy">€0.00</span></div>
+                </div>
+            </div>
+
+            <!-- Section 7: System Health -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">💻 System Health</div>
+                </div>
+
+                <div id="health-content" style="font-size: 0.95em;">
+                    <div style="margin-bottom: 10px;">
+                        <strong>MT5:</strong> <span id="mt5-status">--</span>
+                    </div>
+                    <div style="margin-bottom: 10px;">
+                        <strong>PostgreSQL:</strong> <span id="pg-status">--</span>
+                    </div>
+                    <div>
+                        <strong>Redis:</strong> <span id="redis-status">--</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Section 6: Shadow Trading -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">🔬 Shadow Trading (XAGUSD)</div>
+                </div>
+
+                <div id="shadow-content">
+                    <div style="margin-bottom: 15px;">
+                        <div class="stat-label">Progress to Re-Activation</div>
+                        <div class="progress-bar-container">
+                            <div class="progress-bar" id="shadow-progress" style="width: 0%">
+                                <span id="shadow-progress-text">0/100 trades</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="stats-grid" style="grid-template-columns: 1fr 1fr;">
+                        <div>
+                            <div class="stat-label">Win Rate</div>
+                            <div class="stat-value" id="shadow-wr" style="font-size: 1.3em;">0%</div>
+                        </div>
+                        <div>
+                            <div class="stat-label">Simulated P&L</div>
+                            <div class="stat-value" id="shadow-pnl" style="font-size: 1.3em;">€0.00</div>
+                        </div>
+                    </div>
+
+                    <div id="shadow-ready-alert" class="alert alert-info" style="display: none; margin-top: 15px;">
+                        ✅ Ready to activate! All criteria met.
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Charts Section (Full Width) -->
+        <div class="card section-full">
+            <div class="card-header">
+                <div class="card-title">📊 Analytics Charts</div>
+                <div style="font-size: 0.9em; color: #888;">Last 7 Days</div>
+            </div>
+
+            <div class="dashboard-grid">
+                <div class="chart-container">
+                    <h3 style="color: #4CAF50; margin-bottom: 10px;">Win Rate Over Time</h3>
+                    <img id="chart-winrate" src="" alt="Loading chart..." style="display: none;">
+                    <div class="loading" id="loading-winrate"></div>
+                </div>
+
+                <div class="chart-container">
+                    <h3 style="color: #4CAF50; margin-bottom: 10px;">Cumulative P&L</h3>
+                    <img id="chart-pnl" src="" alt="Loading chart..." style="display: none;">
+                    <div class="loading" id="loading-pnl"></div>
+                </div>
+
+                <div class="chart-container">
+                    <h3 style="color: #4CAF50; margin-bottom: 10px;">Symbol Performance</h3>
+                    <img id="chart-symbols" src="" alt="Loading chart..." style="display: none;">
+                    <div class="loading" id="loading-symbols"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <footer>
+            <p>ngTradingBot Ultimate Dashboard v1.0.0 | Generated with Claude Code</p>
+            <p>© 2025 | Real-Time Trading Analytics</p>
+        </footer>
+    </div>
+
+    <script>
+        // Socket.IO Connection
+        const socket = io();
+
+        // Connection Status
+        socket.on('connect', () => {
+            console.log('Connected to dashboard server');
+            document.getElementById('connection-status').className = 'status-indicator status-connected';
+            document.getElementById('connection-text').textContent = 'Connected';
+
+            // Request initial data
+            socket.emit('request_dashboard_update');
+        });
+
+        socket.on('disconnect', () => {
+            console.log('Disconnected from dashboard server');
+            document.getElementById('connection-status').className = 'status-indicator status-disconnected';
+            document.getElementById('connection-text').textContent = 'Disconnected';
+        });
+
+        // Dashboard Update
+        socket.on('dashboard_update', (data) => {
+            console.log('Dashboard update received', data);
+            updateDashboard(data);
+        });
+
+        // Update Dashboard with new data
+        function updateDashboard(data) {
+            updateLastUpdateTime();
+
+            // Section 1: Trading Overview
+            updateTradingOverview(data.section_1_trading_overview);
+
+            // Section 3: Risk Management
+            updateRiskManagement(data.section_3_risk_management);
+
+            // Section 4: Live Positions
+            updateLivePositions(data.section_4_live_positions);
+
+            // Section 7: System Health
+            updateSystemHealth(data.section_7_system_health);
+
+            // Section 8: Performance
+            updatePerformance(data.section_8_performance_24h);
+
+            // Section 6: Shadow Trading
+            updateShadowTrading(data.section_6_shadow_trading);
+        }
+
+        function updateTradingOverview(data) {
+            if (!data || data.error) return;
+
+            const total = data.total || {};
+
+            // Update summary stats
+            document.getElementById('today-pnl').textContent = formatPnL(total.today_pnl || 0);
+            document.getElementById('today-pnl').className = 'stat-value ' + getPnLClass(total.today_pnl || 0);
+
+            document.getElementById('win-rate').textContent = `${(total.win_rate || 0).toFixed(1)}%`;
+            document.getElementById('signals-today').textContent = total.total_signals || 0;
+            document.getElementById('trades-today').textContent = total.trades_today || 0;
+
+            document.getElementById('total-positions-badge').textContent = `${total.open_positions || 0} Positions`;
+
+            // Update symbols table
+            const tbody = document.getElementById('symbols-tbody');
+            tbody.innerHTML = '';
+
+            (data.symbols || []).forEach(sym => {
+                const row = tbody.insertRow();
+                row.innerHTML = `
+                    <td>${sym.symbol}</td>
+                    <td class="text-center"><span class="status-badge status-${sym.status}">${sym.status.toUpperCase()}</span></td>
+                    <td class="text-right">${sym.open_positions}</td>
+                    <td class="text-right ${getPnLClass(sym.today_pnl)}">${formatPnL(sym.today_pnl)}</td>
+                    <td class="text-right">${sym.win_rate !== null ? sym.win_rate.toFixed(1) + '%' : 'N/A'}</td>
+                    <td class="text-right">${sym.signals_today}</td>
+                `;
+            });
+        }
+
+        function updateRiskManagement(data) {
+            if (!data || data.error) return;
+
+            const dd = data.daily_drawdown || {};
+            const pos = data.position_limits || {};
+            const sl = data.sl_enforcement || {};
+
+            // Drawdown
+            const ddCurrent = dd.current || 0;
+            const ddWarning = dd.warning_limit || -20;
+            const ddCritical = dd.critical_limit || -30;
+
+            document.getElementById('drawdown-value').textContent = formatPnL(ddCurrent);
+            document.getElementById('drawdown-value').className = 'stat-value ' + getPnLClass(ddCurrent);
+            document.getElementById('dd-warning').textContent = formatPnL(ddWarning);
+            document.getElementById('dd-critical').textContent = formatPnL(ddCritical);
+
+            const ddStatus = dd.status || 'SAFE';
+            document.getElementById('risk-badge').textContent = ddStatus;
+            document.getElementById('risk-badge').className = `card-badge ${ddStatus === 'SAFE' ? '' : ddStatus === 'WARNING' ? 'warning' : 'danger'}`;
+
+            // Positions
+            const currentPos = pos.current_open || 0;
+            const maxPos = pos.max_total || 5;
+            const usagePct = pos.usage_pct || 0;
+
+            document.getElementById('current-positions').textContent = currentPos;
+            document.getElementById('max-positions').textContent = maxPos;
+            document.getElementById('position-usage').textContent = `${usagePct.toFixed(0)}%`;
+
+            const posProgress = document.getElementById('position-progress');
+            posProgress.style.width = `${usagePct}%`;
+            posProgress.className = `progress-bar ${usagePct >= 90 ? 'danger' : usagePct >= 80 ? 'warning' : ''}`;
+
+            // SL Enforcement
+            const slOk = sl.all_trades_have_sl !== false;
+            document.getElementById('sl-enforcement-status').textContent = slOk ? '✅ OK' : `❌ FAILED (${sl.trades_without_sl || 0} trades)`;
+            document.getElementById('sl-enforcement-status').className = `stat-value ${slOk ? 'pnl-positive' : 'pnl-negative'}`;
+        }
+
+        function updateLivePositions(data) {
+            if (!data || data.error) return;
+
+            const tbody = document.getElementById('positions-tbody');
+            tbody.innerHTML = '';
+
+            const positions = data.positions || [];
+            const totalPnl = data.total_unrealized_pnl || 0;
+
+            document.getElementById('unrealized-pnl-badge').textContent = formatPnL(totalPnl);
+            document.getElementById('unrealized-pnl-badge').className = `card-badge ${getPnLClass(totalPnl) === 'pnl-positive' ? '' : getPnLClass(totalPnl) === 'pnl-negative' ? 'danger' : ''}`;
+
+            if (positions.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="text-center">No open positions</td></tr>';
+                return;
+            }
+
+            positions.forEach(pos => {
+                const row = tbody.insertRow();
+                const pnl = pos.unrealized_pnl || 0;
+                row.innerHTML = `
+                    <td>${pos.symbol}</td>
+                    <td><span style="color: ${pos.direction === 'BUY' ? '#2196F3' : '#FF9800'}">${pos.direction}</span></td>
+                    <td class="text-right">${pos.entry_price ? pos.entry_price.toFixed(5) : 'N/A'}</td>
+                    <td class="text-right">${pos.current_price ? pos.current_price.toFixed(5) : 'N/A'}</td>
+                    <td class="text-right ${getPnLClass(pnl)}">${formatPnL(pnl)}</td>
+                `;
+            });
+        }
+
+        function updateSystemHealth(data) {
+            if (!data || data.error) return;
+
+            const mt5 = data.mt5_connection || {};
+            const pg = data.postgresql || {};
+            const redis = data.redis || {};
+
+            const mt5Connected = mt5.connected !== false;
+            const pgConnected = pg.connected !== false;
+            const redisConnected = redis.connected !== false;
+
+            const mt5Hb = mt5.last_heartbeat_seconds_ago;
+            const mt5Text = mt5Connected ?
+                `🟢 Connected ${mt5Hb ? '(' + mt5Hb.toFixed(0) + 's ago)' : ''}` :
+                '🔴 Disconnected';
+
+            const pgText = pgConnected ?
+                `🟢 Connected (${pg.active_connections || 0} conn, ${(pg.database_size_mb || 0).toFixed(0)} MB)` :
+                '🔴 Disconnected';
+
+            const redisText = redisConnected ? '🟢 OK' : '🔴 Down';
+
+            document.getElementById('mt5-status').innerHTML = mt5Text;
+            document.getElementById('pg-status').innerHTML = pgText;
+            document.getElementById('redis-status').innerHTML = redisText;
+        }
+
+        function updatePerformance(data) {
+            if (!data || data.error) return;
+
+            const summary = data.summary || {};
+
+            const total = summary.total_trades || 0;
+            const wr = summary.win_rate || 0;
+            const pnl = summary.total_pnl || 0;
+            const pf = summary.profit_factor || 0;
+
+            document.getElementById('perf-badge').textContent = `${total} Trades`;
+            document.getElementById('perf-total').textContent = total;
+            document.getElementById('perf-wr').textContent = `${wr.toFixed(1)}%`;
+            document.getElementById('perf-wr').className = `stat-value ${wr >= 60 ? 'pnl-positive' : wr >= 50 ? '' : 'pnl-negative'}`;
+
+            document.getElementById('perf-pnl').textContent = formatPnL(pnl);
+            document.getElementById('perf-pnl').className = 'stat-value ' + getPnLClass(pnl);
+
+            document.getElementById('perf-pf').textContent = pf.toFixed(2);
+            document.getElementById('perf-pf').className = `stat-value ${pf >= 1.5 ? 'pnl-positive' : pf >= 1.0 ? '' : 'pnl-negative'}`;
+
+            document.getElementById('perf-avg-win').textContent = formatPnL(summary.avg_win || 0);
+            document.getElementById('perf-avg-loss').textContent = formatPnL(summary.avg_loss || 0);
+            document.getElementById('perf-expectancy').textContent = formatPnL(summary.expectancy || 0);
+        }
+
+        function updateShadowTrading(data) {
+            if (!data || data.error) return;
+
+            const progress = data.progress || {};
+
+            const total = progress.total_trades || 0;
+            const target = progress.target_trades || 100;
+            const progressPct = progress.trade_progress_pct || 0;
+            const wr = progress.win_rate || 0;
+            const pnl = progress.simulated_pnl || 0;
+            const ready = data.ready_to_activate || false;
+
+            const shadowProgress = document.getElementById('shadow-progress');
+            shadowProgress.style.width = `${Math.min(100, progressPct)}%`;
+            document.getElementById('shadow-progress-text').textContent = `${total}/${target} trades`;
+
+            document.getElementById('shadow-wr').textContent = `${wr.toFixed(1)}%`;
+            document.getElementById('shadow-pnl').textContent = formatPnL(pnl);
+            document.getElementById('shadow-pnl').className = 'stat-value ' + getPnLClass(pnl);
+
+            const readyAlert = document.getElementById('shadow-ready-alert');
+            readyAlert.style.display = ready ? 'block' : 'none';
+        }
+
+        function updateLastUpdateTime() {
+            const now = new Date();
+            document.getElementById('last-update').textContent = now.toLocaleTimeString();
+        }
+
+        function formatPnL(value) {
+            return `€${value >= 0 ? '+' : ''}${value.toFixed(2)}`;
+        }
+
+        function getPnLClass(value) {
+            if (value > 0) return 'pnl-positive';
+            if (value < 0) return 'pnl-negative';
+            return 'pnl-neutral';
+        }
+
+        // Load Charts
+        function loadCharts() {
+            const charts = ['winrate', 'pnl', 'symbols'];
+
+            charts.forEach(chart => {
+                fetch(`/api/charts/${chart}?days=7`)
+                    .then(response => response.json())
+                    .then(data => {
+                        const imgId = `chart-${chart}`;
+                        const loadingId = `loading-${chart}`;
+
+                        document.getElementById(imgId).src = data.image;
+                        document.getElementById(imgId).style.display = 'block';
+                        document.getElementById(loadingId).style.display = 'none';
+                    })
+                    .catch(error => {
+                        console.error(`Error loading ${chart} chart:`, error);
+                    });
+            });
+        }
+
+        // Initial load
+        loadCharts();
+
+        // Reload charts every 5 minutes
+        setInterval(loadCharts, 5 * 60 * 1000);
+    </script>
+</body>
+</html>

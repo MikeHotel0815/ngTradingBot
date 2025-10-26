@@ -136,6 +136,36 @@ services:
       - tradingbot_network
     restart: unless-stopped
 
+  # ============================================================================
+  # DASHBOARD WEB - Ultimate Dashboard Web Interface
+  # Provides browser-based real-time monitoring with charts
+  # ============================================================================
+  dashboard:
+    build: .
+    container_name: ngtradingbot_dashboard
+    env_file:
+      - .env.telegram
+    command: python monitoring/dashboard_web.py --port 9906
+    ports:
+      - "9906:9906"
+    volumes:
+      - ./data:/app/data  # For charts
+      - ./templates:/app/templates
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql://trader:${DB_PASSWORD:-tradingbot_secret_2025}@postgres:5432/ngtradingbot
+      - REDIS_URL=redis://redis:6379/0
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - tradingbot_network
+    restart: unless-stopped
+
 volumes:
   pgdata:
   redisdata:

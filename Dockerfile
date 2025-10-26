@@ -21,6 +21,7 @@ COPY workers workers/
 COPY scripts scripts/
 COPY ml ml/
 COPY migrations migrations/
+COPY monitoring monitoring/
 
 # Make scripts executable
 RUN chmod +x scripts/*.sh || true
@@ -29,7 +30,7 @@ RUN chmod +x scripts/*.sh || true
 RUN mkdir -p /app/backups
 
 # Expose ports
-EXPOSE 9900 9901 9902 9903 9905
+EXPOSE 9900 9901 9902 9903 9905 9906
 
 # Run the server
 CMD ["python", "app.py"]
