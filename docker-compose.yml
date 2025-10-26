@@ -150,7 +150,6 @@ services:
       - "9906:9906"
     volumes:
       - ./data:/app/data  # For charts
-      - ./templates:/app/templates
     environment:
       - PYTHONUNBUFFERED=1
       - DATABASE_URL=postgresql://trader:${DB_PASSWORD:-tradingbot_secret_2025}@postgres:5432/ngtradingbot
