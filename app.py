@@ -5758,6 +5758,156 @@ except Exception as e:
     logger.error(f"Failed to register protection API: {e}")
 
 
+# ============================================================================
+# ML/AI MACHINE LEARNING API ENDPOINTS
+# ============================================================================
+
+@app_webui.route('/api/ml/models')
+def get_ml_models():
+    """Get all trained ML models"""
+    try:
+        from models import MLModel
+        db = ScopedSession()
+        try:
+            models = db.query(MLModel).order_by(MLModel.created_at.desc()).all()
+            return jsonify({
+                'models': [{
+                    'id': m.id,
+                    'model_type': m.model_type,
+                    'symbol': m.symbol,
+                    'version': m.version,
+                    'is_active': m.is_active,
+                    'accuracy': float(m.accuracy) if m.accuracy else None,
+                    'precision': float(m.precision) if m.precision else None,
+                    'recall': float(m.recall) if m.recall else None,
+                    'f1_score': float(m.f1_score) if m.f1_score else None,
+                    'training_samples': m.training_samples,
+                    'validation_samples': m.validation_samples,
+                    'created_at': m.created_at.isoformat() if m.created_at else None,
+                    'last_used': m.last_used.isoformat() if m.last_used else None,
+                    'usage_count': m.usage_count
+                } for m in models]
+            })
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Error getting ML models: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app_webui.route('/api/ml/training_runs')
+def get_ml_training_runs():
+    """Get recent ML training runs"""
+    try:
+        from models import MLTrainingRun
+        db = ScopedSession()
+        try:
+            runs = db.query(MLTrainingRun).order_by(MLTrainingRun.started_at.desc()).limit(20).all()
+            return jsonify({
+                'runs': [{
+                    'id': r.id,
+                    'model_type': r.model_type,
+                    'symbol': r.symbol,
+                    'status': r.status,
+                    'started_at': r.started_at.isoformat() if r.started_at else None,
+                    'completed_at': r.completed_at.isoformat() if r.completed_at else None,
+                    'duration_seconds': r.duration_seconds,
+                    'training_samples': r.training_samples,
+                    'validation_samples': r.validation_samples,
+                    'validation_accuracy': float(r.validation_accuracy) if r.validation_accuracy else None,
+                    'error_message': r.error_message
+                } for r in runs]
+            })
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Error getting ML training runs: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app_webui.route('/api/ml/train', methods=['POST'])
+def trigger_ml_training():
+    """Trigger ML model training"""
+    try:
+        data = request.get_json()
+        symbol = data.get('symbol')  # None for global model
+        days_back = data.get('days_back', 90)
+        force = data.get('force', False)
+
+        from ml.ml_training_pipeline import MLTrainingPipeline
+        from config import DEFAULT_ACCOUNT_ID
+
+        db = ScopedSession()
+        try:
+            pipeline = MLTrainingPipeline(db, account_id=DEFAULT_ACCOUNT_ID)
+
+            # Train in background (async)
+            import threading
+            def train_async():
+                try:
+                    result = pipeline.train_model(symbol=symbol, days_back=days_back, force=force)
+                    logger.info(f"ML training completed for {symbol or 'GLOBAL'}: {result}")
+                except Exception as e:
+                    logger.error(f"ML training failed for {symbol or 'GLOBAL'}: {e}")
+
+            thread = threading.Thread(target=train_async, daemon=True)
+            thread.start()
+
+            return jsonify({
+                'status': 'training_started',
+                'symbol': symbol or 'GLOBAL',
+                'days_back': days_back
+            })
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Error triggering ML training: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app_webui.route('/api/ml/stats')
+def get_ml_stats():
+    """Get ML system statistics"""
+    try:
+        from models import MLModel, MLPrediction, MLTrainingRun
+        db = ScopedSession()
+        try:
+            # Count models
+            total_models = db.query(MLModel).count()
+            active_models = db.query(MLModel).filter(MLModel.is_active == True).count()
+
+            # Count predictions
+            total_predictions = db.query(MLPrediction).count()
+
+            # Get recent training runs
+            recent_runs = db.query(MLTrainingRun)\
+                .filter(MLTrainingRun.status == 'completed')\
+                .order_by(MLTrainingRun.completed_at.desc())\
+                .limit(5).all()
+
+            # Calculate average accuracy from active models
+            active_model_objs = db.query(MLModel).filter(MLModel.is_active == True).all()
+            avg_accuracy = sum(float(m.accuracy) for m in active_model_objs if m.accuracy) / len(active_model_objs) if active_model_objs else 0
+
+            return jsonify({
+                'total_models': total_models,
+                'active_models': active_models,
+                'total_predictions': total_predictions,
+                'avg_accuracy': round(avg_accuracy, 4),
+                'recent_training': [{
+                    'symbol': r.symbol or 'GLOBAL',
+                    'completed_at': r.completed_at.isoformat() if r.completed_at else None,
+                    'duration_seconds': r.duration_seconds,
+                    'samples': r.training_samples
+                } for r in recent_runs]
+            })
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Error getting ML stats: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 if __name__ == '__main__':
     logger.info("=" * 60)
     logger.info("ngTradingBot Server Starting...")
