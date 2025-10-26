@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 import json
 
-from models import MLModel, MLTrainingRun, SymbolConfig
+from models import MLModel, MLTrainingRun, SymbolTradingConfig
 from ml.ml_confidence_model import XGBoostConfidenceModel
 from ml.ml_model_manager import MLModelManager
 from ml.ml_features import FeatureEngineer
@@ -269,9 +269,9 @@ class MLTrainingPipeline:
         }
 
         # Get active symbols
-        active_symbols = self.db.query(SymbolConfig).filter(
-            SymbolConfig.account_id == self.account_id,
-            SymbolConfig.status == 'active'
+        active_symbols = self.db.query(SymbolTradingConfig).filter(
+            SymbolTradingConfig.account_id == self.account_id,
+            SymbolTradingConfig.status == 'active'
         ).all()
 
         symbols_to_train = [s.symbol for s in active_symbols]
@@ -398,7 +398,7 @@ class MLTrainingPipeline:
 # CLI entry point
 if __name__ == '__main__':
     import argparse
-    from database import get_session
+    from database import ScopedSession
 
     parser = argparse.ArgumentParser(description='ML Training Pipeline')
     parser.add_argument('--symbol', help='Symbol to train (default: global model)')
@@ -417,7 +417,7 @@ if __name__ == '__main__':
     )
 
     # Get database session
-    db = next(get_session())
+    db = ScopedSession()
     pipeline = MLTrainingPipeline(db)
 
     if args.cleanup:

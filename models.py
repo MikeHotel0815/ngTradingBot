@@ -266,7 +266,7 @@ class TradeHistoryEvent(Base):
     spread_at_change = Column(Numeric(10, 5))
     
     # Additional metadata (renamed from 'metadata' - reserved word)
-    event_metadata = Column(JSONB)
+    event_model_metadata = Column(JSONB)
 
     def __repr__(self):
         return f"<TradeHistoryEvent(ticket={self.ticket}, type={self.event_type}, {self.old_value}->{self.new_value})>"
@@ -1335,3 +1335,101 @@ class SymbolSpreadConfig(Base):
 
     def __repr__(self):
         return f"<SymbolSpreadConfig(symbol={self.symbol}, typical={self.typical_spread}, max_mult={self.max_spread_multiplier})>"
+
+
+# ============================================================================
+# ML Models (Phase 1 - XGBoost)
+# ============================================================================
+
+class MLModel(Base):
+    """ML Model Registry"""
+    __tablename__ = 'ml_models'
+
+    id = Column(Integer, primary_key=True)
+    model_type = Column(String(50), nullable=False)  # 'xgboost', 'lstm', 'rl'
+    symbol = Column(String(20))  # NULL = global model
+    version = Column(String(20))
+    file_path = Column(String(255))
+    validation_accuracy = Column(Numeric(5, 4))
+    validation_precision = Column(Numeric(5, 4))
+    validation_recall = Column(Numeric(5, 4))
+    validation_f1 = Column(Numeric(5, 4))
+    validation_auc = Column(Numeric(5, 4))
+    hyperparameters = Column(JSONB)
+    feature_importance = Column(JSONB)
+    is_active = Column(Boolean, default=True)
+    status = Column(String(20), default='active')  # 'active', 'archived', 'needs_retraining'
+    created_at = Column(DateTime, default=datetime.utcnow)
+    notes = Column(Text)
+
+
+class MLPrediction(Base):
+    """ML Prediction Logging"""
+    __tablename__ = 'ml_predictions'
+
+    id = Column(Integer, primary_key=True)
+    model_id = Column(Integer, ForeignKey('ml_models.id'))
+    symbol = Column(String(20), nullable=False, index=True)
+    prediction_time = Column(DateTime, default=datetime.utcnow, index=True)
+    ml_confidence = Column(Numeric(5, 4))
+    rules_confidence = Column(Numeric(5, 4))
+    final_confidence = Column(Numeric(5, 4))
+    decision = Column(String(20))  # 'trade', 'no_trade'
+    ab_test_group = Column(String(20))  # 'ml_only', 'rules_only', 'hybrid'
+    features_used = Column(JSONB)
+    actual_outcome = Column(String(20))  # 'win', 'loss', 'no_trade' (filled later)
+    actual_profit = Column(Numeric(15, 2))  # Filled when trade closes
+    outcome_time = Column(DateTime)
+    trade_id = Column(Integer, ForeignKey('trades.id'))
+
+
+class MLTrainingRun(Base):
+    """ML Training Run Tracking"""
+    __tablename__ = 'ml_training_runs'
+
+    id = Column(Integer, primary_key=True)
+    model_type = Column(String(50), nullable=False)
+    symbol = Column(String(20))  # NULL = global model
+    started_at = Column(DateTime, default=datetime.utcnow, index=True)
+    completed_at = Column(DateTime)
+    duration_seconds = Column(Integer)
+    status = Column(String(20), default='running')  # 'running', 'completed', 'failed'
+    model_id = Column(Integer, ForeignKey('ml_models.id'))
+    training_samples = Column(Integer)
+    validation_samples = Column(Integer)
+    training_params = Column(JSONB)
+    validation_accuracy = Column(Numeric(5, 4))
+    validation_loss = Column(Numeric(10, 6))
+    model_metadata = Column(JSONB)
+    error_message = Column(Text)
+
+
+class MLFeatureCache(Base):
+    """ML Feature Cache for Performance"""
+    __tablename__ = 'ml_feature_cache'
+
+    id = Column(Integer, primary_key=True)
+    symbol = Column(String(20), nullable=False, index=True)
+    timeframe = Column(String(10), nullable=False, index=True)
+    timestamp = Column(DateTime, nullable=False, index=True)
+    features = Column(JSONB, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class MLABTest(Base):
+    """ML A/B Testing Framework"""
+    __tablename__ = 'ml_ab_testing'
+
+    id = Column(Integer, primary_key=True)
+    test_name = Column(String(100), nullable=False)
+    symbol = Column(String(20))
+    group_name = Column(String(50), nullable=False)  # 'ml_only', 'rules_only', 'hybrid'
+    model_id = Column(Integer, ForeignKey('ml_models.id'))
+    start_date = Column(DateTime, default=datetime.utcnow)
+    end_date = Column(DateTime)
+    total_predictions = Column(Integer, default=0)
+    correct_predictions = Column(Integer, default=0)
+    total_profit = Column(Numeric(15, 2), default=0.0)
+    win_rate = Column(Numeric(5, 4))
+    avg_profit_per_trade = Column(Numeric(15, 2))
+    model_metadata = Column(JSONB)

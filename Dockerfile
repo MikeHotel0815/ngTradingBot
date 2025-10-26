@@ -19,6 +19,8 @@ COPY *.py .
 COPY templates templates/
 COPY workers workers/
 COPY scripts scripts/
+COPY ml ml/
+COPY migrations migrations/
 
 # Make scripts executable
 RUN chmod +x scripts/*.sh || true
