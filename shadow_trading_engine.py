@@ -29,7 +29,7 @@ class ShadowTradingEngine:
 
     def process_signal_for_disabled_symbol(self, signal: TradingSignal) -> ShadowTrade:
         """
-        Create a shadow trade when a signal is generated for a disabled symbol.
+        Create a shadow trade when a signal is generated for a disabled/shadow_trade symbol.
 
         Args:
             signal: TradingSignal that would have been executed if symbol was enabled
@@ -38,16 +38,30 @@ class ShadowTradingEngine:
             ShadowTrade record
         """
         try:
-            # Get the latest performance tracking for this symbol
+            # Get the latest performance tracking for this symbol (disabled OR shadow_trade status)
             perf = self.db.query(SymbolPerformanceTracking).filter(
                 SymbolPerformanceTracking.account_id == signal.account_id,
-                SymbolPerformanceTracking.symbol == signal.symbol,
-                SymbolPerformanceTracking.status == 'disabled'
+                SymbolPerformanceTracking.symbol == signal.symbol
             ).order_by(SymbolPerformanceTracking.evaluation_date.desc()).first()
 
+            # Create performance tracking if it doesn't exist (for new shadow_trade symbols)
             if not perf:
-                logger.warning(f"No disabled performance tracking found for {signal.symbol}")
-                return None
+                logger.info(f"Creating new SymbolPerformanceTracking for shadow_trade symbol {signal.symbol}")
+                perf = SymbolPerformanceTracking(
+                    account_id=signal.account_id,
+                    symbol=signal.symbol,
+                    evaluation_date=datetime.utcnow(),
+                    status='shadow_trade',
+                    total_trades=0,
+                    winning_trades=0,
+                    losing_trades=0,
+                    win_rate=0.0,
+                    total_profit=0.0,
+                    max_drawdown=0.0,
+                    recovery_plan='Monitoring via shadow trading'
+                )
+                self.db.add(perf)
+                self.db.flush()  # Get perf.id without committing
 
             # Get account for position sizing
             account = self.db.query(Account).get(signal.account_id)

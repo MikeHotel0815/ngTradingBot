@@ -20,7 +20,7 @@ from typing import Dict, List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
 from database import ScopedSession
-from models import TradingSignal, Trade, Account, Command
+from models import TradingSignal, Trade, Account, Command, SymbolTradingConfig
 from redis_client import get_redis
 from timezone_manager import tz, log_with_timezone
 
@@ -1389,6 +1389,45 @@ class AutoTrader:
                 except Exception as lock_error:
                     logger.warning(f"Redis lock error for {signal.symbol} {signal.timeframe}: {lock_error}")
                     # Continue without lock (fail-open for availability)
+
+                # ✅ NEW: Check SymbolTradingConfig status FIRST (before execution checks)
+                # This handles shadow_trade, paused, disabled, and reduced_risk statuses
+                symbol_config = db.query(SymbolTradingConfig).filter(
+                    SymbolTradingConfig.account_id == account_id,
+                    SymbolTradingConfig.symbol == signal.symbol
+                ).first()
+
+                if symbol_config:
+                    if symbol_config.status == 'shadow_trade':
+                        # Shadow trade mode - create shadow trade instead of real trade
+                        logger.info(f"🌑 Symbol {signal.symbol} in SHADOW_TRADE mode - creating shadow trade")
+                        from shadow_trading_engine import ShadowTradingEngine
+                        shadow_engine = ShadowTradingEngine()
+                        shadow_trade = shadow_engine.process_signal_for_disabled_symbol(signal)
+                        if shadow_trade:
+                            logger.info(f"🌑 Shadow trade #{shadow_trade.id} created: {signal.symbol} {signal.signal_type} @ {signal.entry_price} (conf={signal.confidence}%)")
+
+                        # Release lock
+                        if lock_acquired:
+                            try:
+                                self.redis.client.delete(lock_key)
+                                logger.debug(f"🔓 Released lock for {signal.symbol} {signal.timeframe} (shadow trade created)")
+                            except Exception as e:
+                                logger.error(f"Failed to release lock: {e}")
+                        continue
+
+                    elif symbol_config.status in ['paused', 'disabled']:
+                        # Symbol is paused/disabled - skip execution
+                        logger.info(f"⏭️  Skipping signal #{signal.id} ({signal.symbol}): Symbol status = {symbol_config.status}")
+
+                        # Release lock
+                        if lock_acquired:
+                            try:
+                                self.redis.client.delete(lock_key)
+                                logger.debug(f"🔓 Released lock for {signal.symbol} {signal.timeframe} (symbol {symbol_config.status})")
+                            except Exception as e:
+                                logger.error(f"Failed to release lock: {e}")
+                        continue
 
                 # Check if should execute
                 should_exec = self.should_execute_signal(signal, db, account_id)
