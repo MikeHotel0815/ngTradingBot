@@ -1517,6 +1517,49 @@ void ExecuteOpenTrade(string commandId, string cmdObj)
                }
             }
 
+            // 🚨 CRITICAL SAFETY: If SL/TP could not be set, CLOSE THE POSITION IMMEDIATELY!
+            // Trading without Stop Loss is CATASTROPHICALLY DANGEROUS (XAGUSD lost -€78.92!)
+            if(!tpslVerified || actualSL == 0 || actualTP == 0)
+            {
+               Print("🚨 CRITICAL: Cannot trade without SL/TP! Closing position immediately to prevent catastrophic loss...");
+               SendLog("ERROR", "Position closed - no SL/TP", StringFormat("Ticket %d opened without SL/TP, closing immediately", result.order));
+
+               // Close the position immediately
+               MqlTradeRequest closeReq;
+               MqlTradeResult closeRes;
+               ZeroMemory(closeReq);
+               ZeroMemory(closeRes);
+
+               closeReq.action = TRADE_ACTION_DEAL;
+               closeReq.position = result.order;
+               closeReq.symbol = symbol;
+               closeReq.volume = volume;
+               closeReq.type = (orderTypeStr == "BUY") ? ORDER_TYPE_SELL : ORDER_TYPE_BUY;  // Opposite to close
+               closeReq.price = (orderTypeStr == "BUY") ? SymbolInfoDouble(symbol, SYMBOL_BID) : SymbolInfoDouble(symbol, SYMBOL_ASK);
+               closeReq.deviation = 10;
+               closeReq.magic = MagicNumber;
+               closeReq.comment = "Emergency close - no SL/TP";
+
+               if(OrderSend(closeReq, closeRes))
+               {
+                  Print("Position closed successfully. No loss incurred.");
+               }
+               else
+               {
+                  Print("ERROR: Could not close position! Manual intervention required!");
+               }
+
+               // Send FAILED response to prevent system from tracking this as successful trade
+               string errorData = StringFormat(
+                  "{\"error\":\"Broker does not support SL/TP for %s\",\"error_code\":\"NO_SLTP_SUPPORT\",\"ticket\":%d,\"status\":\"CLOSED\"}",
+                  symbol,
+                  result.order
+               );
+               SendCommandResponse(commandId, "failed", errorData);
+               orderSuccess = true;  // Stop trying other filling modes
+               break;
+            }
+
             // Send response with ACTUAL TP/SL values (not requested ones!)
             string responseData = StringFormat(
                "{\"ticket\":%d,\"price\":%.5f,\"volume\":%.2f,\"sl\":%.5f,\"tp\":%.5f,\"tpsl_verified\":%s}",

@@ -937,11 +937,12 @@ class AutoTrader:
             logger.error(f"Error in TP/SL validation: {e}", exc_info=True)
             return False
 
-    def create_trade_command(self, db: Session, signal: TradingSignal, volume: float) -> Optional[Command]:
+    def create_trade_command(self, db: Session, signal: TradingSignal, volume: float, account_id: int) -> Optional[Command]:
         """
         Create trade command from signal with pre-execution spread validation
 
         ✅ ENHANCED: Added spread check before command creation to prevent execution at bad prices
+        ✅ FIXED: Added account_id parameter to prevent NameError
         """
         try:
             # ✅ FIX #3: Pre-execution spread check
@@ -950,7 +951,7 @@ class AutoTrader:
                 logger.warning(
                     f"⚠️  Pre-execution spread check FAILED for {signal.symbol}: {spread_check['reason']}"
                 )
-                
+
                 # Log spread rejection to AI Decision Log
                 from ai_decision_log import log_spread_rejection
                 log_spread_rejection(
@@ -1101,6 +1102,63 @@ class AutoTrader:
                 else:
                     logger.info(f"✅ {signal.symbol}: SuperTrend SL R/R already acceptable: {current_rr:.2f}")
 
+            # Convert all numeric values to float to prevent Decimal JSON serialization errors
+            adjusted_sl = float(adjusted_sl) if adjusted_sl else 0.0
+            tp_price = float(tp_price) if tp_price else 0.0
+            volume = float(volume)
+            entry_price = float(signal.entry_price) if signal.entry_price else None
+
+            # ✅ CRITICAL: SL ENFORCEMENT - Validate SL FIRST (before any other checks)
+            # This ensures NO TRADE can proceed without valid Stop Loss
+            from sl_enforcement import get_sl_enforcement
+            sl_enforcer = get_sl_enforcement()
+
+            sl_validation = sl_enforcer.validate_trade_sl(
+                db=db,
+                symbol=signal.symbol,
+                signal_type=signal.signal_type,
+                entry_price=entry_price,
+                sl_price=adjusted_sl,
+                volume=volume
+            )
+
+            if not sl_validation['valid']:
+                logger.error(
+                    f"🚨 TRADE REJECTED BY SL ENFORCEMENT: {signal.symbol} {signal.signal_type} | "
+                    f"{sl_validation['reason']} | "
+                    f"Potential Loss: {sl_validation.get('max_loss_eur', 0):.2f} EUR"
+                )
+
+                # Log to AI Decision Log
+                try:
+                    from ai_decision_log import log_auto_trade_decision
+                    log_auto_trade_decision(
+                        account_id=account_id,
+                        symbol=signal.symbol,
+                        timeframe=signal.timeframe,
+                        signal_id=signal.id,
+                        decision='REJECTED',
+                        reason=f"SL Enforcement: {sl_validation['reason']}",
+                        confidence=float(signal.confidence) if signal.confidence else 0,
+                        details={
+                            'entry_price': entry_price,
+                            'sl_price': adjusted_sl,
+                            'volume': volume,
+                            'max_loss_eur': sl_validation.get('max_loss_eur'),
+                            'suggested_sl': sl_validation.get('suggested_sl')
+                        }
+                    )
+                except Exception as log_error:
+                    logger.warning(f"Could not log rejection to AI Decision Log: {log_error}")
+
+                return None  # ABORT trade execution
+
+            logger.info(
+                f"✅ SL ENFORCEMENT PASSED: {signal.symbol} | "
+                f"Max Loss: {sl_validation.get('max_loss_eur', 0):.2f} EUR | "
+                f"SL: {adjusted_sl:.5f}"
+            )
+
             # ✅ CRITICAL VALIDATION: Ensure TP/SL are valid before sending to MT5
             # Create a temporary modified signal for validation if TP was adjusted
             if adjusted_tp_price:
@@ -1117,12 +1175,6 @@ class AutoTrader:
                 if not self._validate_tp_sl(signal, adjusted_sl):
                     logger.error(f"❌ TP/SL validation failed for {signal.symbol}: Invalid TP/SL values")
                     return None
-
-            # Convert all numeric values to float to prevent Decimal JSON serialization errors
-            adjusted_sl = float(adjusted_sl)
-            tp_price = float(tp_price) if tp_price else None
-            volume = float(volume)
-            entry_price = float(signal.entry_price) if signal.entry_price else None
 
             # 🛑 CRITICAL FAILSAFE: Double-check for duplicate positions AND pending commands before creating command
             duplicate_trades = db.query(Trade).filter(
@@ -1152,53 +1204,6 @@ class AutoTrader:
                 return  # ABORT command creation
 
             logger.info(f"✓ Duplicate check passed: No open {signal.symbol} {signal.timeframe} positions or pending commands")
-
-            # ✅ CRITICAL: SL ENFORCEMENT - Validate SL before trade execution
-            from sl_enforcement import get_sl_enforcement
-            sl_enforcer = get_sl_enforcement()
-
-            sl_validation = sl_enforcer.validate_trade_sl(
-                db=db,
-                symbol=signal.symbol,
-                signal_type=signal.signal_type,
-                entry_price=float(signal.entry_price),
-                sl_price=float(adjusted_sl) if adjusted_sl else 0,
-                volume=float(volume)
-            )
-
-            if not sl_validation['valid']:
-                logger.error(
-                    f"🚨 TRADE REJECTED: {signal.symbol} {signal.signal_type} | "
-                    f"{sl_validation['reason']} | "
-                    f"Potential Loss: {sl_validation['max_loss_eur']:.2f} EUR"
-                )
-
-                # Log to AI Decision Log
-                from ai_decision_log import log_auto_trade_decision
-                log_auto_trade_decision(
-                    account_id=account_id,
-                    symbol=signal.symbol,
-                    timeframe=signal.timeframe,
-                    signal_id=signal.id,
-                    decision='REJECTED',
-                    reason=f"SL Enforcement: {sl_validation['reason']}",
-                    confidence=float(signal.confidence) if signal.confidence else 0,
-                    details={
-                        'entry_price': float(signal.entry_price),
-                        'sl_price': float(adjusted_sl) if adjusted_sl else 0,
-                        'volume': float(volume),
-                        'max_loss_eur': sl_validation['max_loss_eur'],
-                        'suggested_sl': sl_validation.get('suggested_sl')
-                    }
-                )
-
-                return  # ABORT trade execution
-
-            logger.info(
-                f"✅ SL Validation passed: {signal.symbol} | "
-                f"Max Loss: {sl_validation['max_loss_eur']:.2f} EUR | "
-                f"SL: {adjusted_sl:.5f}"
-            )
 
             # Store signal_id and timeframe in payload for trade linking
             payload_data = {
@@ -1532,7 +1537,7 @@ class AutoTrader:
                     volume = base_volume
 
                 # Create trade command
-                command = self.create_trade_command(db, signal, volume)
+                command = self.create_trade_command(db, signal, volume, account_id)
 
                 # 🔓 CRITICAL: Release lock IMMEDIATELY after trade command created
                 # This prevents holding the lock unnecessarily and allows other workers to proceed
