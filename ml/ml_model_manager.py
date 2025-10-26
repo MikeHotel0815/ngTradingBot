@@ -503,18 +503,18 @@ class MLModelManager:
             # Create new model record
             model = MLModel(
                 model_type=model_type,
+                model_name=f"{model_type}_{symbol or 'global'}",
                 symbol=symbol,
                 version=version,
                 file_path=file_path,
-                validation_accuracy=validation_metrics.get('accuracy', 0.0),
-                validation_precision=validation_metrics.get('precision', 0.0),
-                validation_recall=validation_metrics.get('recall', 0.0),
-                validation_f1=validation_metrics.get('f1_score', 0.0),
-                validation_auc=validation_metrics.get('auc_roc', 0.0),
+                accuracy=validation_metrics.get('accuracy', 0.0),
+                precision=validation_metrics.get('precision', 0.0),
+                recall=validation_metrics.get('recall', 0.0),
+                f1_score=validation_metrics.get('f1_score', 0.0),
+                auc_roc=validation_metrics.get('auc_roc', 0.0),
                 hyperparameters=hyperparameters,
                 feature_importance=feature_importance,
                 is_active=is_active,
-                status='active' if is_active else 'archived',
                 created_at=datetime.utcnow()
             )
 
@@ -624,7 +624,7 @@ if __name__ == '__main__':
         for model in models:
             active = '✅' if model.is_active else '  '
             symbol = model.symbol or 'GLOBAL'
-            print(f"{model.id:<5} {model.model_type:<10} {symbol:<10} {model.version:<15} {active:<8} {model.validation_accuracy:.3f}")
+            print(f"{model.id:<5} {model.model_type:<10} {symbol:<10} {model.version:<15} {active:<8} {model.accuracy:.3f}")
 
     elif args.performance:
         perf = manager.get_model_performance(args.performance, days_back=7)

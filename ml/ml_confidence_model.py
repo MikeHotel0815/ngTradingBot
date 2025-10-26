@@ -99,6 +99,7 @@ class XGBoostConfidenceModel:
         self.scaler = None
         self.feature_names = []
         self.feature_importance = {}
+        self.label_encoders = {}  # Store encoders for categorical features
 
         # Training metadata
         self.training_date = None
@@ -184,6 +185,17 @@ class XGBoostConfidenceModel:
 
         # Handle missing values (fill with 0)
         X = X.fillna(0)
+
+        # Encode categorical features (convert strings to numeric)
+        from sklearn.preprocessing import LabelEncoder
+        self.label_encoders = {}  # Reset encoders
+        for col in X.columns:
+            if X[col].dtype == 'object':  # String column
+                # Use label encoding for categorical features
+                le = LabelEncoder()
+                X[col] = le.fit_transform(X[col].astype(str))
+                self.label_encoders[col] = le  # Store encoder for prediction
+                logger.info(f"Encoded categorical feature: {col} ({len(le.classes_)} categories)")
 
         # Store feature names
         self.feature_names = list(X.columns)
@@ -357,6 +369,15 @@ class XGBoostConfidenceModel:
         # Select only features used in training (in same order)
         X = pd.DataFrame([feature_dict])[self.feature_names]
 
+        # Apply label encoding for categorical features
+        for col, encoder in self.label_encoders.items():
+            if col in X.columns:
+                try:
+                    X[col] = encoder.transform([str(X[col].iloc[0])])
+                except ValueError:
+                    # Unknown category, use most common (0)
+                    X[col] = 0
+
         # Scale
         X_scaled = self.scaler.transform(X)
 
@@ -386,6 +407,7 @@ class XGBoostConfidenceModel:
             'scaler': self.scaler,
             'feature_names': self.feature_names,
             'feature_importance': self.feature_importance,
+            'label_encoders': self.label_encoders,  # Save encoders for categorical features
             'validation_metrics': self.validation_metrics,
             'training_date': self.training_date,
             'symbol': symbol,
@@ -422,10 +444,12 @@ class XGBoostConfidenceModel:
         self.scaler = model_data['scaler']
         self.feature_names = model_data['feature_names']
         self.feature_importance = model_data.get('feature_importance', {})
+        self.label_encoders = model_data.get('label_encoders', {})  # Load encoders
         self.validation_metrics = model_data.get('validation_metrics', {})
         self.training_date = model_data.get('training_date')
 
         logger.info(f"✅ Model loaded: {len(self.feature_names)} features")
+        logger.info(f"   Categorical features: {len(self.label_encoders)}")
         logger.info(f"   Accuracy: {self.validation_metrics.get('accuracy', 0):.3f}")
 
     def get_feature_importance(self, top_n: int = 20) -> List[Tuple[str, float]]:
