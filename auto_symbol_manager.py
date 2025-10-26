@@ -169,22 +169,22 @@ class AutoSymbolManager:
 
         # Take action
         if should_pause and config.status == 'active':
-            # PAUSE symbol
+            # SHADOW TRADE mode (safer than paused - monitors recovery)
             old_status = config.status
-            config.status = 'paused'
+            config.status = 'shadow_trade'
             config.pause_reason = '; '.join(pause_reason)
             config.paused_at = datetime.utcnow()
 
             self.db.commit()
 
-            action_result['action'] = 'PAUSED'
+            action_result['action'] = 'SHADOW_TRADE'
             action_result['reason'] = config.pause_reason
 
             # Log to AI Decision Log
             self.ai_logger.log_decision(
                 account_id=account_id,
                 decision_type='SYMBOL_AUTO_PAUSE',
-                decision='PAUSED',
+                decision='SHADOW_TRADE',
                 symbol=symbol,
                 direction=direction,
                 primary_reason=pause_reason[0] if pause_reason else 'Performance criteria not met',
@@ -194,22 +194,23 @@ class AutoSymbolManager:
                     'daily_loss': f"€{daily_loss:.2f}",
                     'consecutive_losses': consecutive_losses,
                     'trades_evaluated': len(recent_trades),
-                    'all_reasons': pause_reason
+                    'all_reasons': pause_reason,
+                    'mode': 'shadow_trade (monitors recovery without real trades)'
                 },
                 impact_level='HIGH',
                 confidence_score=95.0,
                 risk_score=85.0
             )
 
-            logger.warning(f"  🚨 PAUSED {symbol} {direction or 'BOTH'}: {config.pause_reason}")
+            logger.warning(f"  🌑 SHADOW_TRADE MODE {symbol} {direction or 'BOTH'}: {config.pause_reason}")
 
-        elif not should_pause and config.status == 'paused':
-            # Check if cooldown period has passed
+        elif not should_pause and config.status in ['paused', 'shadow_trade']:
+            # Check if cooldown period has passed (for both paused and shadow_trade)
             if config.paused_at:
                 hours_paused = (datetime.utcnow() - config.paused_at).total_seconds() / 3600
 
                 if hours_paused >= self.DEFAULT_COOLDOWN_HOURS:
-                    # Performance improved, auto-resume
+                    # Performance improved, auto-resume from shadow_trade/paused
                     old_status = config.status
                     config.status = 'active'
                     config.pause_reason = None
@@ -218,7 +219,7 @@ class AutoSymbolManager:
                     self.db.commit()
 
                     action_result['action'] = 'RESUMED'
-                    action_result['reason'] = f"Performance improved after {hours_paused:.1f}h cooldown"
+                    action_result['reason'] = f"Performance improved after {hours_paused:.1f}h in {old_status} mode"
 
                     # Log to AI Decision Log
                     self.ai_logger.log_decision(
@@ -227,12 +228,13 @@ class AutoSymbolManager:
                         decision='RESUMED',
                         symbol=symbol,
                         direction=direction,
-                        primary_reason=f"Win rate {win_rate:.1%} meets criteria",
+                        primary_reason=f"Win rate {win_rate:.1%} meets criteria (from {old_status})",
                         detailed_reasoning={
                             'win_rate': f"{win_rate:.2%}",
                             'total_profit': f"€{total_profit:.2f}",
-                            'hours_paused': f"{hours_paused:.1f}h",
-                            'trades_since_pause': len(recent_trades)
+                            'hours_in_shadow': f"{hours_paused:.1f}h",
+                            'trades_since_pause': len(recent_trades),
+                            'previous_status': old_status
                         },
                         impact_level='MEDIUM',
                         confidence_score=80.0
@@ -241,7 +243,7 @@ class AutoSymbolManager:
                     logger.info(f"  ✅ RESUMED {symbol} {direction or 'BOTH'}: {action_result['reason']}")
                 else:
                     action_result['action'] = 'cooldown'
-                    action_result['reason'] = f"Still in cooldown ({hours_paused:.1f}h / {self.DEFAULT_COOLDOWN_HOURS}h)"
+                    action_result['reason'] = f"Still in {config.status} mode - cooldown ({hours_paused:.1f}h / {self.DEFAULT_COOLDOWN_HOURS}h)"
 
         return action_result
 
@@ -305,23 +307,24 @@ class AutoSymbolManager:
 
     def get_paused_symbols(self, account_id: int) -> List[Dict]:
         """
-        Get list of currently paused symbols with pause reasons
+        Get list of currently paused/shadow_trade symbols with pause reasons
 
         Args:
             account_id: Account ID
 
         Returns:
-            List of paused symbol info
+            List of paused/shadow_trade symbol info
         """
         paused_configs = self.db.query(SymbolTradingConfig).filter(
             SymbolTradingConfig.account_id == account_id,
-            SymbolTradingConfig.status == 'paused'
+            SymbolTradingConfig.status.in_(['paused', 'shadow_trade'])
         ).all()
 
         return [
             {
                 'symbol': config.symbol,
                 'direction': config.direction,
+                'status': config.status,
                 'pause_reason': config.pause_reason,
                 'paused_at': config.paused_at,
                 'hours_paused': (datetime.utcnow() - config.paused_at).total_seconds() / 3600 if config.paused_at else 0
