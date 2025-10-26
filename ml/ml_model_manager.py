@@ -597,7 +597,7 @@ def get_ml_enhanced_confidence(
 # CLI tool for model management
 if __name__ == '__main__':
     import argparse
-    from database import get_session
+    from database import ScopedSession
 
     parser = argparse.ArgumentParser(description='ML Model Manager CLI')
     parser.add_argument('--evaluate', action='store_true', help='Evaluate active models')
@@ -607,7 +607,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    db = next(get_session())
+    db = ScopedSession()
     manager = MLModelManager(db)
 
     if args.evaluate:

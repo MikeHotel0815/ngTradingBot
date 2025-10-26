@@ -5,9 +5,9 @@ SQLAlchemy ORM models for PostgreSQL
 
 from sqlalchemy import (
     Column, Integer, BigInteger, String, DateTime, Boolean,
-    Numeric, Text, ForeignKey, Index, func, text
+    Numeric, Text, ForeignKey, Index, func, text, Float
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, ARRAY
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -1342,45 +1342,75 @@ class SymbolSpreadConfig(Base):
 # ============================================================================
 
 class MLModel(Base):
-    """ML Model Registry"""
+    """ML Model Registry - Aligned with database schema"""
     __tablename__ = 'ml_models'
 
     id = Column(Integer, primary_key=True)
     model_type = Column(String(50), nullable=False)  # 'xgboost', 'lstm', 'rl'
+    model_name = Column(String(100), nullable=False)
     symbol = Column(String(20))  # NULL = global model
-    version = Column(String(20))
-    file_path = Column(String(255))
-    validation_accuracy = Column(Numeric(5, 4))
-    validation_precision = Column(Numeric(5, 4))
-    validation_recall = Column(Numeric(5, 4))
-    validation_f1 = Column(Numeric(5, 4))
-    validation_auc = Column(Numeric(5, 4))
+    timeframe = Column(String(10))
+    version = Column(String(20), nullable=False)
+    file_path = Column(Text, nullable=False)
+    training_date = Column(DateTime, default=datetime.utcnow)
+    training_duration_seconds = Column(Integer)
+    training_samples = Column(Integer)
+    accuracy = Column('validation_accuracy', Float)
+    precision = Column('validation_precision', Float)
+    recall = Column('validation_recall', Float)
+    f1_score = Column('validation_f1_score', Float)
+    auc_roc = Column('validation_auc_roc', Float)
+    backtest_win_rate = Column(Float)
+    backtest_profit_factor = Column(Float)
+    backtest_sharpe_ratio = Column(Float)
+    backtest_max_drawdown = Column(Float)
     hyperparameters = Column(JSONB)
+    feature_names = Column(ARRAY(String))
     feature_importance = Column(JSONB)
-    is_active = Column(Boolean, default=True)
-    status = Column(String(20), default='active')  # 'active', 'archived', 'needs_retraining'
-    created_at = Column(DateTime, default=datetime.utcnow)
+    is_active = Column(Boolean, default=False)
+    is_champion = Column(Boolean, default=False)
+    deployment_date = Column(DateTime)
+    retired_date = Column(DateTime)
+    created_by = Column(String(50), default='system')
     notes = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Computed properties
+    @property
+    def usage_count(self):
+        # This would need to be calculated from ml_predictions table
+        return 0
+
+    @property
+    def last_used(self):
+        return self.deployment_date
 
 
 class MLPrediction(Base):
-    """ML Prediction Logging"""
+    """ML Prediction Logging - Aligned with database schema"""
     __tablename__ = 'ml_predictions'
 
     id = Column(Integer, primary_key=True)
     model_id = Column(Integer, ForeignKey('ml_models.id'))
     symbol = Column(String(20), nullable=False, index=True)
+    timeframe = Column(String(10))
     prediction_time = Column(DateTime, default=datetime.utcnow, index=True)
-    ml_confidence = Column(Numeric(5, 4))
-    rules_confidence = Column(Numeric(5, 4))
-    final_confidence = Column(Numeric(5, 4))
-    decision = Column(String(20))  # 'trade', 'no_trade'
-    ab_test_group = Column(String(20))  # 'ml_only', 'rules_only', 'hybrid'
-    features_used = Column(JSONB)
-    actual_outcome = Column(String(20))  # 'win', 'loss', 'no_trade' (filled later)
-    actual_profit = Column(Numeric(15, 2))  # Filled when trade closes
-    outcome_time = Column(DateTime)
-    trade_id = Column(Integer, ForeignKey('trades.id'))
+    prediction_type = Column(String(50), nullable=False)  # 'win_probability', 'profit_target', etc.
+    predicted_value = Column(Float, nullable=False)
+    predicted_class = Column(String(20))  # 'WIN', 'LOSS', 'BUY', 'SELL'
+    prediction_probability = Column(JSONB)  # {class: probability}
+    actual_value = Column(Float)
+    actual_class = Column(String(20))
+    outcome_timestamp = Column(DateTime)
+    was_correct = Column(Boolean)
+    prediction_error = Column(Float)
+    features = Column(JSONB)
+    feature_count = Column(Integer)
+    execution_time_ms = Column(Float)
+    trade_id = Column(Integer)
+    signal_id = Column(Integer)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class MLTrainingRun(Base):

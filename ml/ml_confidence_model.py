@@ -450,9 +450,9 @@ class XGBoostConfidenceModel:
 # Convenience function for CLI
 def train_model_cli(symbol: str = None, days: int = 90):
     """CLI entry point for training"""
-    from database import get_session
+    from database import ScopedSession
 
-    db = next(get_session())
+    db = ScopedSession()
     model = XGBoostConfidenceModel(db)
 
     results = model.train(symbol=symbol, days_back=days)
