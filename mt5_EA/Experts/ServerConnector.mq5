@@ -12,7 +12,7 @@
 #property description "2s Heartbeat | 50ms Command Polling - REAL-TIME!"
 
 // MANUAL: Update this date when code is modified!
-#define CODE_LAST_MODIFIED "2025-10-23 - REAL_TIME_COMMANDS"  // ✅ Changed: Command polling reduced from 300ms to 50ms for real-time execution
+#define CODE_LAST_MODIFIED "2025-10-26 - SL_ENFORCEMENT_EA_FIX"  // 🚨 CRITICAL: Emergency close if SL/TP cannot be set (prevents XAGUSD -€78.92 scenario)
 
 // ⚡⚡⚡ MAXIMUM PERFORMANCE INPUT PARAMETERS ⚡⚡⚡
 input string ServerURL = "http://100.97.100.50:9900";  // Python server URL (Tailscale)
