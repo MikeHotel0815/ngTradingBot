@@ -182,13 +182,14 @@ def cleanup_old_data(session, tick_days=7, pattern_days=30):
     deleted_ticks = session.query(Tick).filter(Tick.timestamp < tick_cutoff).delete()
 
     # Delete old OHLC data - timeframe-specific retention
+    # EXTENDED for ML Training: Need 90-365 days for LSTM models
     ohlc_retention = {
-        'M1': 2,   # 2 days for M1
-        'M5': 2,   # 2 days for M5
-        'M15': 3,  # 3 days for M15
-        'H1': 7,   # 7 days for H1
-        'H4': 14,  # 14 days for H4
-        'D1': 30   # 30 days for D1
+        'M1': 7,    # 7 days for M1 (tick aggregation)
+        'M5': 90,   # 90 days for M5 → 25,920 candles (LSTM training)
+        'M15': 90,  # 90 days for M15 → 8,640 candles (LSTM training)
+        'H1': 180,  # 180 days for H1 → 4,320 candles (backtesting)
+        'H4': 365,  # 365 days for H4 → 2,190 candles (long-term analysis)
+        'D1': 730   # 730 days (2 years) for D1 → 730 candles (strategy validation)
     }
 
     deleted_ohlc = 0

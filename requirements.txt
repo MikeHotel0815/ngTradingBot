@@ -20,4 +20,8 @@ pytz
 APScheduler
 requests
 
+# Machine Learning (CPU-optimized)
+xgboost>=2.0.0  # CPU-optimized gradient boosting
+scikit-learn>=1.3.0  # Feature scaling, metrics, validation
+
 # Note: MetaTrader5 is Windows-only and not needed for the server

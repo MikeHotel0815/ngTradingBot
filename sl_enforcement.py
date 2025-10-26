@@ -25,15 +25,21 @@ class SLEnforcement:
     """Enforce Stop Loss requirements across all trading operations"""
 
     # Symbol-specific maximum loss per trade (in account currency)
+    # UPDATED 2025-10-26: Based on Baseline Performance Report analysis
+    # Previous losses: XAGUSD -€78.92, DE40 -€23.10, USDJPY -€2.40
     MAX_LOSS_PER_TRADE = {
-        'XAGUSD': 5.00,   # Silver: Max 5 EUR loss
-        'XAUUSD': 8.00,   # Gold: Max 8 EUR loss
-        'DE40.c': 5.00,   # DAX: Max 5 EUR loss
-        'US500.c': 3.00,  # S&P500: Max 3 EUR loss
-        'BTCUSD': 10.00,  # Bitcoin: Max 10 EUR loss
-        'ETHUSD': 8.00,   # Ethereum: Max 8 EUR loss
+        'XAGUSD': 3.00,   # Silver: Max 3 EUR loss (was losing -€78.92!)
+        'XAUUSD': 5.00,   # Gold: Max 5 EUR loss (controlled)
+        'DE40.c': 3.00,   # DAX: Max 3 EUR loss (was losing -€23.10!)
+        'US500.c': 2.00,  # S&P500: Max 2 EUR loss (high frequency)
+        'BTCUSD': 8.00,   # Bitcoin: Max 8 EUR loss (volatile but profitable)
+        'ETHUSD': 6.00,   # Ethereum: Max 6 EUR loss
+        'USDJPY': 2.00,   # USDJPY: Max 2 EUR loss (was problematic)
+        'EURUSD': 2.00,   # EURUSD: Max 2 EUR loss (good WR but small profits)
+        'GBPUSD': 2.00,   # GBPUSD: Max 2 EUR loss
+        'AUDUSD': 2.00,   # AUDUSD: Max 2 EUR loss
         'FOREX': 2.00,    # Default Forex: Max 2 EUR loss
-        'DEFAULT': 3.00   # Fallback: Max 3 EUR loss
+        'DEFAULT': 2.50   # Fallback: Max 2.5 EUR loss (conservative)
     }
 
     # Minimum SL distance as percentage of entry price

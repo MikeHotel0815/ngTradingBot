@@ -1,6 +1,11 @@
 """
 Signal Generator Module
 Combines pattern recognition and technical indicators to generate trading signals
+
+ML Integration:
+- Uses XGBoost model for confidence calibration (when available)
+- Falls back to rules-based confidence if ML unavailable
+- A/B testing: 80% ML, 10% rules-only, 10% hybrid
 """
 
 import logging
@@ -10,6 +15,14 @@ from database import ScopedSession
 from models import TradingSignal, OHLCData
 from technical_indicators import TechnicalIndicators
 from pattern_recognition import PatternRecognizer
+
+# ML Integration (optional - graceful degradation if unavailable)
+try:
+    from ml.ml_features import FeatureEngineer
+    from ml.ml_model_manager import MLModelManager
+    ML_AVAILABLE = True
+except ImportError:
+    ML_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +50,11 @@ class SignalGenerator:
         # Pass risk_profile to TechnicalIndicators for regime filter adjustments
         self.indicators = TechnicalIndicators(account_id, symbol, timeframe, cache_ttl=15, risk_profile=risk_profile)
         self.patterns = PatternRecognizer(account_id, symbol, timeframe, cache_ttl=15)
+
+        # ML Integration (initialized lazily when needed)
+        self.ml_manager = None
+        self.ml_feature_engineer = None
+        self.ml_prediction_id = None  # Track prediction for outcome logging
 
     def generate_signal(self) -> Optional[Dict]:
         """
@@ -210,15 +228,28 @@ class SignalGenerator:
             )
             return None
 
-        # Calculate confidence score
-        confidence = self._calculate_confidence(
+        # Calculate confidence score (rules-based)
+        rules_confidence = self._calculate_confidence(
             signals,
             pattern_signals,
             indicator_signals
         )
 
+        # ML Enhancement: Apply ML model if available
+        ml_confidence, final_confidence, ab_test_group = self._apply_ml_enhancement(
+            signal_type,
+            rules_confidence
+        )
+
         # Collect reasons
         reasons = [sig['reason'] for sig in signals]
+
+        # Add ML reason if used
+        if ml_confidence is not None and ab_test_group != 'rules_only':
+            ml_reason = f"ML Model: {ml_confidence:.1f}% confidence"
+            if ab_test_group == 'hybrid':
+                ml_reason += f" (hybrid with rules: {rules_confidence:.1f}%)"
+            reasons.append(ml_reason)
 
         # Collect patterns
         patterns_detected = [
@@ -237,7 +268,10 @@ class SignalGenerator:
             'symbol': self.symbol,
             'timeframe': self.timeframe,
             'signal_type': signal_type,
-            'confidence': confidence,
+            'confidence': final_confidence,
+            'rules_confidence': rules_confidence,  # Keep original for logging
+            'ml_confidence': ml_confidence,  # Keep ML score for logging
+            'ab_test_group': ab_test_group,  # Track which method was used
             'reasons': reasons,
             'patterns_detected': patterns_detected,
             'indicators_used': indicators_used,
@@ -725,6 +759,99 @@ class SignalGenerator:
             db.rollback()
         finally:
             db.close()
+
+    def _apply_ml_enhancement(
+        self,
+        signal_type: str,
+        rules_confidence: float
+    ) -> Tuple[Optional[float], float, str]:
+        """
+        Apply ML model to enhance confidence score
+
+        Args:
+            signal_type: 'BUY' or 'SELL'
+            rules_confidence: Rules-based confidence (0-100)
+
+        Returns:
+            (ml_confidence, final_confidence, ab_test_group)
+        """
+        if not ML_AVAILABLE:
+            # ML not installed - use rules-based confidence
+            return (None, rules_confidence, 'rules_only')
+
+        try:
+            # Lazy initialization of ML components
+            if self.ml_manager is None:
+                db = ScopedSession()
+                self.ml_manager = MLModelManager(db, self.account_id)
+                self.ml_feature_engineer = FeatureEngineer(db, self.account_id)
+                db.close()
+
+            # Determine A/B test group
+            ab_test_group = self.ml_manager.get_ab_test_group(self.symbol)
+
+            # Extract features for ML
+            db = ScopedSession()
+            features = self.ml_feature_engineer.extract_features(
+                symbol=self.symbol,
+                timeframe=self.timeframe,
+                timestamp=datetime.utcnow(),
+                include_multi_timeframe=True
+            )
+            db.close()
+
+            # Get ML prediction
+            ml_confidence_raw = None
+            if ab_test_group in ['ml_only', 'hybrid']:
+                db = ScopedSession()
+                ml_confidence_raw = self.ml_manager.predict(
+                    symbol=self.symbol,
+                    features=features,
+                    use_global_fallback=True
+                )
+                db.close()
+
+                # Convert 0-1 to 0-100
+                if ml_confidence_raw is not None:
+                    ml_confidence_raw = ml_confidence_raw * 100
+
+            # Calculate final confidence based on A/B group
+            db = ScopedSession()
+            final_confidence = self.ml_manager.get_hybrid_confidence(
+                ml_confidence=ml_confidence_raw / 100 if ml_confidence_raw else None,
+                rules_confidence=rules_confidence / 100,
+                ab_test_group=ab_test_group
+            ) * 100  # Convert back to 0-100
+            db.close()
+
+            # Log prediction for later evaluation
+            db = ScopedSession()
+            decision = 'trade' if final_confidence >= 60 else 'no_trade'
+            self.ml_prediction_id = self.ml_manager.log_prediction(
+                symbol=self.symbol,
+                features=features,
+                ml_confidence=ml_confidence_raw / 100 if ml_confidence_raw else 0.0,
+                rules_confidence=rules_confidence / 100,
+                final_confidence=final_confidence / 100,
+                decision=decision,
+                ab_test_group=ab_test_group
+            )
+            db.commit()
+            db.close()
+
+            logger.debug(
+                f"ML Enhancement: {self.symbol} {signal_type} | "
+                f"Rules: {rules_confidence:.1f}% | "
+                f"ML: {ml_confidence_raw:.1f}% | "
+                f"Final: {final_confidence:.1f}% | "
+                f"Group: {ab_test_group}"
+            )
+
+            return (ml_confidence_raw, final_confidence, ab_test_group)
+
+        except Exception as e:
+            logger.warning(f"ML enhancement failed, using rules-based confidence: {e}")
+            return (None, rules_confidence, 'rules_only')
 
     def _expire_active_signals(self, reason: str):
         """
