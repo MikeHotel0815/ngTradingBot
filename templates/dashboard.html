@@ -1507,20 +1507,30 @@
 
                 <!-- Active Models Table -->
                 <div style="margin-bottom: 20px;">
-                    <h3 style="color: #4CAF50; margin-bottom: 10px; font-size: 1.1em;">📊 Active Models</h3>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <h3 style="color: #4CAF50; margin: 0; font-size: 1.1em;">📊 Active Models</h3>
+                        <div style="display: flex; gap: 10px;">
+                            <button onclick="exportAllModels()" style="padding: 8px 15px; background: #2196F3; border: none; border-radius: 5px; color: white; cursor: pointer; font-size: 0.9em;">
+                                💾 Export All
+                            </button>
+                            <button onclick="importModel()" style="padding: 8px 15px; background: #4CAF50; border: none; border-radius: 5px; color: white; cursor: pointer; font-size: 0.9em;">
+                                📥 Import
+                            </button>
+                        </div>
+                    </div>
                     <div style="max-height: 300px; overflow-y: auto;">
                         <table style="width: 100%; border-collapse: collapse;">
                             <thead style="position: sticky; top: 0; background: #2a2a2a; z-index: 1;">
                                 <tr>
                                     <th style="padding: 10px; text-align: left; border-bottom: 1px solid #444; color: #888;">Symbol</th>
                                     <th style="padding: 10px; text-align: left; border-bottom: 1px solid #444; color: #888;">Type</th>
-                                    <th style="padding: 10px; text-align: center; border-bottom: 1px solid #444; color: #888;">Version</th>
+                                    <th style="padding: 10px; text-align: center; border-bottom: 1px solid #444; color: #888;">Status</th>
                                     <th style="padding: 10px; text-align: center; border-bottom: 1px solid #444; color: #888;">Accuracy</th>
                                     <th style="padding: 10px; text-align: center; border-bottom: 1px solid #444; color: #888;">Precision</th>
                                     <th style="padding: 10px; text-align: center; border-bottom: 1px solid #444; color: #888;">F1 Score</th>
                                     <th style="padding: 10px; text-align: center; border-bottom: 1px solid #444; color: #888;">Samples</th>
-                                    <th style="padding: 10px; text-align: center; border-bottom: 1px solid #444; color: #888;">Used</th>
                                     <th style="padding: 10px; text-align: center; border-bottom: 1px solid #444; color: #888;">Created</th>
+                                    <th style="padding: 10px; text-align: center; border-bottom: 1px solid #444; color: #888;">Actions</th>
                                 </tr>
                             </thead>
                             <tbody id="ml-models-table">
@@ -4142,31 +4152,32 @@ const SymbolModal = (function() {
                 const tbody = document.getElementById('ml-models-table');
 
                 if (response.ok && data.models && data.models.length > 0) {
-                    const activeModels = data.models.filter(m => m.is_active);
-
-                    if (activeModels.length === 0) {
-                        tbody.innerHTML = '<tr><td colspan="9" style="padding: 20px; text-align: center; color: #888;">No active models</td></tr>';
-                        return;
-                    }
-
                     let html = '';
-                    activeModels.forEach(m => {
+                    data.models.forEach(m => {
                         const created = m.created_at ? new Date(m.created_at).toLocaleDateString('de-DE') : '-';
-                        const lastUsed = m.last_used ? new Date(m.last_used).toLocaleDateString('de-DE') : 'Never';
+                        const statusBadge = m.is_active ?
+                            '<span style="background: #4CAF50; padding: 3px 8px; border-radius: 3px; font-size: 0.85em;">✅ Active</span>' :
+                            '<span style="background: #666; padding: 3px 8px; border-radius: 3px; font-size: 0.85em;">⏸️ Inactive</span>';
+
+                        const deleteBtn = !m.is_active ?
+                            `<button onclick="deleteModel(${m.id})" style="padding: 5px 10px; background: #f44336; border: none; border-radius: 3px; color: white; cursor: pointer; font-size: 0.85em;">🗑️ Delete</button>` :
+                            '<span style="color: #666; font-size: 0.85em;">-</span>';
+
+                        const exportBtn = `<button onclick="exportModel(${m.id}, '${m.symbol || 'GLOBAL'}')" style="padding: 5px 10px; background: #2196F3; border: none; border-radius: 3px; color: white; cursor: pointer; font-size: 0.85em; margin-right: 5px;">💾 Export</button>`;
 
                         html += `
                             <tr style="border-bottom: 1px solid #333;">
                                 <td style="padding: 10px; color: #4CAF50; font-weight: 600;">${m.symbol || 'GLOBAL'}</td>
                                 <td style="padding: 10px;">${m.model_type}</td>
-                                <td style="padding: 10px; text-align: center;">${m.version || 1}</td>
+                                <td style="padding: 10px; text-align: center;">${statusBadge}</td>
                                 <td style="padding: 10px; text-align: center; color: ${m.accuracy >= 0.7 ? '#4CAF50' : m.accuracy >= 0.6 ? '#FF9800' : '#f44336'}; font-weight: 600;">
                                     ${m.accuracy ? (m.accuracy * 100).toFixed(1) + '%' : '-'}
                                 </td>
                                 <td style="padding: 10px; text-align: center;">${m.precision ? (m.precision * 100).toFixed(1) + '%' : '-'}</td>
                                 <td style="padding: 10px; text-align: center;">${m.f1_score ? (m.f1_score * 100).toFixed(1) + '%' : '-'}</td>
                                 <td style="padding: 10px; text-align: center;">${m.training_samples || '-'}</td>
-                                <td style="padding: 10px; text-align: center;">${m.usage_count || 0}x</td>
                                 <td style="padding: 10px;">${created}</td>
+                                <td style="padding: 10px; text-align: center;">${exportBtn}${deleteBtn}</td>
                             </tr>
                         `;
                     });
@@ -4258,6 +4269,113 @@ const SymbolModal = (function() {
                 console.error('Error triggering ML training:', error);
                 alert('Error triggering ML training. Check console for details.');
             }
+        }
+
+        async function deleteModel(modelId) {
+            if (!confirm('Delete this model?\n\nThis will permanently delete the model from database and disk.\n\nNote: You cannot delete active models.')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/ml/models/${modelId}`, {
+                    method: 'DELETE'
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    alert('Model deleted successfully!');
+                    refreshMLDashboard();
+                } else {
+                    alert(`Error: ${data.error || 'Could not delete model'}`);
+                }
+            } catch (error) {
+                console.error('Error deleting model:', error);
+                alert('Error deleting model. Check console for details.');
+            }
+        }
+
+        async function exportModel(modelId, symbol) {
+            try {
+                const response = await fetch(`/api/ml/models/${modelId}/export`);
+                if (!response.ok) {
+                    alert('Export failed. Endpoint not yet implemented.');
+                    return;
+                }
+
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `ml_model_${symbol}_${modelId}.pkl`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+
+                alert(`Model exported: ml_model_${symbol}_${modelId}.pkl`);
+            } catch (error) {
+                console.error('Error exporting model:', error);
+                alert('Export feature coming soon!');
+            }
+        }
+
+        async function exportAllModels() {
+            try {
+                const response = await fetch('/api/ml/models/export/all');
+                if (!response.ok) {
+                    alert('Export all not yet implemented. Use individual export buttons.');
+                    return;
+                }
+
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `all_ml_models_${new Date().toISOString().split('T')[0]}.zip`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+
+                alert('All models exported successfully!');
+            } catch (error) {
+                console.error('Error exporting all models:', error);
+                alert('Export all feature coming soon!');
+            }
+        }
+
+        function importModel() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.pkl,.zip';
+            input.onchange = async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                const formData = new FormData();
+                formData.append('model_file', file);
+
+                try {
+                    const response = await fetch('/api/ml/models/import', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    const data = await response.json();
+
+                    if (response.ok) {
+                        alert('Model imported successfully!');
+                        refreshMLDashboard();
+                    } else {
+                        alert(`Import failed: ${data.error || 'Unknown error'}`);
+                    }
+                } catch (error) {
+                    console.error('Error importing model:', error);
+                    alert('Import feature coming soon!');
+                }
+            };
+            input.click();
         }
 
         // Initial load and auto-refresh ML dashboard

@@ -501,6 +501,25 @@ class CoreCommunicationManager:
                 ticket = ea_trade['ticket']
                 
                 if ticket in missing_in_db:
+                    # Try to find the original command that created this trade to get initial SL/TP
+                    initial_sl = ea_trade.get('sl', 0.0)
+                    initial_tp = ea_trade.get('tp', 0.0)
+
+                    # Search for command with this ticket in response_data (created within last hour)
+                    recent_command = db.query(Command).filter(
+                        Command.account_id == account_id,
+                        Command.type == 'TRADE_OPEN',
+                        Command.status == 'completed',
+                        Command.executed_at >= datetime.utcnow() - timedelta(hours=1),
+                        Command.response.contains({'ticket': ticket})
+                    ).order_by(Command.executed_at.desc()).first()
+
+                    if recent_command and recent_command.payload:
+                        # Get original SL/TP from command payload (before TS modified them)
+                        initial_sl = recent_command.payload.get('sl', initial_sl)
+                        initial_tp = recent_command.payload.get('tp', initial_tp)
+                        logger.debug(f"✅ Found command for trade {ticket}: initial_sl={initial_sl}, initial_tp={initial_tp}")
+
                     # Create new trade record
                     new_trade = Trade(
                         account_id=account_id,
@@ -512,8 +531,8 @@ class CoreCommunicationManager:
                         open_time=datetime.fromtimestamp(ea_trade['open_time']) if 'open_time' in ea_trade else datetime.utcnow(),
                         current_sl=ea_trade.get('sl', 0.0),
                         current_tp=ea_trade.get('tp', 0.0),
-                        initial_sl=ea_trade.get('sl', 0.0),
-                        initial_tp=ea_trade.get('tp', 0.0),
+                        initial_sl=initial_sl,  # From command payload, NOT from EA
+                        initial_tp=initial_tp,  # From command payload, NOT from EA
                         status='open',
                         source='ea_sync',
                         entry_reason='Found in EA during sync'

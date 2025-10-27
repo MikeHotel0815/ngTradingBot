@@ -206,6 +206,21 @@ class MLModelManager:
             logger.error(f"Error predicting for {symbol}: {e}")
             return None
 
+    def _convert_to_json_serializable(self, obj):
+        """Recursively convert non-JSON-serializable objects (Decimal, datetime) to compatible types"""
+        from decimal import Decimal
+        from datetime import datetime, date
+
+        if isinstance(obj, Decimal):
+            return float(obj)
+        elif isinstance(obj, (datetime, date)):
+            return obj.isoformat()
+        elif isinstance(obj, dict):
+            return {k: self._convert_to_json_serializable(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._convert_to_json_serializable(item) for item in obj]
+        return obj
+
     def log_prediction(
         self,
         symbol: str,
@@ -247,10 +262,16 @@ class MLModelManager:
                 logger.warning("No active model to log prediction against")
                 return None
 
+            # Convert non-JSON-serializable objects (Decimal, datetime) for JSON serialization
+            if features:
+                features = self._convert_to_json_serializable(features)
+
             prediction = MLPrediction(
                 model_id=model_record.id,
                 symbol=symbol,
                 prediction_time=datetime.utcnow(),
+                prediction_type='confidence_scoring',  # Type of prediction being made
+                predicted_value=final_confidence,  # The final confidence value
                 ml_confidence=ml_confidence,
                 rules_confidence=rules_confidence,
                 final_confidence=final_confidence,

@@ -5854,8 +5854,11 @@ def trigger_ml_training():
                     pipeline = MLTrainingPipeline(db_async, account_id=account_id)
                     result = pipeline.train_model(symbol=symbol, days_back=days_back, force=force)
                     logger.info(f"ML training completed for {symbol or 'GLOBAL'}: {result}")
+                    # Ensure changes are committed
+                    db_async.commit()
                 except Exception as e:
                     logger.error(f"ML training failed for {symbol or 'GLOBAL'}: {e}")
+                    db_async.rollback()
                 finally:
                     db_async.close()
 
@@ -5871,6 +5874,128 @@ def trigger_ml_training():
             db.close()
     except Exception as e:
         logger.error(f"Error triggering ML training: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app_webui.route('/api/ml/models/<int:model_id>', methods=['DELETE'])
+def delete_ml_model(model_id):
+    """Delete an ML model"""
+    try:
+        from models import MLModel
+        import os
+        db = ScopedSession()
+        try:
+            model = db.query(MLModel).filter(MLModel.id == model_id).first()
+            if not model:
+                return jsonify({'error': 'Model not found'}), 404
+
+            # Don't allow deleting active models
+            if model.is_active:
+                return jsonify({'error': 'Cannot delete active model. Deactivate it first.'}), 400
+
+            # Delete model file if it exists
+            model_path = os.path.join('ml_models/xgboost', model.file_path)
+            if os.path.exists(model_path):
+                try:
+                    os.remove(model_path)
+                    logger.info(f"Deleted model file: {model_path}")
+                except Exception as e:
+                    logger.warning(f"Could not delete model file {model_path}: {e}")
+
+            # Delete from database
+            db.delete(model)
+            db.commit()
+
+            logger.info(f"Deleted ML model #{model_id}")
+            return jsonify({'success': True, 'message': f'Model #{model_id} deleted'})
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Error deleting ML model: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app_webui.route('/api/ml/training_runs/<int:run_id>', methods=['DELETE'])
+def delete_training_run(run_id):
+    """Delete a training run record"""
+    try:
+        from models import MLTrainingRun
+        db = ScopedSession()
+        try:
+            run = db.query(MLTrainingRun).filter(MLTrainingRun.id == run_id).first()
+            if not run:
+                return jsonify({'error': 'Training run not found'}), 404
+
+            # Delete from database
+            db.delete(run)
+            db.commit()
+
+            logger.info(f"Deleted training run #{run_id}")
+            return jsonify({'success': True, 'message': f'Training run #{run_id} deleted'})
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Error deleting training run: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app_webui.route('/api/ml/models/<int:model_id>/export')
+def export_ml_model(model_id):
+    """Export ML model file"""
+    try:
+        from models import MLModel
+        import os
+        from flask import send_file
+
+        db = ScopedSession()
+        try:
+            model = db.query(MLModel).filter(MLModel.id == model_id).first()
+            if not model:
+                return jsonify({'error': 'Model not found'}), 404
+
+            model_path = os.path.join('ml_models/xgboost', model.file_path)
+            if not os.path.exists(model_path):
+                return jsonify({'error': 'Model file not found on disk'}), 404
+
+            return send_file(
+                model_path,
+                as_attachment=True,
+                download_name=f"ml_model_{model.symbol or 'GLOBAL'}_{model.version}.pkl"
+            )
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Error exporting ML model: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app_webui.route('/api/ml/models/import', methods=['POST'])
+def import_ml_model():
+    """Import ML model file"""
+    try:
+        from models import MLModel
+        import os
+        from werkzeug.utils import secure_filename
+
+        if 'model_file' not in request.files:
+            return jsonify({'error': 'No file provided'}), 400
+
+        file = request.files['model_file']
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+
+        if not file.filename.endswith('.pkl'):
+            return jsonify({'error': 'Only .pkl files are supported'}), 400
+
+        # Save file
+        filename = secure_filename(file.filename)
+        filepath = os.path.join('ml_models/xgboost', filename)
+        file.save(filepath)
+
+        logger.info(f"ML model imported: {filepath}")
+        return jsonify({'success': True, 'message': f'Model imported: {filename}'})
+    except Exception as e:
+        logger.error(f"Error importing ML model: {e}")
         return jsonify({'error': str(e)}), 500
 
 

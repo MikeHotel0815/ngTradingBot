@@ -624,6 +624,18 @@ class SignalGenerator:
             db.add(new_signal)
             db.commit()
 
+            # Link ML prediction to this signal if prediction was logged
+            if hasattr(self, 'ml_prediction_id') and self.ml_prediction_id:
+                try:
+                    from models import MLPrediction
+                    ml_pred = db.query(MLPrediction).filter(MLPrediction.id == self.ml_prediction_id).first()
+                    if ml_pred:
+                        ml_pred.signal_id = new_signal.id
+                        db.commit()
+                        logger.debug(f"✅ Linked ML prediction {self.ml_prediction_id} to signal {new_signal.id}")
+                except Exception as link_error:
+                    logger.warning(f"Could not link ML prediction to signal: {link_error}")
+
             logger.info(
                 f"✨ Signal CREATED [ID:{new_signal.id}]: "
                 f"{signal['signal_type']} {self.symbol} {self.timeframe} "

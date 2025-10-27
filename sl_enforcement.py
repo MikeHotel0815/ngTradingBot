@@ -25,21 +25,22 @@ class SLEnforcement:
     """Enforce Stop Loss requirements across all trading operations"""
 
     # Symbol-specific maximum loss per trade (in account currency)
-    # UPDATED 2025-10-26: Based on Baseline Performance Report analysis
-    # Previous losses: XAGUSD -€78.92, DE40 -€23.10, USDJPY -€2.40
+    # UPDATED 2025-10-27: Relaxed limits for aggressive trading mode
+    # Previous limits (2025-10-26) were too strict and blocked all trades
+    # Balance: Conservative SL protection vs. Allowing trades to execute
     MAX_LOSS_PER_TRADE = {
-        'XAGUSD': 3.00,   # Silver: Max 3 EUR loss (was losing -€78.92!)
-        'XAUUSD': 5.00,   # Gold: Max 5 EUR loss (controlled)
-        'DE40.c': 3.00,   # DAX: Max 3 EUR loss (was losing -€23.10!)
-        'US500.c': 2.00,  # S&P500: Max 2 EUR loss (high frequency)
-        'BTCUSD': 8.00,   # Bitcoin: Max 8 EUR loss (volatile but profitable)
-        'ETHUSD': 6.00,   # Ethereum: Max 6 EUR loss
-        'USDJPY': 2.00,   # USDJPY: Max 2 EUR loss (was problematic)
-        'EURUSD': 2.00,   # EURUSD: Max 2 EUR loss (good WR but small profits)
-        'GBPUSD': 2.00,   # GBPUSD: Max 2 EUR loss
-        'AUDUSD': 2.00,   # AUDUSD: Max 2 EUR loss
-        'FOREX': 2.00,    # Default Forex: Max 2 EUR loss
-        'DEFAULT': 2.50   # Fallback: Max 2.5 EUR loss (conservative)
+        'XAGUSD': 8.00,   # Silver: Max 8 EUR loss (relaxed from 3 EUR)
+        'XAUUSD': 100.00, # Gold: Max 100 EUR loss (relaxed from 5 EUR - volatile but profitable)
+        'DE40.c': 10.00,  # DAX: Max 10 EUR loss (relaxed from 3 EUR)
+        'US500.c': 15.00, # S&P500: Max 15 EUR loss (relaxed from 2 EUR - high frequency)
+        'BTCUSD': 15.00,  # Bitcoin: Max 15 EUR loss (volatile but profitable)
+        'ETHUSD': 10.00,  # Ethereum: Max 10 EUR loss (relaxed from 6 EUR)
+        'USDJPY': 6.00,   # USDJPY: Max 6 EUR loss (relaxed from 2 EUR)
+        'EURUSD': 6.00,   # EURUSD: Max 6 EUR loss (relaxed from 2 EUR)
+        'GBPUSD': 6.00,   # GBPUSD: Max 6 EUR loss (relaxed from 2 EUR)
+        'AUDUSD': 6.00,   # AUDUSD: Max 6 EUR loss (relaxed from 2 EUR)
+        'FOREX': 6.00,    # Default Forex: Max 6 EUR loss (relaxed from 2 EUR)
+        'DEFAULT': 10.00  # Fallback: Max 10 EUR loss (relaxed from 2.5 EUR - aggressive mode)
     }
 
     # Minimum SL distance as percentage of entry price

@@ -1411,6 +1411,17 @@ class MLPrediction(Base):
     trade_id = Column(Integer)
     signal_id = Column(Integer)
     created_at = Column(DateTime, default=datetime.utcnow)
+    # Custom ML prediction fields for confidence tracking and A/B testing
+    ml_confidence = Column(Float)  # ML model's raw confidence score
+    rules_confidence = Column(Float)  # Rules-based confidence score
+    final_confidence = Column(Float, nullable=False, default=0.0)  # Combined/blended confidence
+    decision = Column(String(20))  # TRADE/NO_TRADE/SKIP
+    ab_test_group = Column(String(20))  # ml_only/rules_only/hybrid
+    features_used = Column(JSONB)  # JSON of features used in prediction
+    # Outcome tracking fields for ML model evaluation
+    actual_outcome = Column(String(20))  # Actual trading outcome: win/loss/no_trade
+    actual_profit = Column(Float)  # Actual profit/loss in EUR from the trade
+    outcome_time = Column(DateTime)  # Timestamp when the trade outcome was determined
 
 
 class MLTrainingRun(Base):
