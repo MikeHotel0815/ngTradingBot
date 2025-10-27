@@ -483,15 +483,33 @@ def import_worker_functions():
 
     except Exception as e:
         logger.error(f"Failed to import signal_validator: {e}")
-    
+
+    try:
+        # ✅ ML Outcome Updater - Updates predictions with trade outcomes
+        logger.info("📦 Importing ml_outcome_updater...")
+        from ml_outcome_updater import get_ml_outcome_updater
+
+        _ml_outcome_updater = get_ml_outcome_updater()
+
+        def run_ml_outcome_update():
+            """Update ML predictions with actual trade outcomes"""
+            updated, skipped = _ml_outcome_updater.update_outcomes()
+            if updated > 0:
+                logger.info(f"🤖 ML Outcomes: Updated {updated} predictions")
+
+        workers['ml_outcome_updater'] = run_ml_outcome_update
+
+    except Exception as e:
+        logger.error(f"Failed to import ml_outcome_updater: {e}")
+
     try:
         # ✅ NEW: Trade Monitor with Smart Trailing Stop
         logger.info("📦 Importing trade_monitor...")
         import trade_monitor as tm
         from database import ScopedSession
-        
+
         _trade_monitor = tm.get_monitor()
-        
+
         def run_trade_monitor_cycle():
             """Run one cycle of trade monitoring"""
             db = ScopedSession()
@@ -625,6 +643,10 @@ def main():
         'trade_monitor': {
             'function': worker_functions.get('trade_monitor'),
             'interval': int(os.getenv('TRADE_MONITOR_CHECK_INTERVAL', 1)),  # 1 second for real-time monitoring
+        },
+        'ml_outcome_updater': {
+            'function': worker_functions.get('ml_outcome_updater'),
+            'interval': int(os.getenv('ML_OUTCOME_UPDATE_INTERVAL', 300)),  # 5 minutes - update ML outcomes
         },
     }
     
