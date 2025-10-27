@@ -257,12 +257,20 @@ class SignalGenerator:
             if sig['type'] == signal_type
         ]
 
-        # Collect indicators
-        indicators_used = {
-            sig['indicator']: sig.get('value', True)
-            for sig in indicator_signals
-            if sig['type'] == signal_type
-        }
+        # Collect indicators with ACTUAL indicator data (not just True/False)
+        # This fixes the "invalid snapshot data" validation errors
+        all_indicators = self.indicators.calculate_all()
+        indicators_used = {}
+        for sig in indicator_signals:
+            if sig['type'] == signal_type:
+                indicator_name = sig['indicator']
+                # Look up actual indicator data from calculate_all()
+                indicator_data = all_indicators.get(indicator_name)
+                # Only store if it's a valid dict (skip False/None values)
+                if indicator_data and isinstance(indicator_data, dict):
+                    indicators_used[indicator_name] = indicator_data
+                else:
+                    logger.debug(f"Skipping {indicator_name} - no valid data available")
 
         return {
             'symbol': self.symbol,
@@ -676,8 +684,11 @@ class SignalGenerator:
             # This ensures we capture EVERY indicator that contributed to the signal
             for indicator_name, value in signal.get('indicators_used', {}).items():
                 try:
-                    # Store the indicator value as-is (already contains all relevant data)
-                    snapshot['indicators'][indicator_name] = value
+                    # Only store valid dict values (skip True/False/None)
+                    if isinstance(value, dict):
+                        snapshot['indicators'][indicator_name] = value
+                    else:
+                        logger.debug(f"Skipping {indicator_name} snapshot - invalid type: {type(value)}")
                 except Exception as e:
                     logger.warning(f"Failed to capture {indicator_name} snapshot: {e}")
 
@@ -854,7 +865,7 @@ class SignalGenerator:
             logger.debug(
                 f"ML Enhancement: {self.symbol} {signal_type} | "
                 f"Rules: {rules_confidence:.1f}% | "
-                f"ML: {ml_confidence_raw:.1f}% | "
+                f"ML: {ml_confidence_raw:.1f if ml_confidence_raw is not None else 0.0}% | "
                 f"Final: {final_confidence:.1f}% | "
                 f"Group: {ab_test_group}"
             )

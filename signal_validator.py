@@ -220,14 +220,24 @@ class SignalValidator:
                 return self._validate_macd(snapshot_value, indicators, signal_type)
             elif indicator_name == 'BB':
                 return self._validate_bollinger_bands(snapshot_value, indicators, signal_type)
-            elif indicator_name == 'Stochastic':
+            elif indicator_name in ['Stochastic', 'STOCH']:
                 return self._validate_stochastic(snapshot_value, indicators, signal_type)
             elif indicator_name == 'ADX':
                 return self._validate_adx(snapshot_value, indicators, signal_type)
             elif indicator_name == 'EMA':
                 return self._validate_ema(snapshot_value, indicators, signal_type)
+            elif indicator_name == 'EMA_200':
+                return self._validate_ema_200(snapshot_value, indicators, signal_type)
             elif indicator_name == 'OBV':
                 return self._validate_obv(snapshot_value, indicators, signal_type)
+            elif indicator_name == 'VWAP':
+                return self._validate_vwap(snapshot_value, indicators, signal_type)
+            elif indicator_name == 'SUPERTREND':
+                return self._validate_supertrend(snapshot_value, indicators, signal_type)
+            elif indicator_name == 'HEIKEN_ASHI_TREND':
+                return self._validate_heiken_ashi(snapshot_value, indicators, signal_type)
+            elif indicator_name == 'ICHIMOKU':
+                return self._validate_ichimoku(snapshot_value, indicators, signal_type)
             else:
                 logger.warning(f"Unknown indicator: {indicator_name}")
                 return (True, "")  # Don't invalidate on unknown indicator
@@ -251,27 +261,19 @@ class SignalValidator:
         if snapshot_value is None or current_value is None:
             return (False, "RSI data incomplete")
 
-        # For BUY: RSI should still be in oversold or neutral zone
-        if signal_type == 'BUY':
-            if snapshot_value < snapshot['oversold']:
-                # Was oversold - should not move into overbought
-                if current_value > snapshot['overbought']:
-                    return (False, f"RSI moved from oversold to overbought ({snapshot_value:.1f} → {current_value:.1f})")
-            else:
-                # Was neutral/rising - should not become overbought
-                if current_value > snapshot['overbought']:
-                    return (False, f"RSI became overbought ({current_value:.1f})")
+        # Get RSI signal states (oversold/overbought/neutral)
+        snapshot_signal = snapshot.get('signal')
+        current_signal = current_rsi.get('signal')
 
-        # For SELL: RSI should still be in overbought or neutral zone
-        elif signal_type == 'SELL':
-            if snapshot_value > snapshot['overbought']:
-                # Was overbought - should not move into oversold
-                if current_value < snapshot['oversold']:
-                    return (False, f"RSI moved from overbought to oversold ({snapshot_value:.1f} → {current_value:.1f})")
-            else:
-                # Was neutral/falling - should not become oversold
-                if current_value < snapshot['oversold']:
-                    return (False, f"RSI became oversold ({current_value:.1f})")
+        # Check if RSI signal changed (e.g., from oversold to overbought)
+        if snapshot_signal and current_signal:
+            # For BUY: was oversold/neutral, shouldn't become overbought
+            if signal_type == 'BUY' and snapshot_signal in ['oversold', 'neutral'] and current_signal == 'overbought':
+                return (False, f"RSI became overbought ({snapshot_value:.1f} → {current_value:.1f})")
+
+            # For SELL: was overbought/neutral, shouldn't become oversold
+            if signal_type == 'SELL' and snapshot_signal in ['overbought', 'neutral'] and current_signal == 'oversold':
+                return (False, f"RSI became oversold ({snapshot_value:.1f} → {current_value:.1f})")
 
         return (True, "")
 
@@ -444,6 +446,99 @@ class SignalValidator:
             elif signal_type == 'SELL' and snapshot_trend == 'bearish':
                 if current_trend == 'bullish':
                     return (False, "OBV trend turned bullish")
+
+        return (True, "")
+
+    def _validate_vwap(self, snapshot: Dict, indicators: TechnicalIndicators, signal_type: str) -> tuple[bool, str]:
+        """Validate VWAP indicator (Volume Weighted Average Price)"""
+        current_vwap = indicators.calculate_vwap()
+        if not current_vwap or not isinstance(current_vwap, dict):
+            return (False, "VWAP data unavailable")
+
+        if not isinstance(snapshot, dict):
+            return (False, "VWAP snapshot data invalid")
+
+        # VWAP shows price vs volume-weighted average
+        # For BUY: current price should still be near or below VWAP
+        # For SELL: current price should still be near or above VWAP
+        snapshot_signal = snapshot.get('signal')
+        current_signal = current_vwap.get('signal')
+
+        if snapshot_signal and current_signal and snapshot_signal != current_signal:
+            return (False, f"VWAP signal changed: {snapshot_signal} → {current_signal}")
+
+        return (True, "")
+
+    def _validate_ema_200(self, snapshot: Dict, indicators: TechnicalIndicators, signal_type: str) -> tuple[bool, str]:
+        """Validate EMA 200 indicator"""
+        current_ema = indicators.calculate_ema(200)
+        if not current_ema or not isinstance(current_ema, dict):
+            return (False, "EMA_200 data unavailable")
+
+        if not isinstance(snapshot, dict):
+            return (False, "EMA_200 snapshot data invalid")
+
+        # Check if trend direction is still the same
+        snapshot_trend = snapshot.get('trend')
+        current_trend = current_ema.get('trend')
+
+        if snapshot_trend and current_trend and snapshot_trend != current_trend:
+            return (False, f"EMA_200 trend changed: {snapshot_trend} → {current_trend}")
+
+        return (True, "")
+
+    def _validate_supertrend(self, snapshot: Dict, indicators: TechnicalIndicators, signal_type: str) -> tuple[bool, str]:
+        """Validate Supertrend indicator"""
+        current_st = indicators.calculate_supertrend()
+        if not current_st or not isinstance(current_st, dict):
+            return (False, "Supertrend data unavailable")
+
+        if not isinstance(snapshot, dict):
+            return (False, "Supertrend snapshot data invalid")
+
+        # Supertrend is a trend-following indicator
+        # Check if trend signal is still the same
+        snapshot_signal = snapshot.get('signal')
+        current_signal = current_st.get('signal')
+
+        if snapshot_signal and current_signal and snapshot_signal != current_signal:
+            return (False, f"Supertrend signal changed: {snapshot_signal} → {current_signal}")
+
+        return (True, "")
+
+    def _validate_heiken_ashi(self, snapshot: Dict, indicators: TechnicalIndicators, signal_type: str) -> tuple[bool, str]:
+        """Validate Heiken Ashi Trend indicator"""
+        current_ha = indicators.calculate_heiken_ashi_trend()
+        if not current_ha or not isinstance(current_ha, dict):
+            return (False, "Heiken Ashi data unavailable")
+
+        if not isinstance(snapshot, dict):
+            return (False, "Heiken Ashi snapshot data invalid")
+
+        # Check if trend is still the same
+        snapshot_trend = snapshot.get('trend')
+        current_trend = current_ha.get('trend')
+
+        if snapshot_trend and current_trend and snapshot_trend != current_trend:
+            return (False, f"Heiken Ashi trend changed: {snapshot_trend} → {current_trend}")
+
+        return (True, "")
+
+    def _validate_ichimoku(self, snapshot: Dict, indicators: TechnicalIndicators, signal_type: str) -> tuple[bool, str]:
+        """Validate Ichimoku indicator"""
+        current_ichimoku = indicators.calculate_ichimoku()
+        if not current_ichimoku or not isinstance(current_ichimoku, dict):
+            return (False, "Ichimoku data unavailable")
+
+        if not isinstance(snapshot, dict):
+            return (False, "Ichimoku snapshot data invalid")
+
+        # Check if cloud signal is still the same
+        snapshot_signal = snapshot.get('signal')
+        current_signal = current_ichimoku.get('signal')
+
+        if snapshot_signal and current_signal and snapshot_signal != current_signal:
+            return (False, f"Ichimoku signal changed: {snapshot_signal} → {current_signal}")
 
         return (True, "")
 
