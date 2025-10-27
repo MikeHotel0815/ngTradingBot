@@ -3213,6 +3213,11 @@ def dashboard():
     """Main dashboard view"""
     return render_template('dashboard.html')
 
+@app_webui.route('/unified')
+def dashboard_unified():
+    """Unified dashboard view (alternative)"""
+    return render_template('dashboard_unified.html')
+
 
 @app_webui.route('/api/dashboard/status')
 def dashboard_status():

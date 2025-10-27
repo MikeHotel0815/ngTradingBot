@@ -59,7 +59,12 @@ class WebDashboardServer:
 
         @app.route('/')
         def index():
-            """Serve main dashboard page"""
+            """Serve mobile dashboard page"""
+            return render_template('dashboard_mobile.html')
+
+        @app.route('/ultimate')
+        def ultimate():
+            """Serve ultimate dashboard page (alternative)"""
             return render_template('dashboard_ultimate.html')
 
         @app.route('/api/dashboard')

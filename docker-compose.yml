@@ -139,6 +139,7 @@ services:
   # ============================================================================
   # DASHBOARD WEB - Ultimate Dashboard Web Interface
   # Provides browser-based real-time monitoring with charts
+  # Port 9906: Advanced dashboard with Socket.IO and chart generation
   # ============================================================================
   dashboard:
     build: .

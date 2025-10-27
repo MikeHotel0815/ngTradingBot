@@ -1,0 +1,68 @@
+================================================================================
+TRADING BOT PERFORMANCE & GROWTH DASHBOARD
+================================================================================
+
+📊 CURRENT ACCOUNT STATUS
+--------------------------------------------------------------------------------
+MT5 Account:      730630
+Balance:          726.97 EUR
+Equity:           726.97 EUR
+Free Margin:      726.97 EUR
+Profit Today:     -18.74 EUR
+Profit Week:      -18.74 EUR
+Profit Month:     -217.77 EUR
+Last Update:      2025-10-27 16:39:26.224968
+
+📈 PERFORMANCE METRICS (Last 30 Days)
+--------------------------------------------------------------------------------
+Monthly Return:   -23.05%
+Total Trades:     492
+Win Rate:         74.2%
+Wins/Losses:      365/107
+Avg Win:          0.91 EUR
+Avg Loss:         -0.91 EUR
+Profit Factor:    3.40
+Best Trade:       22.82 EUR
+Worst Trade:      -78.92 EUR
+Total P/L:        -1.53 EUR
+
+💰 DEPOSIT RECOMMENDATION
+--------------------------------------------------------------------------------
+Recommendation:   DO NOT DEPOSIT
+Confidence:       HIGH
+Suggested Amount: 0 EUR - Wait for improvement
+Reason:           System not profitable: -23.05% monthly, 74.2% WR
+
+🚀 COMPOUND GROWTH PROJECTIONS (24 Months)
+================================================================================
+
+Scenario 1: CONSERVATIVE (3% monthly + 200 EUR/month)
+--------------------------------------------------------------------------------
+Month  6:   2,161.72 EUR  (~ 15.78 EUR/week, ROI:   12.2%)
+Month 12:   3,874.89 EUR  (~ 28.26 EUR/week, ROI:   23.9%)
+Month 18:   5,920.50 EUR  (~ 43.15 EUR/week, ROI:   36.8%)
+Month 24:   8,363.07 EUR  (~ 60.94 EUR/week, ROI:   51.3%)
+
+Scenario 2: MODERATE (5% monthly + 300 EUR/month)
+--------------------------------------------------------------------------------
+Month  6:   3,014.78 EUR  (~ 36.07 EUR/week, ROI:   19.3%)
+Month 12:   6,080.67 EUR  (~ 72.57 EUR/week, ROI:   40.5%)
+Month 18:  10,189.26 EUR  (~121.48 EUR/week, ROI:   66.3%)
+Month 24:  15,695.15 EUR  (~187.03 EUR/week, ROI:   98.0%)
+
+Scenario 3: OPTIMISTIC (7% monthly + 300 EUR/month)
+--------------------------------------------------------------------------------
+Month  6:   3,236.97 EUR  (~ 53.28 EUR/week, ROI:   28.1%)
+Month 12:   7,003.81 EUR  (~114.89 EUR/week, ROI:   61.9%)
+Month 18:  12,656.82 EUR  (~207.35 EUR/week, ROI:  106.6%)
+Month 24:  21,140.46 EUR  (~346.10 EUR/week, ROI:  166.7%)
+
+⏰ TIME TO REACH 500 EUR/WEEK
+--------------------------------------------------------------------------------
+Conservative (3% + 200 EUR/month)            : >24 months
+Moderate (5% + 300 EUR/month)                : >24 months
+Optimistic (7% + 300 EUR/month)              : >24 months
+
+================================================================================
+Report generated: 2025-10-27 16:39:26
+================================================================================

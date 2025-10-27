@@ -98,7 +98,8 @@ class SignalValidator:
                         invalidated_count += 1
 
                         # Send notification if configured (use data dict, not signal object)
-                        self._notify_signal_invalidation(data, reasons)
+                        # DISABLED: Too many notifications for invalidated signals
+                        # self._notify_signal_invalidation(data, reasons)
                     else:
                         # ✅ Signal still valid
                         signal.is_valid = True

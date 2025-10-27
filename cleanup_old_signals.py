@@ -16,38 +16,71 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def cleanup_old_signals(minutes_to_keep: int = 10):
+def cleanup_old_signals(
+    minutes_to_keep_active: int = 10,
+    minutes_to_keep_expired: int = 2
+):
     """
     Delete trading signals older than specified minutes
 
+    Uses different retention times for active vs. expired signals:
+    - Active signals: Keep longer for potential trading
+    - Expired/invalid signals: Delete faster to reduce noise
+
     Args:
-        minutes_to_keep: Number of minutes to keep signals (default: 10)
+        minutes_to_keep_active: Minutes to keep active signals (default: 10)
+        minutes_to_keep_expired: Minutes to keep expired signals (default: 2)
     """
     db = ScopedSession()
 
     try:
-        cutoff_time = datetime.utcnow() - timedelta(minutes=minutes_to_keep)
+        cutoff_active = datetime.utcnow() - timedelta(minutes=minutes_to_keep_active)
+        cutoff_expired = datetime.utcnow() - timedelta(minutes=minutes_to_keep_expired)
 
         # Count how many signals will be deleted
-        count = db.query(TradingSignal).filter(
-            TradingSignal.created_at < cutoff_time
+        count_active = db.query(TradingSignal).filter(
+            TradingSignal.created_at < cutoff_active,
+            TradingSignal.status == 'active'
         ).count()
 
-        if count == 0:
+        count_expired = db.query(TradingSignal).filter(
+            TradingSignal.created_at < cutoff_expired,
+            TradingSignal.status == 'expired'
+        ).count()
+
+        total_count = count_active + count_expired
+
+        if total_count == 0:
             logger.debug("✅ No old signals to delete")
             return 0
 
-        logger.info(f"🗑️  Deleting {count:,} signals older than {minutes_to_keep} minutes...")
+        logger.info(
+            f"🗑️  Deleting signals: "
+            f"{count_active:,} active (>{minutes_to_keep_active}m), "
+            f"{count_expired:,} expired (>{minutes_to_keep_expired}m)"
+        )
 
-        # Delete old signals
-        deleted = db.query(TradingSignal).filter(
-            TradingSignal.created_at < cutoff_time
+        # Delete old active signals
+        deleted_active = db.query(TradingSignal).filter(
+            TradingSignal.created_at < cutoff_active,
+            TradingSignal.status == 'active'
         ).delete(synchronize_session=False)
 
-        db.commit()
-        logger.info(f"✅ Deleted {deleted:,} old trading signals")
+        # Delete old expired signals (faster cleanup)
+        deleted_expired = db.query(TradingSignal).filter(
+            TradingSignal.created_at < cutoff_expired,
+            TradingSignal.status == 'expired'
+        ).delete(synchronize_session=False)
 
-        return deleted
+        total_deleted = deleted_active + deleted_expired
+        db.commit()
+
+        logger.info(
+            f"✅ Deleted {total_deleted:,} trading signals "
+            f"(active: {deleted_active:,}, expired: {deleted_expired:,})"
+        )
+
+        return total_deleted
 
     except Exception as e:
         logger.error(f"❌ Error during signal cleanup: {e}")
@@ -58,5 +91,7 @@ def cleanup_old_signals(minutes_to_keep: int = 10):
 
 
 if __name__ == "__main__":
-    # Run cleanup: keep 10 minutes of signals, delete older
-    cleanup_old_signals(minutes_to_keep=10)
+    # Run cleanup with different retention times:
+    # - Active signals: 10 minutes (for potential trading)
+    # - Expired signals: 2 minutes (quick cleanup)
+    cleanup_old_signals(minutes_to_keep_active=10, minutes_to_keep_expired=2)

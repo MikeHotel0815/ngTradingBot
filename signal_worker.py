@@ -82,7 +82,7 @@ class SignalWorker:
 
                 # Cleanup old signals every 5 minutes (every ~30 iterations at 10s interval)
                 if self.total_iterations % 30 == 0:
-                    self._cleanup_old_signals(minutes_to_keep=10)
+                    self._cleanup_old_signals()
 
                 # Calculate market volatility and adjust interval
                 volatility_level = self._calculate_market_volatility()
@@ -480,30 +480,44 @@ class SignalWorker:
         finally:
             db.close()
 
-    def _cleanup_old_signals(self, minutes_to_keep: int = 10):
+    def _cleanup_old_signals(self):
         """
         Remove old trading signals to prevent database bloat
 
-        Args:
-            minutes_to_keep: Keep signals from last N minutes (default: 10)
+        Uses different retention times:
+        - Active signals: 10 minutes (for potential trading)
+        - Expired signals: 2 minutes (quick cleanup to reduce noise)
         """
         from models import TradingSignal
         from datetime import datetime, timedelta
 
         db = ScopedSession()
         try:
-            cutoff_time = datetime.utcnow() - timedelta(minutes=minutes_to_keep)
+            cutoff_active = datetime.utcnow() - timedelta(minutes=10)
+            cutoff_expired = datetime.utcnow() - timedelta(minutes=2)
 
-            # Delete old signals
-            deleted = db.query(TradingSignal).filter(
-                TradingSignal.created_at < cutoff_time
+            # Delete old active signals (>10 minutes)
+            deleted_active = db.query(TradingSignal).filter(
+                TradingSignal.created_at < cutoff_active,
+                TradingSignal.status == 'active'
             ).delete(synchronize_session=False)
 
-            if deleted > 0:
-                db.commit()
-                logger.info(f"🗑️  Cleaned up {deleted} old signals (older than {minutes_to_keep} min)")
+            # Delete old expired signals (>2 minutes) - faster cleanup
+            deleted_expired = db.query(TradingSignal).filter(
+                TradingSignal.created_at < cutoff_expired,
+                TradingSignal.status == 'expired'
+            ).delete(synchronize_session=False)
 
-            return deleted
+            total_deleted = deleted_active + deleted_expired
+
+            if total_deleted > 0:
+                db.commit()
+                logger.info(
+                    f"🗑️  Cleaned up {total_deleted} old signals "
+                    f"(active: {deleted_active}, expired: {deleted_expired})"
+                )
+
+            return total_deleted
 
         except Exception as e:
             logger.error(f"Error cleaning old signals: {e}")
