@@ -59,12 +59,27 @@ class SignalValidator:
 
             logger.info(f"🔍 Validating {len(active_signals)} active signals...")
 
+            # Pre-load all attributes to avoid DetachedInstanceError
+            # This forces SQLAlchemy to load all data before we iterate
+            signal_data = []
+            for signal in active_signals:
+                signal_data.append({
+                    'id': signal.id,
+                    'symbol': signal.symbol,
+                    'timeframe': signal.timeframe,
+                    'signal_type': signal.signal_type,
+                    'confidence': signal.confidence,
+                    'indicator_snapshot': signal.indicator_snapshot,
+                    'object': signal  # Keep reference for updates
+                })
+
             validated_count = 0
             invalidated_count = 0
 
-            for signal in active_signals:
+            for data in signal_data:
+                signal = data['object']
                 try:
-                    is_valid, reasons = self._validate_signal(signal, db)
+                    is_valid, reasons = self._validate_signal(data, db)
 
                     # Update last_validated timestamp
                     signal.last_validated = datetime.utcnow()
@@ -72,8 +87,8 @@ class SignalValidator:
                     if not is_valid:
                         # ❌ Signal no longer valid - DELETE it immediately
                         logger.warning(
-                            f"❌ Signal INVALID [ID:{signal.id}]: {signal.symbol} {signal.timeframe} "
-                            f"{signal.signal_type} - {', '.join(reasons)}"
+                            f"❌ Signal INVALID [ID:{data['id']}]: {data['symbol']} {data['timeframe']} "
+                            f"{data['signal_type']} - {', '.join(reasons)}"
                         )
 
                         # Mark as invalid and delete
@@ -82,8 +97,8 @@ class SignalValidator:
                         db.commit()
                         invalidated_count += 1
 
-                        # Send notification if configured
-                        self._notify_signal_invalidation(signal, reasons)
+                        # Send notification if configured (use data dict, not signal object)
+                        self._notify_signal_invalidation(data, reasons)
                     else:
                         # ✅ Signal still valid
                         signal.is_valid = True
@@ -91,12 +106,13 @@ class SignalValidator:
                         validated_count += 1
 
                         logger.debug(
-                            f"✅ Signal VALID [ID:{signal.id}]: {signal.symbol} {signal.timeframe} "
-                            f"{signal.signal_type}"
+                            f"✅ Signal VALID [ID:{data['id']}]: {data['symbol']} {data['timeframe']} "
+                            f"{data['signal_type']}"
                         )
 
                 except Exception as e:
-                    logger.error(f"Error validating signal {signal.id}: {e}", exc_info=True)
+                    # Use data dict to avoid accessing detached signal attributes
+                    logger.error(f"Error validating signal {data['id']}: {e}", exc_info=True)
                     # Don't delete signal on error - might be temporary DB/network issue
                     db.rollback()
 
@@ -112,12 +128,12 @@ class SignalValidator:
         finally:
             db.close()
 
-    def _validate_signal(self, signal: TradingSignal, db) -> tuple[bool, List[str]]:
+    def _validate_signal(self, signal_data: dict, db) -> tuple[bool, List[str]]:
         """
         Validate a single signal against its indicator snapshot
 
         Args:
-            signal: TradingSignal object
+            signal_data: Dict with pre-loaded signal data (id, symbol, timeframe, signal_type, indicator_snapshot)
             db: Database session
 
         Returns:
@@ -126,7 +142,7 @@ class SignalValidator:
         reasons = []
 
         try:
-            snapshot = signal.indicator_snapshot
+            snapshot = signal_data['indicator_snapshot']
             if not snapshot or 'indicators' not in snapshot:
                 reasons.append("No indicator snapshot available")
                 return (False, reasons)
@@ -136,21 +152,21 @@ class SignalValidator:
             # still need account_id for cache keys. Use default account_id=1.
             indicators = TechnicalIndicators(
                 account_id=1,  # Default account for validation
-                symbol=signal.symbol,
-                timeframe=signal.timeframe,
+                symbol=signal_data['symbol'],
+                timeframe=signal_data['timeframe'],
                 cache_ttl=0  # No cache - always get fresh values
             )
 
             patterns = PatternRecognizer(
                 account_id=1,  # Default account for validation
-                symbol=signal.symbol,
-                timeframe=signal.timeframe,
+                symbol=signal_data['symbol'],
+                timeframe=signal_data['timeframe'],
                 cache_ttl=0
             )
 
             # ✅ Check market hours first
             from market_hours import is_market_open
-            if not is_market_open(signal.symbol):
+            if not is_market_open(signal_data['symbol']):
                 reasons.append("Market closed")
                 return (False, reasons)
 
@@ -160,7 +176,7 @@ class SignalValidator:
                     indicator_name,
                     snapshot_value,
                     indicators,
-                    signal.signal_type
+                    signal_data['signal_type']
                 )
 
                 if not is_valid:
@@ -173,7 +189,7 @@ class SignalValidator:
                 current_pattern_signals = patterns.get_pattern_signals()
                 current_patterns = [
                     sig['pattern'] for sig in current_pattern_signals
-                    if sig['type'] == signal.signal_type
+                    if sig['type'] == signal_data['signal_type']
                 ]
 
                 # Check if ANY of the original patterns still exists
@@ -190,7 +206,7 @@ class SignalValidator:
             return (True, [])
 
         except Exception as e:
-            logger.error(f"Error validating signal {signal.id}: {e}", exc_info=True)
+            logger.error(f"Error validating signal {signal_data['id']}: {e}", exc_info=True)
             reasons.append(f"Validation error: {str(e)}")
             return (False, reasons)
 
@@ -542,12 +558,12 @@ class SignalValidator:
 
         return (True, "")
 
-    def _notify_signal_invalidation(self, signal: TradingSignal, reasons: List[str]):
+    def _notify_signal_invalidation(self, signal_data: dict, reasons: List[str]):
         """
         Send notification when signal is invalidated
 
         Args:
-            signal: Invalidated signal
+            signal_data: Dict with signal data (symbol, timeframe, signal_type, confidence)
             reasons: Reasons for invalidation
         """
         try:
@@ -555,10 +571,10 @@ class SignalValidator:
             notifier = get_telegram_notifier()
             message = (
                 f"❌ Signal Invalidated\n\n"
-                f"Symbol: {signal.symbol}\n"
-                f"Timeframe: {signal.timeframe}\n"
-                f"Direction: {signal.signal_type}\n"
-                f"Confidence: {signal.confidence:.1f}%\n"
+                f"Symbol: {signal_data['symbol']}\n"
+                f"Timeframe: {signal_data['timeframe']}\n"
+                f"Direction: {signal_data['signal_type']}\n"
+                f"Confidence: {signal_data['confidence']:.1f}%\n"
                 f"Reasons:\n" + "\n".join(f"  • {r}" for r in reasons)
             )
             notifier.send_message(message)
