@@ -2457,11 +2457,35 @@ def sync_trades(account, db):
                 existing_trade.profit = trade_data.get('profit')
                 existing_trade.commission = trade_data.get('commission')
                 existing_trade.swap = trade_data.get('swap')
-                # ✅ FIX: Update SL/TP from heartbeat (critical for trailing stop tracking!)
-                if trade_data.get('sl') is not None:
-                    existing_trade.sl = trade_data.get('sl')
-                if trade_data.get('tp') is not None:
-                    existing_trade.tp = trade_data.get('tp')
+
+                # ✅ FIX: Preserve SL/TP on close - don't overwrite with 0!
+                # When trade closes, EA sends sl=0, tp=0 (position doesn't exist anymore)
+                # But we need to keep the last known SL/TP for analysis
+                incoming_sl = trade_data.get('sl')
+                incoming_tp = trade_data.get('tp')
+
+                # Only update SL/TP if trade is still OPEN
+                # When closing, preserve the last known values
+                if new_status == 'open':
+                    # Trade is open - update SL/TP from EA heartbeat
+                    if incoming_sl is not None:
+                        existing_trade.sl = incoming_sl
+                        # ✅ Set initial_sl if not set yet (for trades opened before this fix)
+                        if existing_trade.initial_sl is None and incoming_sl != 0:
+                            existing_trade.initial_sl = incoming_sl
+                    if incoming_tp is not None:
+                        existing_trade.tp = incoming_tp
+                        # ✅ Set initial_tp if not set yet (for trades opened before this fix)
+                        if existing_trade.initial_tp is None and incoming_tp != 0:
+                            existing_trade.initial_tp = incoming_tp
+                else:
+                    # Trade is closing/closed - PRESERVE existing SL/TP, don't overwrite with 0
+                    # Keep existing_trade.sl and existing_trade.tp unchanged
+                    logger.debug(
+                        f"Trade {existing_trade.ticket} closing - preserving SL={existing_trade.sl}, "
+                        f"TP={existing_trade.tp} (EA sent: sl={incoming_sl}, tp={incoming_tp})"
+                    )
+
                 existing_trade.updated_at = datetime.utcnow()
                 
                 # ✅ PHASE 7: Exit Enhancement - Calculate metrics when trade closes
