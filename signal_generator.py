@@ -241,8 +241,41 @@ class SignalGenerator:
             rules_confidence
         )
 
+        # Multi-Timeframe Conflict Detection
+        # Check if this signal conflicts with higher timeframes and adjust confidence
+        from multi_timeframe_analyzer import MultiTimeframeAnalyzer
+
+        mtf_result = MultiTimeframeAnalyzer.check_conflict(
+            current_signal_type=signal_type,
+            current_timeframe=self.timeframe,
+            symbol=self.symbol,
+            account_id=self.account_id
+        )
+
+        # Apply MTF adjustment to final confidence
+        mtf_adjustment = mtf_result['confidence_adjustment']
+        if mtf_adjustment != 0:
+            final_confidence = max(0.0, min(100.0, final_confidence + mtf_adjustment))
+
+            if mtf_result['has_conflict']:
+                logger.warning(
+                    f"⚠️ MTF Conflict: {self.symbol} {self.timeframe} {signal_type} | "
+                    f"Confidence: {final_confidence - mtf_adjustment:.1f}% → {final_confidence:.1f}% "
+                    f"({mtf_adjustment:+.1f}%) | {mtf_result['reason']}"
+                )
+            else:
+                logger.info(
+                    f"✅ MTF Aligned: {self.symbol} {self.timeframe} {signal_type} | "
+                    f"Confidence: {final_confidence - mtf_adjustment:.1f}% → {final_confidence:.1f}% "
+                    f"({mtf_adjustment:+.1f}%) | {mtf_result['reason']}"
+                )
+
         # Collect reasons
         reasons = [sig['reason'] for sig in signals]
+
+        # Add MTF reason if there was an adjustment
+        if mtf_adjustment != 0:
+            reasons.append(mtf_result['reason'])
 
         # Add ML reason if used
         if ml_confidence is not None and ab_test_group != 'rules_only':

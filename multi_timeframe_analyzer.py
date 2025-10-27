@@ -32,10 +32,11 @@ class MultiTimeframeAnalyzer:
         'MN1': 8
     }
 
-    # Confidence penalties for conflicts
-    CONFLICT_PENALTY_ADJACENT = 10.0  # H1 vs H4 = -10%
-    CONFLICT_PENALTY_FAR = 15.0       # H1 vs D1 = -15%
-    CONFLICT_BONUS_ALIGNED = 5.0      # All aligned = +5%
+    # Confidence penalties for conflicts (ENHANCED)
+    # When higher TF has strong confidence, strongly penalize conflicting lower TF
+    CONFLICT_PENALTY_ADJACENT = 20.0  # H1 vs H4 = -20% (was -10%)
+    CONFLICT_PENALTY_FAR = 30.0       # H1 vs D1 = -30% (was -15%)
+    CONFLICT_BONUS_ALIGNED = 10.0     # All aligned = +10% (was +5%)
 
     @classmethod
     def get_timeframe_rank(cls, timeframe: str) -> int:
@@ -171,7 +172,7 @@ class MultiTimeframeAnalyzer:
                         f"({conflict['confidence']:.0f}%)"
                     )
 
-                result['confidence_adjustment'] = -min(total_penalty, 25.0)  # Max -25%
+                result['confidence_adjustment'] = -min(total_penalty, 40.0)  # Max -40% (was -25%)
                 result['reason'] = (
                     f"Conflicts with higher timeframes: {', '.join(conflict_reasons)}"
                 )
@@ -184,8 +185,8 @@ class MultiTimeframeAnalyzer:
             elif aligned:
                 result['aligned_signals'] = aligned
 
-                # Bonus for alignment (max +5%)
-                bonus = min(cls.CONFLICT_BONUS_ALIGNED, len(aligned) * 2.0)
+                # Bonus for alignment (max +10%, was +5%)
+                bonus = min(cls.CONFLICT_BONUS_ALIGNED, len(aligned) * 5.0)
                 result['confidence_adjustment'] = bonus
                 result['reason'] = (
                     f"Aligned with {len(aligned)} higher timeframe(s)"
