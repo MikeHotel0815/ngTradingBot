@@ -239,11 +239,17 @@ class SignalValidator:
     def _validate_rsi(self, snapshot: Dict, indicators: TechnicalIndicators, signal_type: str) -> tuple[bool, str]:
         """Validate RSI indicator"""
         current_rsi = indicators.calculate_rsi()
-        if not current_rsi:
+        if not current_rsi or not isinstance(current_rsi, dict):
             return (False, "RSI data unavailable")
 
-        snapshot_value = snapshot['value']
-        current_value = current_rsi['value']
+        if not isinstance(snapshot, dict):
+            return (False, "RSI snapshot data invalid")
+
+        snapshot_value = snapshot.get('value')
+        current_value = current_rsi.get('value') if isinstance(current_rsi, dict) else None
+
+        if snapshot_value is None or current_value is None:
+            return (False, "RSI data incomplete")
 
         # For BUY: RSI should still be in oversold or neutral zone
         if signal_type == 'BUY':
@@ -419,11 +425,14 @@ class SignalValidator:
     def _validate_obv(self, snapshot: Dict, indicators: TechnicalIndicators, signal_type: str) -> tuple[bool, str]:
         """Validate OBV indicator"""
         current_obv = indicators.calculate_obv()
-        if not current_obv:
+        if not current_obv or not isinstance(current_obv, dict):
             return (False, "OBV data unavailable")
 
+        if not isinstance(snapshot, dict):
+            return (False, "OBV snapshot data invalid")
+
         snapshot_trend = snapshot.get('trend')
-        current_trend = current_obv.get('trend')
+        current_trend = current_obv.get('trend') if isinstance(current_obv, dict) else None
 
         if snapshot_trend and current_trend:
             # For BUY: OBV trend should still be bullish
@@ -447,7 +456,8 @@ class SignalValidator:
             reasons: Reasons for invalidation
         """
         try:
-            from telegram_utils import send_telegram_message
+            from telegram_notifier import get_telegram_notifier
+            notifier = get_telegram_notifier()
             message = (
                 f"❌ Signal Invalidated\n\n"
                 f"Symbol: {signal.symbol}\n"
@@ -456,7 +466,7 @@ class SignalValidator:
                 f"Confidence: {signal.confidence:.1f}%\n"
                 f"Reasons:\n" + "\n".join(f"  • {r}" for r in reasons)
             )
-            send_telegram_message(message)
+            notifier.send_message(message)
         except Exception as e:
             logger.warning(f"Failed to send invalidation notification: {e}")
 

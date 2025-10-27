@@ -41,7 +41,7 @@ class TechnicalIndicators:
         self.account_id = account_id
         self.symbol = symbol
         self.timeframe = timeframe
-        self.cache_ttl = cache_ttl
+        self.cache_ttl = max(int(cache_ttl) if cache_ttl else 300, 1)  # Ensure positive integer
         self.risk_profile = risk_profile
         self.redis = get_redis()
 

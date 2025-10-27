@@ -35,7 +35,7 @@ class PatternRecognizer:
         self.account_id = account_id
         self.symbol = symbol
         self.timeframe = timeframe
-        self.cache_ttl = cache_ttl
+        self.cache_ttl = max(int(cache_ttl) if cache_ttl else 60, 1)  # Ensure positive integer
         self.redis = get_redis()
 
     def _cache_key(self) -> str:
