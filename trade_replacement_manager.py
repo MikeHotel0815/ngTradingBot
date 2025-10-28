@@ -12,6 +12,7 @@ Key Features:
 """
 
 import logging
+import uuid
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from sqlalchemy.orm import Session
@@ -226,14 +227,15 @@ class TradeReplacementManager:
             Command object or None if failed
         """
         try:
-            # Create close command
+            # Create close command with UUID
             command = Command(
+                id=str(uuid.uuid4()),  # 🔧 FIX: Generate UUID for command ID
                 account_id=account_id,
                 command_type='close_position',
                 status='pending',
                 payload={
                     'ticket': trade.ticket,
-                    'symbol': trade.symbol,  # ✅ FIX: symbol goes in payload, not as direct parameter
+                    'symbol': trade.symbol,
                     'reason': f'Trade Replacement: {reason}',
                     'close_type': 'opportunity_cost'
                 }
