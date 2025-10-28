@@ -20,7 +20,7 @@ from typing import Dict, List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
 from database import ScopedSession
-from models import TradingSignal, Trade, Account, Command, SymbolTradingConfig
+from models import TradingSignal, Trade, Account, Command, SymbolTradingConfig, BrokerSymbol
 from redis_client import get_redis
 from timezone_manager import tz, log_with_timezone
 
@@ -1563,14 +1563,24 @@ class AutoTrader:
                     # Apply risk multiplier
                     adjusted_volume = base_volume * float(config.risk_multiplier)
 
-                    # Clamp to safe limits
-                    volume = max(0.01, min(adjusted_volume, 1.0))
+                    # Get broker symbol info for volume step
+                    broker_symbol = db.query(BrokerSymbol).filter_by(symbol=signal.symbol).first()
+                    volume_step = float(broker_symbol.volume_step) if broker_symbol and broker_symbol.volume_step else 0.01
+                    volume_min = float(broker_symbol.volume_min) if broker_symbol and broker_symbol.volume_min else 0.01
+                    volume_max = float(broker_symbol.volume_max) if broker_symbol and broker_symbol.volume_max else 1.0
+
+                    # Round to volume step to prevent MT5 "All filling modes failed" error
+                    # Example: 0.0155 with step 0.01 → round(0.0155/0.01)*0.01 = 0.02
+                    adjusted_volume = round(adjusted_volume / volume_step) * volume_step
+
+                    # Clamp to broker limits
+                    volume = max(volume_min, min(adjusted_volume, volume_max))
 
                     if config.risk_multiplier != 1.0:
                         logger.info(
                             f"📊 {signal.symbol} {signal.signal_type}: "
                             f"Volume adjusted by risk multiplier {config.risk_multiplier}x: "
-                            f"{base_volume:.2f} → {volume:.2f}"
+                            f"{base_volume:.2f} → {volume:.2f} (rounded to step {volume_step})"
                         )
                 except Exception as e:
                     logger.warning(f"Could not apply risk multiplier: {e}")
