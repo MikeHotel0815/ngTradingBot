@@ -529,8 +529,8 @@ class CoreCommunicationManager:
                         volume=ea_trade['volume'],
                         open_price=ea_trade['open_price'],
                         open_time=datetime.fromtimestamp(ea_trade['open_time']) if 'open_time' in ea_trade else datetime.utcnow(),
-                        current_sl=ea_trade.get('sl', 0.0),
-                        current_tp=ea_trade.get('tp', 0.0),
+                        sl=ea_trade.get('sl', 0.0),  # 🔧 FIX: Changed from current_sl to sl
+                        tp=ea_trade.get('tp', 0.0),  # 🔧 FIX: Changed from current_tp to tp
                         initial_sl=initial_sl,  # From command payload, NOT from EA
                         initial_tp=initial_tp,  # From command payload, NOT from EA
                         status='open',
@@ -559,13 +559,13 @@ class CoreCommunicationManager:
                         # Update SL/TP if changed
                         ea_sl = ea_trade.get('sl', 0.0)
                         ea_tp = ea_trade.get('tp', 0.0)
-                        
-                        if trade.current_sl != ea_sl or trade.current_tp != ea_tp:
-                            old_sl = trade.current_sl
-                            old_tp = trade.current_tp
-                            trade.current_sl = ea_sl
-                            trade.current_tp = ea_tp
-                            
+
+                        if trade.sl != ea_sl or trade.tp != ea_tp:  # 🔧 FIX: Changed from current_sl/current_tp to sl/tp
+                            old_sl = trade.sl
+                            old_tp = trade.tp
+                            trade.sl = ea_sl  # 🔧 FIX: Changed from current_sl to sl
+                            trade.tp = ea_tp  # 🔧 FIX: Changed from current_tp to tp
+
                             reconciliation['changes'].append(
                                 f"Updated SL/TP for {ticket}: "
                                 f"SL {old_sl}->{ea_sl}, TP {old_tp}->{ea_tp}"

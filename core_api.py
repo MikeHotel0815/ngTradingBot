@@ -588,8 +588,8 @@ def register_trade_endpoints(app):
                     volume=volume,
                     open_price=open_price,
                     open_time=datetime.fromtimestamp(timestamp) if timestamp else datetime.utcnow(),
-                    current_sl=sl,
-                    current_tp=tp,
+                    sl=sl,  # 🔧 FIX: Changed from current_sl to sl
+                    tp=tp,  # 🔧 FIX: Changed from current_tp to tp
                     initial_sl=sl,  # Store initial SL for R:R calculation
                     initial_tp=tp,  # Store initial TP for R:R calculation
                     status='open',
@@ -740,13 +740,13 @@ def register_trade_endpoints(app):
                         'status': 'error',
                         'message': f'Trade {ticket} not found'
                     }), 404
-                
-                old_sl = trade.current_sl
-                old_tp = trade.current_tp
-                
-                trade.current_sl = sl
-                trade.current_tp = tp
-                
+
+                old_sl = trade.sl  # 🔧 FIX: Changed from current_sl to sl
+                old_tp = trade.tp  # 🔧 FIX: Changed from current_tp to tp
+
+                trade.sl = sl  # 🔧 FIX: Changed from current_sl to sl
+                trade.tp = tp  # 🔧 FIX: Changed from current_tp to tp
+
                 db.commit()
                 
                 logger.info(
