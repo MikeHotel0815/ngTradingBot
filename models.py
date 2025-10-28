@@ -731,16 +731,15 @@ class GlobalSettings(Base):
 
 
 class IndicatorScore(Base):
-    """Symbol-specific indicator performance scores - GLOBAL
+    """Symbol-specific indicator performance scores
 
-    Tracks how well each indicator performs for each symbol.
-    NOTE: Indicator scores are now GLOBAL (no account_id). Performance metrics are universal.
-    Database migration completed to remove account_id column.
+    Tracks how well each indicator performs for each symbol per account.
+    NOTE: account_id is REQUIRED (database has NOT NULL constraint despite comments suggesting it was removed)
     """
     __tablename__ = 'indicator_scores'
 
     id = Column(Integer, primary_key=True)
-    # account_id removed - indicator scores are global (database migration completed)
+    account_id = Column(Integer, ForeignKey('accounts.id'), nullable=False, index=True)  # 🔧 FIX: Re-added (never removed from DB)
     symbol = Column(String(20), nullable=False, index=True)
     timeframe = Column(String(10), nullable=False, index=True)  # M5, M15, H1, H4, D1
     indicator_name = Column(String(50), nullable=False, index=True)  # RSI, MACD, ADX, etc.
@@ -762,10 +761,10 @@ class IndicatorScore(Base):
     last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     last_signal_at = Column(DateTime)  # When last signal was generated
 
-    # Composite index for fast lookups (account_id removed - global data)
+    # Composite index for fast lookups
     __table_args__ = (
-        Index('idx_indicator_scores_lookup', 'symbol', 'timeframe', 'indicator_name', unique=True),
-        Index('idx_indicator_scores_symbol', 'symbol', 'indicator_name'),
+        Index('idx_indicator_scores_lookup', 'account_id', 'symbol', 'timeframe', 'indicator_name', unique=True),
+        Index('idx_indicator_scores_symbol', 'account_id', 'symbol', 'indicator_name'),
     )
 
     def __repr__(self):
@@ -833,23 +832,27 @@ class IndicatorScore(Base):
         return score
 
     @classmethod
-    def get_symbol_scores(cls, db, symbol: str, timeframe: str):
+    def get_symbol_scores(cls, db, account_id: int, symbol: str, timeframe: str):
         """Get all indicator scores for a symbol/timeframe
 
-        NOTE: account_id parameter removed - indicator scores are now global
+        Args:
+            account_id: Account ID (required - DB has NOT NULL constraint)
         """
         return db.query(cls).filter_by(
+            account_id=account_id,
             symbol=symbol,
             timeframe=timeframe
         ).all()
 
     @classmethod
-    def get_top_indicators(cls, db, symbol: str, timeframe: str, limit: int = 5):
+    def get_top_indicators(cls, db, account_id: int, symbol: str, timeframe: str, limit: int = 5):
         """Get top performing indicators for a symbol
 
-        NOTE: account_id parameter removed - indicator scores are now global
+        Args:
+            account_id: Account ID (required - DB has NOT NULL constraint)
         """
         return db.query(cls).filter_by(
+            account_id=account_id,
             symbol=symbol,
             timeframe=timeframe
         ).filter(cls.total_signals >= 5).order_by(cls.score.desc()).limit(limit).all()
