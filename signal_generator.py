@@ -895,10 +895,11 @@ class SignalGenerator:
             db.commit()
             db.close()
 
+            ml_conf_str = f"{ml_confidence_raw:.1f}" if ml_confidence_raw is not None else "N/A"
             logger.debug(
                 f"ML Enhancement: {self.symbol} {signal_type} | "
                 f"Rules: {rules_confidence:.1f}% | "
-                f"ML: {ml_confidence_raw:.1f if ml_confidence_raw is not None else 0.0}% | "
+                f"ML: {ml_conf_str}% | "
                 f"Final: {final_confidence:.1f}% | "
                 f"Group: {ab_test_group}"
             )

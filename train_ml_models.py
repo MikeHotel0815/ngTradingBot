@@ -200,14 +200,27 @@ def save_model(model, metrics, feature_importance, model_dir='ml_models/xgboost'
     filename = f"global_v{timestamp}.pkl"
     filepath = os.path.join(model_dir, filename)
 
-    # Save model
+    # Feature names from the training
+    feature_names = [
+        'confidence', 'is_buy', 'tp_distance_pct',
+        'sl_distance_pct', 'volume', 'duration_hours',
+        'risk_reward_ratio'
+    ]
+
+    # Save model (compatible with ml_confidence_model format)
     model_data = {
         'model': model,
-        'feature_names': list(metrics.keys()),
+        'scaler': None,  # We don't use scaling for these features
+        'feature_names': feature_names,
         'metrics': metrics,
         'feature_importance': feature_importance,
         'trained_at': datetime.now().isoformat(),
-        'version': timestamp
+        'version': timestamp,
+        'training_params': {
+            'n_estimators': 100,
+            'max_depth': 6,
+            'learning_rate': 0.1
+        }
     }
 
     with open(filepath, 'wb') as f:

@@ -88,6 +88,9 @@ services:
     env_file:
       - .env.telegram
     command: python unified_workers.py
+    volumes:
+      - ./ml_models:/app/ml_models
+      - ./data:/app/data
     environment:
       - PYTHONUNBUFFERED=1
       - DATABASE_URL=postgresql://trader:${DB_PASSWORD:-tradingbot_secret_2025}@postgres:5432/ngtradingbot

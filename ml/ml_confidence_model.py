@@ -466,7 +466,7 @@ class XGBoostConfidenceModel:
             model_data = pickle.load(f)
 
         self.model = model_data['model']
-        self.scaler = model_data['scaler']
+        self.scaler = model_data.get('scaler', None)  # Scaler is optional
         self.feature_names = model_data['feature_names']
         self.feature_importance = model_data.get('feature_importance', {})
         self.label_encoders = model_data.get('label_encoders', {})  # Load encoders
