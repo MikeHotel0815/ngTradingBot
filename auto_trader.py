@@ -1206,13 +1206,22 @@ class AutoTrader:
 
             logger.info(f"✓ Duplicate check passed: No open {signal.symbol} {signal.timeframe} positions or pending commands")
 
+            # Round TP/SL to symbol-specific decimal places (digits)
+            broker_symbol = db.query(BrokerSymbol).filter_by(symbol=signal.symbol).first()
+            digits = int(broker_symbol.digits) if broker_symbol and broker_symbol.digits else 5
+
+            # Round to correct decimal places to prevent MT5 "All filling modes failed" error
+            adjusted_sl = round(adjusted_sl, digits) if adjusted_sl else 0.0
+            tp_price = round(tp_price, digits) if tp_price else 0.0
+            volume = round(volume, 2)  # Volume should be 2 decimal places max
+
             # Store signal_id and timeframe in payload for trade linking
             payload_data = {
                 'symbol': signal.symbol,
                 'order_type': signal.signal_type,  # BUY or SELL
                 'volume': volume,
-                'sl': adjusted_sl,  # Use adjusted SL
-                'tp': tp_price,
+                'sl': adjusted_sl,  # Use adjusted SL (rounded)
+                'tp': tp_price,  # Use rounded TP
                 'comment': f"Auto-Trade Signal #{signal.id} ({signal.timeframe})",
                 'signal_id': signal.id,  # IMPORTANT: Link to signal
                 'timeframe': signal.timeframe  # IMPORTANT: Store timeframe for limiting
