@@ -439,7 +439,14 @@ class SymbolDynamicManager:
                     f"Min Confidence: {original_min_conf:.0f}% → {adjusted_min_conf:.0f}% (+20)"
                 )
             else:
-                logger.info(f"➡️ NEUTRAL TREND: {signal.symbol} {signal.signal_type} - no adjustment | Threshold stays at {original_min_conf}%")
+                # NEUTRAL TREND: Slight reduction (-5 points) - market has no clear direction
+                # This helps signals pass during neutral/ranging markets
+                adjusted_min_conf = max(Decimal('45.0'), original_min_conf - Decimal('5.0'))
+                config.min_confidence_threshold = adjusted_min_conf  # Temporarily modify
+                logger.info(
+                    f"➡️ NEUTRAL TREND: {signal.symbol} {signal.signal_type} - neutral market | "
+                    f"Min Confidence: {original_min_conf:.0f}% → {adjusted_min_conf:.0f}% (-5)"
+                )
 
         except Exception as trend_err:
             logger.warning(f"⚠️ Trend-awareness check failed for {signal.symbol}: {trend_err}", exc_info=True)
