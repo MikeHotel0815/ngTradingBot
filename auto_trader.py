@@ -771,6 +771,45 @@ class AutoTrader:
                     f"risk={config.risk_multiplier}x, WR={config.rolling_winrate or 0}%"
                 )
 
+                # 🔧 NEW: TREND-AWARE CONFIDENCE ADJUSTMENT (Phase 2 - 2025-10-28)
+                # Adjust min_confidence based on trend alignment
+                try:
+                    from technical_indicators import TechnicalIndicators
+
+                    indicators = TechnicalIndicators(signal.symbol, signal.timeframe)
+                    regime = indicators.detect_market_regime()
+                    trend_direction = regime.get('direction', 'neutral')
+
+                    # Check if signal aligns with trend
+                    is_with_trend = False
+                    if signal.signal_type == 'BUY' and trend_direction == 'bullish':
+                        is_with_trend = True
+                    elif signal.signal_type == 'SELL' and trend_direction == 'bearish':
+                        is_with_trend = True
+
+                    # Adjust confidence threshold
+                    if is_with_trend:
+                        # WITH TREND: Lower confidence requirement (-15 points)
+                        old_conf = symbol_min_confidence
+                        symbol_min_confidence = max(45.0, symbol_min_confidence - 15.0)
+                        logger.info(
+                            f"✅ WITH TREND: {signal.symbol} {signal.signal_type} aligned with {trend_direction} trend | "
+                            f"Min Confidence: {old_conf:.0f}% → {symbol_min_confidence:.0f}% (-15)"
+                        )
+                    elif trend_direction != 'neutral':
+                        # AGAINST TREND: Higher confidence requirement (+20 points)
+                        old_conf = symbol_min_confidence
+                        symbol_min_confidence = min(95.0, symbol_min_confidence + 20.0)
+                        logger.warning(
+                            f"⚠️ AGAINST TREND: {signal.symbol} {signal.signal_type} against {trend_direction} trend | "
+                            f"Min Confidence: {old_conf:.0f}% → {symbol_min_confidence:.0f}% (+20)"
+                        )
+                    else:
+                        logger.debug(f"➡️ NEUTRAL: {signal.symbol} no clear trend direction")
+
+                except Exception as trend_err:
+                    logger.debug(f"Trend-awareness check failed: {trend_err}")
+
             except Exception as e:
                 logger.warning(f"Symbol dynamic config check failed: {e}")
                 # Fallback to legacy symbol_config

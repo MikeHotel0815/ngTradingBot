@@ -1500,17 +1500,19 @@ class TechnicalIndicators:
     def detect_market_regime(self) -> Dict:
         """
         Detect market regime: TRENDING or RANGING
+        🔧 ENHANCED 2025-10-28: Now includes trend DIRECTION (bullish/bearish)
 
         Uses ADX and Bollinger Band width to determine market state
+        Uses EMA cross to determine trend direction
 
         Returns:
-            Dict with regime, strength, and details
+            Dict with regime, strength, direction, and details
         """
         try:
             # Get required data
             df = self._get_ohlc_data(limit=50)
             if df is None or len(df) < 30:
-                return {'regime': 'UNKNOWN', 'strength': 0, 'adx': None, 'bb_width': None}
+                return {'regime': 'UNKNOWN', 'strength': 0, 'direction': 'neutral', 'adx': None, 'bb_width': None}
 
             close = df['close'].values
             high = df['high'].values
@@ -1523,6 +1525,25 @@ class TechnicalIndicators:
             # Calculate Bollinger Band Width (normalized) - measures volatility
             bb_upper, bb_middle, bb_lower = talib.BBANDS(close, timeperiod=20, nbdevup=2, nbdevdn=2)
             bb_width = ((bb_upper[-1] - bb_lower[-1]) / bb_middle[-1]) * 100 if len(bb_upper) > 0 else None
+
+            # 🔧 NEW: Determine trend DIRECTION using EMAs
+            ema_20 = talib.EMA(close, timeperiod=20)
+            ema_50 = talib.EMA(close, timeperiod=50)
+
+            direction = 'neutral'
+            if len(ema_20) > 0 and len(ema_50) > 0:
+                current_ema20 = ema_20[-1]
+                current_ema50 = ema_50[-1]
+
+                # Bullish: EMA20 > EMA50 and price > EMA20
+                if current_ema20 > current_ema50 and close[-1] > current_ema20:
+                    direction = 'bullish'
+                # Bearish: EMA20 < EMA50 and price < EMA20
+                elif current_ema20 < current_ema50 and close[-1] < current_ema20:
+                    direction = 'bearish'
+                # Weak trend or consolidation
+                else:
+                    direction = 'neutral'
 
             # Determine regime
             regime = 'UNKNOWN'
@@ -1553,11 +1574,12 @@ class TechnicalIndicators:
                         regime = 'TRENDING'
                         strength = 50
 
-            logger.debug(f"{self.symbol} {self.timeframe} Market Regime: {regime} (ADX: {current_adx:.1f}, BB Width: {bb_width:.2f}%, Strength: {strength}%)")
+            logger.debug(f"{self.symbol} {self.timeframe} Market Regime: {regime} | Direction: {direction} (ADX: {current_adx:.1f}, BB Width: {bb_width:.2f}%, Strength: {strength}%)")
 
             return {
                 'regime': regime,
                 'strength': strength,
+                'direction': direction,  # 🔧 NEW: bullish/bearish/neutral
                 'adx': float(current_adx) if current_adx else None,
                 'bb_width': float(bb_width) if bb_width else None
             }
