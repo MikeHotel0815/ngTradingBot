@@ -33,7 +33,7 @@ class SLEnforcement:
         'XAUUSD': 100.00, # Gold: Max 100 EUR loss (relaxed from 5 EUR - volatile but profitable)
         'DE40.c': 10.00,  # DAX: Max 10 EUR loss (relaxed from 3 EUR)
         'US500.c': 15.00, # S&P500: Max 15 EUR loss (relaxed from 2 EUR - high frequency)
-        'BTCUSD': 15.00,  # Bitcoin: Max 15 EUR loss (volatile but profitable)
+        'BTCUSD': 25.00,  # Bitcoin: Max 25 EUR loss (relaxed from 15 EUR - 87% WR, +64 EUR/month)
         'ETHUSD': 10.00,  # Ethereum: Max 10 EUR loss (relaxed from 6 EUR)
         'USDJPY': 6.00,   # USDJPY: Max 6 EUR loss (relaxed from 2 EUR)
         'EURUSD': 6.00,   # EURUSD: Max 6 EUR loss (relaxed from 2 EUR)
