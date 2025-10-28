@@ -383,6 +383,7 @@ class SymbolDynamicManager:
     ) -> Tuple[bool, str, SymbolTradingConfig]:
         """
         Determine if a signal should be traded based on symbol config
+        WITH TREND-AWARE CONFIDENCE ADJUSTMENT (Phase 2 - 2025-10-28)
 
         Args:
             db: Database session
@@ -394,10 +395,56 @@ class SymbolDynamicManager:
         """
         config = self.get_config(db, signal.symbol, signal.signal_type)
 
+        # 🔧 TREND-AWARE CONFIDENCE ADJUSTMENT (Phase 2 - 2025-10-28)
+        # Temporarily adjust config.min_confidence_threshold based on trend alignment
+        original_min_conf = config.min_confidence_threshold
+        adjusted_min_conf = original_min_conf
+
+        try:
+            from technical_indicators import TechnicalIndicators
+
+            indicators = TechnicalIndicators(signal.symbol, signal.timeframe)
+            regime = indicators.detect_market_regime()
+            trend_direction = regime.get('direction', 'neutral')
+
+            # Check if signal aligns with trend
+            is_with_trend = False
+            if signal.signal_type == 'BUY' and trend_direction == 'bullish':
+                is_with_trend = True
+            elif signal.signal_type == 'SELL' and trend_direction == 'bearish':
+                is_with_trend = True
+
+            # Adjust confidence threshold
+            if is_with_trend:
+                # WITH TREND: Lower confidence requirement (-15 points)
+                adjusted_min_conf = max(45.0, original_min_conf - 15.0)
+                config.min_confidence_threshold = adjusted_min_conf  # Temporarily modify
+                logger.info(
+                    f"✅ WITH TREND: {signal.symbol} {signal.signal_type} aligned with {trend_direction} trend | "
+                    f"Min Confidence: {original_min_conf:.0f}% → {adjusted_min_conf:.0f}% (-15)"
+                )
+            elif trend_direction != 'neutral':
+                # AGAINST TREND: Higher confidence requirement (+20 points)
+                adjusted_min_conf = min(95.0, original_min_conf + 20.0)
+                config.min_confidence_threshold = adjusted_min_conf  # Temporarily modify
+                logger.warning(
+                    f"⚠️ AGAINST TREND: {signal.symbol} {signal.signal_type} against {trend_direction} trend | "
+                    f"Min Confidence: {original_min_conf:.0f}% → {adjusted_min_conf:.0f}% (+20)"
+                )
+            else:
+                logger.debug(f"➡️ NEUTRAL: {signal.symbol} no clear trend direction")
+
+        except Exception as trend_err:
+            logger.debug(f"Trend-awareness check failed: {trend_err}")
+
+        # Now check with adjusted confidence
         should_trade, reason = config.should_trade(
             signal_confidence=float(signal.confidence),
             market_regime=market_regime
         )
+
+        # Restore original threshold (don't persist the temporary change)
+        config.min_confidence_threshold = original_min_conf
 
         return should_trade, reason, config
 

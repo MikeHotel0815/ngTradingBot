@@ -746,11 +746,21 @@ class AutoTrader:
                     market_regime = None
 
                 # Check if symbol+direction config allows trading
+                # (Trend-aware adjustment happens inside should_trade_signal)
                 should_trade, reason, config = symbol_manager.should_trade_signal(
                     db, signal, market_regime
                 )
 
-                # Use symbol-specific confidence threshold (dynamically adjusted)
+                if not should_trade:
+                    logger.info(
+                        f"🚫 Symbol config blocked {signal.symbol} {signal.signal_type}: {reason}"
+                    )
+                    return {
+                        'execute': False,
+                        'reason': f'Symbol config: {reason}'
+                    }
+
+                # Use symbol-specific confidence threshold
                 symbol_min_confidence = max(
                     self.min_autotrade_confidence,
                     float(config.min_confidence_threshold)
@@ -761,66 +771,6 @@ class AutoTrader:
                     f"Config status={config.status}, conf≥{config.min_confidence_threshold}%, "
                     f"risk={config.risk_multiplier}x, WR={config.rolling_winrate or 0}%"
                 )
-
-                # 🔧 NEW: TREND-AWARE CONFIDENCE ADJUSTMENT (Phase 2 - 2025-10-28)
-                # Adjust min_confidence based on trend alignment BEFORE blocking the trade
-                try:
-                    from technical_indicators import TechnicalIndicators
-
-                    indicators = TechnicalIndicators(signal.symbol, signal.timeframe)
-                    regime = indicators.detect_market_regime()
-                    trend_direction = regime.get('direction', 'neutral')
-
-                    # Check if signal aligns with trend
-                    is_with_trend = False
-                    if signal.signal_type == 'BUY' and trend_direction == 'bullish':
-                        is_with_trend = True
-                    elif signal.signal_type == 'SELL' and trend_direction == 'bearish':
-                        is_with_trend = True
-
-                    # Adjust confidence threshold
-                    if is_with_trend:
-                        # WITH TREND: Lower confidence requirement (-15 points)
-                        old_conf = symbol_min_confidence
-                        symbol_min_confidence = max(45.0, symbol_min_confidence - 15.0)
-                        logger.info(
-                            f"✅ WITH TREND: {signal.symbol} {signal.signal_type} aligned with {trend_direction} trend | "
-                            f"Min Confidence: {old_conf:.0f}% → {symbol_min_confidence:.0f}% (-15)"
-                        )
-                        # Re-check if signal now passes with adjusted confidence
-                        if not should_trade and 'confidence_too_low' in reason:
-                            # Extract original confidence from reason
-                            if signal.confidence >= symbol_min_confidence:
-                                should_trade = True  # Override block!
-                                logger.info(f"✅ WITH TREND override: Signal now passes with adjusted confidence!")
-                    elif trend_direction != 'neutral':
-                        # AGAINST TREND: Higher confidence requirement (+20 points)
-                        old_conf = symbol_min_confidence
-                        symbol_min_confidence = min(95.0, symbol_min_confidence + 20.0)
-                        logger.warning(
-                            f"⚠️ AGAINST TREND: {signal.symbol} {signal.signal_type} against {trend_direction} trend | "
-                            f"Min Confidence: {old_conf:.0f}% → {symbol_min_confidence:.0f}% (+20)"
-                        )
-                        # Re-check if signal still passes with increased confidence
-                        if should_trade and signal.confidence < symbol_min_confidence:
-                            should_trade = False  # Block trade!
-                            reason = f"confidence_too_low_against_trend_{signal.confidence:.1f}<{symbol_min_confidence:.2f}"
-                            logger.warning(f"⚠️ AGAINST TREND block: Signal no longer passes with increased confidence!")
-                    else:
-                        logger.debug(f"➡️ NEUTRAL: {signal.symbol} no clear trend direction")
-
-                except Exception as trend_err:
-                    logger.debug(f"Trend-awareness check failed: {trend_err}")
-
-                # NOW check if trade is still blocked after trend adjustment
-                if not should_trade:
-                    logger.info(
-                        f"🚫 Symbol config blocked {signal.symbol} {signal.signal_type}: {reason}"
-                    )
-                    return {
-                        'execute': False,
-                        'reason': f'Symbol config: {reason}'
-                    }
 
             except Exception as e:
                 logger.warning(f"Symbol dynamic config check failed: {e}")
