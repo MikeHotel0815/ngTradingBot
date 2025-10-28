@@ -807,15 +807,16 @@ class IndicatorScore(Base):
         self.last_updated = datetime.utcnow()
 
     @classmethod
-    def get_or_create(cls, db, symbol: str, timeframe: str, indicator_name: str):
+    def get_or_create(cls, db, symbol: str, timeframe: str, indicator_name: str, account_id: int = 3):
         """Get existing score or create new one with default values
 
-        NOTE: account_id parameter removed - indicator scores are now global
+        NOTE: account_id defaults to 3 (main trading account) for backward compatibility
         """
         score = db.query(cls).filter_by(
             symbol=symbol,
             timeframe=timeframe,
-            indicator_name=indicator_name
+            indicator_name=indicator_name,
+            account_id=account_id
         ).first()
 
         if not score:
@@ -823,6 +824,7 @@ class IndicatorScore(Base):
                 symbol=symbol,
                 timeframe=timeframe,
                 indicator_name=indicator_name,
+                account_id=account_id,  # 🔧 FIX: Added required account_id
                 score=50.0  # Neutral starting score
             )
             db.add(score)
