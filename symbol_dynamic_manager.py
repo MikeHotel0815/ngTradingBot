@@ -403,7 +403,8 @@ class SymbolDynamicManager:
         try:
             from technical_indicators import TechnicalIndicators
 
-            indicators = TechnicalIndicators(signal.symbol, signal.timeframe)
+            # 🔧 FIX: TechnicalIndicators requires account_id as first argument
+            indicators = TechnicalIndicators(self.account_id, signal.symbol, signal.timeframe)
             regime = indicators.detect_market_regime()
             trend_direction = regime.get('direction', 'neutral')
 
