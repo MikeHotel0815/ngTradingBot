@@ -400,6 +400,9 @@ class SymbolDynamicManager:
         original_min_conf = config.min_confidence_threshold
         adjusted_min_conf = original_min_conf
 
+        # 🔧 Convert to Decimal for arithmetic (config uses Decimal type)
+        from decimal import Decimal
+
         try:
             from technical_indicators import TechnicalIndicators
 
@@ -415,10 +418,10 @@ class SymbolDynamicManager:
             elif signal.signal_type == 'SELL' and trend_direction == 'bearish':
                 is_with_trend = True
 
-            # Adjust confidence threshold
+            # Adjust confidence threshold (use Decimal for arithmetic)
             if is_with_trend:
                 # WITH TREND: Lower confidence requirement (-15 points)
-                adjusted_min_conf = max(45.0, original_min_conf - 15.0)
+                adjusted_min_conf = max(Decimal('45.0'), original_min_conf - Decimal('15.0'))
                 config.min_confidence_threshold = adjusted_min_conf  # Temporarily modify
                 logger.info(
                     f"✅ WITH TREND: {signal.symbol} {signal.signal_type} aligned with {trend_direction} trend | "
@@ -426,7 +429,7 @@ class SymbolDynamicManager:
                 )
             elif trend_direction != 'neutral':
                 # AGAINST TREND: Higher confidence requirement (+20 points)
-                adjusted_min_conf = min(95.0, original_min_conf + 20.0)
+                adjusted_min_conf = min(Decimal('95.0'), original_min_conf + Decimal('20.0'))
                 config.min_confidence_threshold = adjusted_min_conf  # Temporarily modify
                 logger.warning(
                     f"⚠️ AGAINST TREND: {signal.symbol} {signal.signal_type} against {trend_direction} trend | "
