@@ -41,9 +41,9 @@ class IndicatorScorer:
         """
         db = ScopedSession()
         try:
-            # IndicatorScore is now GLOBAL (no account_id)
+            # 🔧 FIX: IndicatorScore requires account_id (NOT NULL constraint)
             score_obj = IndicatorScore.get_or_create(
-                db, self.symbol, self.timeframe, indicator_name
+                db, self.symbol, self.timeframe, indicator_name, self.account_id
             )
 
             # Convert score (0-100) to weight (0.0-1.0)
@@ -92,9 +92,9 @@ class IndicatorScorer:
         """
         db = ScopedSession()
         try:
-            # IndicatorScore is now GLOBAL (no account_id)
+            # 🔧 FIX: IndicatorScore requires account_id (NOT NULL constraint)
             score_obj = IndicatorScore.get_or_create(
-                db, self.symbol, self.timeframe, indicator_name
+                db, self.symbol, self.timeframe, indicator_name, self.account_id
             )
 
             old_score = score_obj.score

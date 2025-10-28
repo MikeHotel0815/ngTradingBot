@@ -435,7 +435,7 @@ class SymbolDynamicManager:
                 logger.debug(f"➡️ NEUTRAL: {signal.symbol} no clear trend direction")
 
         except Exception as trend_err:
-            logger.debug(f"Trend-awareness check failed: {trend_err}")
+            logger.warning(f"⚠️ Trend-awareness check failed for {signal.symbol}: {trend_err}", exc_info=True)
 
         # Now check with adjusted confidence
         should_trade, reason = config.should_trade(
