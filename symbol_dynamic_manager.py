@@ -393,6 +393,7 @@ class SymbolDynamicManager:
         Returns:
             (should_trade, reason, config)
         """
+        logger.info(f"🔍 should_trade_signal CALLED: {signal.symbol} {signal.signal_type} | Confidence: {signal.confidence}%")
         config = self.get_config(db, signal.symbol, signal.signal_type)
 
         # 🔧 TREND-AWARE CONFIDENCE ADJUSTMENT (Phase 2 - 2025-10-28)
@@ -406,12 +407,12 @@ class SymbolDynamicManager:
         try:
             from technical_indicators import TechnicalIndicators
 
-            logger.debug(f"🔍 Trend-aware: Checking {signal.symbol} {signal.signal_type} trend...")
+            logger.info(f"🔍 Trend-aware START: {signal.symbol} {signal.signal_type} | Original threshold: {original_min_conf}%")
             # 🔧 FIX: TechnicalIndicators requires account_id as first argument
             indicators = TechnicalIndicators(self.account_id, signal.symbol, signal.timeframe)
             regime = indicators.detect_market_regime()
             trend_direction = regime.get('direction', 'neutral')
-            logger.debug(f"🔍 Trend-aware: {signal.symbol} trend_direction={trend_direction}")
+            logger.info(f"🔍 Trend detected: {signal.symbol} → {trend_direction}")
 
             # Check if signal aligns with trend
             is_with_trend = False
@@ -438,7 +439,7 @@ class SymbolDynamicManager:
                     f"Min Confidence: {original_min_conf:.0f}% → {adjusted_min_conf:.0f}% (+20)"
                 )
             else:
-                logger.debug(f"➡️ NEUTRAL: {signal.symbol} no clear trend direction")
+                logger.info(f"➡️ NEUTRAL TREND: {signal.symbol} {signal.signal_type} - no adjustment | Threshold stays at {original_min_conf}%")
 
         except Exception as trend_err:
             logger.warning(f"⚠️ Trend-awareness check failed for {signal.symbol}: {trend_err}", exc_info=True)
