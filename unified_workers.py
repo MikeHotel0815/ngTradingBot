@@ -517,11 +517,37 @@ def import_worker_functions():
                 _trade_monitor.monitor_once(db)
             finally:
                 db.close()
-        
+
         workers['trade_monitor'] = run_trade_monitor_cycle
-        
+
     except Exception as e:
         logger.error(f"Failed to import trade_monitor: {e}")
+
+    try:
+        # ✅ NEW: Smart Trailing Stop V2 - Hybrid Adaptive System
+        # Uses 60s volatility analysis + ML reversal prediction + ATR
+        logger.info("📦 Importing smart_trailing_stop_v2...")
+        from smart_trailing_stop_v2 import get_smart_trailing_v2
+        from database import ScopedSession
+
+        _trailing_v2 = get_smart_trailing_v2()
+
+        def run_smart_trailing_v2():
+            """Run hybrid adaptive trailing stop"""
+            db = ScopedSession()
+            try:
+                stats = _trailing_v2.process_all(db)
+                if stats['trailed'] > 0:
+                    logger.info(f"🎯 Hybrid TS V2: Trailed {stats['trailed']} trades")
+            except Exception as e:
+                logger.error(f"Error in smart trailing v2: {e}")
+            finally:
+                db.close()
+
+        workers['smart_trailing_v2'] = run_smart_trailing_v2
+
+    except Exception as e:
+        logger.error(f"Failed to import smart_trailing_stop_v2: {e}")
     
     try:
         # ✅ NEW: MFE/MAE Tracker - Maximum Favorable/Adverse Excursion
@@ -647,6 +673,10 @@ def main():
         'ml_outcome_updater': {
             'function': worker_functions.get('ml_outcome_updater'),
             'interval': int(os.getenv('ML_OUTCOME_UPDATE_INTERVAL', 300)),  # 5 minutes - update ML outcomes
+        },
+        'smart_trailing_v2': {
+            'function': worker_functions.get('smart_trailing_v2'),
+            'interval': int(os.getenv('SMART_TRAILING_V2_INTERVAL', 10)),  # 10 seconds - adaptive (5-30s based on volatility)
         },
     }
     
