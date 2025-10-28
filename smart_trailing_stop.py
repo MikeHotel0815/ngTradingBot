@@ -35,14 +35,16 @@ class SmartTrailingStop:
 
     def __init__(self):
         # Symbol-specific base configs
+        # 🔧 OPTIMIZED 2025-10-28: Reduced ATR multipliers for tighter trailing (higher profits)
         self.configs = {
             'BTCUSD': {'min_profit_pts': 100, 'atr_period': 14, 'atr_multiplier': 1.5, 'point': 0.01},
             'ETHUSD': {'min_profit_pts': 50, 'atr_period': 14, 'atr_multiplier': 1.5, 'point': 0.01},
-            'XAUUSD': {'min_profit_pts': 10, 'atr_period': 14, 'atr_multiplier': 1.2, 'point': 0.01},
-            'DE40.c': {'min_profit_pts': 30, 'atr_period': 14, 'atr_multiplier': 2.0, 'point': 1.0},
+            'XAUUSD': {'min_profit_pts': 10, 'atr_period': 14, 'atr_multiplier': 1.0, 'point': 0.01},  # 1.2 → 1.0 (tighter trail)
+            'DE40.c': {'min_profit_pts': 30, 'atr_period': 14, 'atr_multiplier': 1.8, 'point': 1.0},   # 2.0 → 1.8 (tighter)
             'EURUSD': {'min_profit_pts': 5, 'atr_period': 14, 'atr_multiplier': 1.0, 'point': 0.00001},
             'GBPUSD': {'min_profit_pts': 5, 'atr_period': 14, 'atr_multiplier': 1.0, 'point': 0.00001},
             'USDJPY': {'min_profit_pts': 5, 'atr_period': 14, 'atr_multiplier': 1.0, 'point': 0.001},
+            'US500.c': {'min_profit_pts': 8, 'atr_period': 14, 'atr_multiplier': 1.3, 'point': 0.01},  # NEW: Tighter for US500
         }
         self.default = {'min_profit_pts': 10, 'atr_period': 14, 'atr_multiplier': 1.0, 'point': 0.00001}
 
@@ -276,10 +278,10 @@ class SmartTrailingStop:
 
             # === TP EXTENSION (Bonus Feature) ===
             actions = {}
-            
+
             # If 90%+ to TP and strong momentum → extend TP
             if pct_to_tp >= 90 and self.tp_extensions.get(trade.ticket, 0) < 2:
-                extension_dist = tp_dist * 0.5  # 50% extension
+                extension_dist = tp_dist * 0.75  # 🔧 OPTIMIZED: 75% extension (was 50%)
                 if is_buy:
                     new_tp = tp + extension_dist
                 else:
