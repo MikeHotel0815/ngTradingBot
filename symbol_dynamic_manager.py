@@ -406,10 +406,12 @@ class SymbolDynamicManager:
         try:
             from technical_indicators import TechnicalIndicators
 
+            logger.debug(f"🔍 Trend-aware: Checking {signal.symbol} {signal.signal_type} trend...")
             # 🔧 FIX: TechnicalIndicators requires account_id as first argument
             indicators = TechnicalIndicators(self.account_id, signal.symbol, signal.timeframe)
             regime = indicators.detect_market_regime()
             trend_direction = regime.get('direction', 'neutral')
+            logger.debug(f"🔍 Trend-aware: {signal.symbol} trend_direction={trend_direction}")
 
             # Check if signal aligns with trend
             is_with_trend = False
