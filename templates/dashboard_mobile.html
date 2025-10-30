@@ -628,6 +628,14 @@
                 </div>
             </div>
 
+            <!-- P/L Charts -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">📊 P/L Performance</div>
+                </div>
+                <div id="pnl-charts-container"></div>
+            </div>
+
             <div class="card">
                 <div class="card-header">
                     <div class="card-title">System Status</div>
@@ -1053,6 +1061,18 @@
 
         // Initial load
         refreshData();
+    </script>
+
+    <!-- Chart.js for P/L Charts -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+    <!-- P/L Charts -->
+    <script src="/static/js/pnl_charts.js"></script>
+    <script>
+        // Initialize P/L Charts
+        if (typeof PnLCharts !== 'undefined') {
+            PnLCharts.init('pnl-charts-container');
+        }
     </script>
 </body>
 </html>
