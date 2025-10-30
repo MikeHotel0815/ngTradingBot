@@ -75,14 +75,19 @@ class PnLAnalyzer:
             '12h': timedelta(hours=12),
             '24h': timedelta(hours=24),
             '1w': timedelta(weeks=1),
-            '1y': timedelta(days=365)
+            '1y': timedelta(days=365),
+            'ytd': None  # Year-to-date (special handling)
         }
 
         if interval not in intervals:
             raise ValueError(f"Invalid interval: {interval}. Must be one of {list(intervals.keys())}")
 
-        period_delta = intervals[interval]
-        period_start = now - period_delta
+        # Special handling for year-to-date
+        if interval == 'ytd':
+            period_start = datetime(now.year, 1, 1)  # Start of current year
+        else:
+            period_delta = intervals[interval]
+            period_start = now - period_delta
 
         # Query trades in the period
         trades = self.db.query(Trade).filter(
@@ -153,14 +158,19 @@ class PnLAnalyzer:
             '12h': timedelta(hours=12),
             '24h': timedelta(hours=24),
             '1w': timedelta(weeks=1),
-            '1y': timedelta(days=365)
+            '1y': timedelta(days=365),
+            'ytd': None  # Year-to-date
         }
 
         if interval not in intervals:
             raise ValueError(f"Invalid interval: {interval}")
 
-        period_delta = intervals[interval]
-        period_start = now - period_delta
+        # Special handling for year-to-date
+        if interval == 'ytd':
+            period_start = datetime(now.year, 1, 1)
+        else:
+            period_delta = intervals[interval]
+            period_start = now - period_delta
 
         # Auto-determine bucket size
         if bucket_size == 'auto':
@@ -172,6 +182,8 @@ class PnLAnalyzer:
                 bucket_delta = timedelta(hours=1)
             elif interval == '1w':
                 bucket_delta = timedelta(hours=6)
+            elif interval == 'ytd':
+                bucket_delta = timedelta(days=7)
             else:  # 1y
                 bucket_delta = timedelta(days=7)
         else:
@@ -252,7 +264,7 @@ class PnLAnalyzer:
     def get_multi_interval_summary(self) -> Dict:
         """Get P/L summary for all intervals"""
 
-        intervals = ['1h', '12h', '24h', '1w', '1y']
+        intervals = ['1h', '12h', '24h', '1w', 'ytd']
         summary = {}
 
         for interval in intervals:

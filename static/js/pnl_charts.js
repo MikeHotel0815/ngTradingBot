@@ -19,11 +19,13 @@
 const PnLCharts = {
     containerId: null,
     charts: {},
-    intervals: ['1h', '12h', '24h', '1w', '1y'],
+    intervals: ['1h', '12h', '24h', '1w', 'ytd'], // ytd = year to date (aktuelles Jahr)
     colors: {
         positive: '#10b981', // green
         negative: '#ef4444', // red
-        neutral: '#6b7280'   // gray
+        neutral: '#6b7280',   // gray
+        gridColor: '#333',
+        textColor: '#9ca3af'
     },
 
     /**
@@ -50,8 +52,6 @@ const PnLCharts = {
 
         let html = `
             <div class="pnl-charts-wrapper">
-                <h2>📊 P/L Performance</h2>
-                <div class="pnl-summary-cards" id="pnl-summary"></div>
                 <div class="pnl-charts-grid">
         `;
 
@@ -86,85 +86,54 @@ const PnLCharts = {
         style.id = 'pnl-charts-styles';
         style.textContent = `
             .pnl-charts-wrapper {
-                padding: 20px;
-            }
-            .pnl-charts-wrapper h2 {
-                margin-bottom: 20px;
-                color: #1f2937;
-            }
-            .pnl-summary-cards {
-                display: flex;
-                gap: 15px;
-                margin-bottom: 30px;
-                flex-wrap: wrap;
-            }
-            .pnl-summary-card {
-                flex: 1;
-                min-width: 150px;
-                padding: 15px;
-                background: white;
-                border-radius: 8px;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            }
-            .pnl-summary-card h4 {
-                font-size: 12px;
-                color: #6b7280;
-                margin: 0 0 5px 0;
-            }
-            .pnl-summary-card .value {
-                font-size: 24px;
-                font-weight: bold;
-                margin: 0;
-            }
-            .pnl-summary-card .value.positive { color: #10b981; }
-            .pnl-summary-card .value.negative { color: #ef4444; }
-            .pnl-summary-card .meta {
-                font-size: 12px;
-                color: #9ca3af;
-                margin-top: 5px;
+                padding: 0;
             }
             .pnl-charts-grid {
                 display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+                grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
                 gap: 20px;
             }
             .pnl-chart-card {
-                background: white;
+                background: #2a2a2a;
                 padding: 20px;
                 border-radius: 8px;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                border: 1px solid #333;
             }
             .pnl-chart-card h3 {
                 margin: 0 0 15px 0;
-                font-size: 16px;
-                color: #1f2937;
+                font-size: 15px;
+                color: #e0e0e0;
+                font-weight: 600;
             }
             .pnl-chart-card canvas {
-                max-height: 250px;
+                max-height: 220px;
             }
             .chart-stats {
                 display: flex;
                 justify-content: space-around;
                 margin-top: 15px;
                 padding-top: 15px;
-                border-top: 1px solid #e5e7eb;
+                border-top: 1px solid #333;
             }
             .chart-stats .stat {
                 text-align: center;
             }
             .chart-stats .stat-label {
                 font-size: 11px;
-                color: #6b7280;
+                color: #888;
                 display: block;
             }
             .chart-stats .stat-value {
-                font-size: 16px;
-                font-weight: bold;
+                font-size: 15px;
+                font-weight: 600;
                 display: block;
                 margin-top: 3px;
+                color: #e0e0e0;
             }
+            .chart-stats .stat-value.positive { color: #10b981; }
+            .chart-stats .stat-value.negative { color: #ef4444; }
             .chart-stats .loading {
-                color: #9ca3af;
+                color: #666;
                 font-style: italic;
             }
         `;
@@ -180,7 +149,7 @@ const PnLCharts = {
             '12h': 'Letzte 12 Stunden',
             '24h': 'Letzte 24 Stunden',
             '1w': 'Letzte Woche',
-            '1y': 'Letztes Jahr'
+            'ytd': 'Aktuelles Jahr'
         };
         return labels[interval] || interval;
     },
@@ -189,39 +158,10 @@ const PnLCharts = {
      * Load all P/L charts
      */
     loadAllCharts: function() {
-        // Load summary first
-        this.loadSummary();
-
         // Load individual charts
         this.intervals.forEach(interval => {
             this.loadChart(interval);
         });
-    },
-
-    /**
-     * Load P/L summary for all intervals
-     */
-    loadSummary: async function() {
-        try {
-            const response = await fetch('/api/pnl-summary');
-            const data = await response.json();
-
-            const summaryHtml = Object.entries(data).map(([interval, stats]) => {
-                const valueClass = stats.total_pnl > 0 ? 'positive' : stats.total_pnl < 0 ? 'negative' : '';
-                return `
-                    <div class="pnl-summary-card">
-                        <h4>${this.getIntervalLabel(interval)}</h4>
-                        <p class="value ${valueClass}">$${stats.total_pnl.toFixed(2)}</p>
-                        <p class="meta">${stats.trade_count} Trades • ${stats.win_rate}% WR</p>
-                    </div>
-                `;
-            }).join('');
-
-            document.getElementById('pnl-summary').innerHTML = summaryHtml;
-
-        } catch (error) {
-            console.error('Error loading P/L summary:', error);
-        }
     },
 
     /**
@@ -291,6 +231,11 @@ const PnLCharts = {
                         display: false
                     },
                     tooltip: {
+                        backgroundColor: '#1a1a1a',
+                        titleColor: '#e0e0e0',
+                        bodyColor: '#e0e0e0',
+                        borderColor: '#333',
+                        borderWidth: 1,
                         callbacks: {
                             label: function(context) {
                                 return `P/L: $${context.parsed.y.toFixed(2)}`;
@@ -305,15 +250,18 @@ const PnLCharts = {
                             display: false
                         },
                         ticks: {
-                            maxTicksLimit: 8
+                            maxTicksLimit: 8,
+                            color: '#9ca3af'
                         }
                     },
                     y: {
                         display: true,
                         grid: {
-                            color: '#e5e7eb'
+                            color: '#333',
+                            drawBorder: false
                         },
                         ticks: {
+                            color: '#9ca3af',
                             callback: function(value) {
                                 return '$' + value.toFixed(0);
                             }
