@@ -71,6 +71,23 @@ class SignalGenerator:
                 self._expire_active_signals("market closed")
                 return None
 
+            # ✅ Check news filter - prevent trading during high-impact events
+            from news_filter import NewsFilter
+            news_filter = NewsFilter(self.account_id)
+            news_check = news_filter.check_trading_allowed(self.symbol)
+
+            if not news_check['allowed']:
+                reason = news_check.get('reason', 'high-impact news event')
+                logger.warning(f"⛔ Trading paused for {self.symbol}: {reason}")
+                self._expire_active_signals(f"news_filter: {reason}")
+
+                # Log upcoming event details if available
+                if 'upcoming_event' in news_check:
+                    event = news_check['upcoming_event']
+                    logger.info(f"📰 Upcoming: {event.get('event_name')} at {event.get('event_time')} (Impact: {event.get('impact')})")
+
+                return None
+
             # Get pattern signals
             pattern_signals = self.patterns.get_pattern_signals()
 

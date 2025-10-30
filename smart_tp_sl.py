@@ -27,11 +27,11 @@ class SymbolConfig:
     ASSET_CLASSES = {
         'FOREX_MAJOR': {
             'symbols': ['EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'AUDUSD', 'USDCAD', 'NZDUSD'],
-            'atr_tp_multiplier': 2.5,      # ✅ INCREASED from 2.0 to 2.5 (wider TP for BUY)
-            'atr_sl_multiplier': 1.0,      # ✅ REDUCED from 1.2 to 1.0 (tighter SL)
+            'atr_tp_multiplier': 3.5,      # ✅ INCREASED from 2.5 to 3.5 (wider TP - Fix AUDUSD R:R)
+            'atr_sl_multiplier': 0.8,      # ✅ REDUCED from 1.0 to 0.8 (tighter SL - Fix AUDUSD R:R)
             'trailing_multiplier': 0.8,    # 0.8x ATR
-            'max_tp_pct': 1.2,             # ✅ INCREASED from 1.0% to 1.2% (allow wider TP)
-            'min_sl_pct': 0.12,            # ✅ REDUCED from 0.15 to 0.12 (allow tighter SL)
+            'max_tp_pct': 1.5,             # ✅ INCREASED from 1.2% to 1.5% (allow wider TP)
+            'min_sl_pct': 0.10,            # ✅ REDUCED from 0.12 to 0.10 (allow tighter SL)
             'fallback_atr_pct': 0.0008,    # 0.08% (~8 pips @ 1.0000)
         },
         'FOREX_MINOR': {
@@ -65,12 +65,12 @@ class SymbolConfig:
         },
         'METALS': {
             'symbols': ['XAUUSD', 'XAGUSD', 'XPTUSD', 'XPDUSD'],
-            'atr_tp_multiplier': 0.8,      # Reduced for 0.01 lot (~25 USD max profit)
-            'atr_sl_multiplier': 0.5,      # Reduced for 0.01 lot (~15 USD max loss)
-            'trailing_multiplier': 0.8,
-            'max_tp_pct': 2.0,             # Gold: max 2%
-            'min_sl_pct': 0.3,             # Reduced min stop for small accounts
-            'fallback_atr_pct': 0.008,     # 0.8%
+            'atr_tp_multiplier': 1.2,      # ✅ INCREASED from 0.8 to 1.2 (wider TP for better R:R)
+            'atr_sl_multiplier': 0.4,      # ✅ REDUCED from 0.5 to 0.4 (tighter SL - prevent -$66 losses)
+            'trailing_multiplier': 0.6,    # ✅ REDUCED from 0.8 to 0.6 (lock profits faster)
+            'max_tp_pct': 1.5,             # ✅ REDUCED from 2.0% to 1.5% (realistic targets)
+            'min_sl_pct': 0.2,             # ✅ REDUCED from 0.3 to 0.2 (allow tighter stops)
+            'fallback_atr_pct': 0.006,     # ✅ REDUCED from 0.008 to 0.006 (0.6%)
         },
         'INDICES': {
             'symbols': ['US30', 'NAS100', 'SPX500', 'GER40', 'UK100', 'JPN225',

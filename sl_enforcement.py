@@ -25,22 +25,23 @@ class SLEnforcement:
     """Enforce Stop Loss requirements across all trading operations"""
 
     # Symbol-specific maximum loss per trade (in account currency)
-    # UPDATED 2025-10-27: Relaxed limits for aggressive trading mode
-    # Previous limits (2025-10-26) were too strict and blocked all trades
-    # Balance: Conservative SL protection vs. Allowing trades to execute
+    # UPDATED 2025-10-30: Reduced limits based on 36h performance analysis
+    # Problem: Avg loss -$7.50 vs avg win $0.30 (R:R 1:10.5)
+    # Analysis showed: SL_HIT trades avg -$10.70 loss destroying profitability
+    # Strategy: Reduce max loss to improve R:R ratio
     MAX_LOSS_PER_TRADE = {
-        'XAGUSD': 8.00,   # Silver: Max 8 EUR loss (relaxed from 3 EUR)
-        'XAUUSD': 100.00, # Gold: Max 100 EUR loss (relaxed from 5 EUR - volatile but profitable)
-        'DE40.c': 10.00,  # DAX: Max 10 EUR loss (relaxed from 3 EUR)
-        'US500.c': 15.00, # S&P500: Max 15 EUR loss (relaxed from 2 EUR - high frequency)
-        'BTCUSD': 25.00,  # Bitcoin: Max 25 EUR loss (relaxed from 15 EUR - 87% WR, +64 EUR/month)
-        'ETHUSD': 10.00,  # Ethereum: Max 10 EUR loss (relaxed from 6 EUR)
-        'USDJPY': 6.00,   # USDJPY: Max 6 EUR loss (relaxed from 2 EUR)
-        'EURUSD': 6.00,   # EURUSD: Max 6 EUR loss (relaxed from 2 EUR)
-        'GBPUSD': 6.00,   # GBPUSD: Max 6 EUR loss (relaxed from 2 EUR)
-        'AUDUSD': 6.00,   # AUDUSD: Max 6 EUR loss (relaxed from 2 EUR)
-        'FOREX': 6.00,    # Default Forex: Max 6 EUR loss (relaxed from 2 EUR)
-        'DEFAULT': 10.00  # Fallback: Max 10 EUR loss (relaxed from 2.5 EUR - aggressive mode)
+        'XAGUSD': 5.00,   # Silver: Max 5 EUR loss (reduced from 8 - symbol disabled anyway)
+        'XAUUSD': 5.50,   # Gold: Max 5.50 EUR loss (reduced from 100 - prevent -$66 losses)
+        'DE40.c': 6.00,   # DAX: Max 6 EUR loss (reduced from 10 - symbol disabled)
+        'US500.c': 4.00,  # S&P500: Max 4 EUR loss (reduced from 15 - performing well)
+        'BTCUSD': 20.00,  # Bitcoin: Max 20 EUR loss (reduced from 25 - 87% WR profitable)
+        'ETHUSD': 8.00,   # Ethereum: Max 8 EUR loss (reduced from 10)
+        'USDJPY': 4.00,   # USDJPY: Max 4 EUR loss (reduced from 6 - symbol disabled)
+        'EURUSD': 4.00,   # EURUSD: Max 4 EUR loss (reduced from 6)
+        'GBPUSD': 4.00,   # GBPUSD: Max 4 EUR loss (reduced from 6)
+        'AUDUSD': 4.00,   # AUDUSD: Max 4 EUR loss (reduced from 6 - 79% WR but negative P/L!)
+        'FOREX': 4.00,    # Default Forex: Max 4 EUR loss (reduced from 6)
+        'DEFAULT': 5.00   # Fallback: Max 5 EUR loss (reduced from 10)
     }
 
     # Minimum SL distance as percentage of entry price
