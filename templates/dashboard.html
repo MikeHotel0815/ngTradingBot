@@ -1327,6 +1327,17 @@
             </div>
         </div>
 
+        <!-- P/L PERFORMANCE CHARTS -->
+        <div class="grid">
+            <div class="card">
+                <h2>📊 P/L Performance</h2>
+                <p style="color: #888; margin-bottom: 20px;">
+                    Profit/Loss Entwicklung über verschiedene Zeitintervalle (1 Std, 12 Std, 24 Std, 1 Woche, 1 Jahr)
+                </p>
+                <div id="pnl-charts-container"></div>
+            </div>
+        </div>
+
         <!-- SPREAD CONFIGURATION MANAGEMENT -->
         <div class="grid">
             <div class="card">
@@ -7737,6 +7748,22 @@ const SymbolModal = (function() {
             console.log('✅✅✅ SymbolModal initialized successfully!');
         } else {
             console.error('❌❌❌ SymbolModal is not defined!');
+        }
+    </script>
+
+    <!-- Chart.js for P/L Charts -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+    <!-- P/L Charts -->
+    <script src="/static/js/pnl_charts.js"></script>
+    <script>
+        // Initialize P/L Charts
+        console.log('📊 Initializing P/L Charts...');
+        if (typeof PnLCharts !== 'undefined') {
+            PnLCharts.init('pnl-charts-container');
+            console.log('✅ P/L Charts initialized successfully!');
+        } else {
+            console.error('❌ PnLCharts is not defined!');
         }
     </script>
 
