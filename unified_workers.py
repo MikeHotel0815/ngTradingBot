@@ -553,14 +553,24 @@ def import_worker_functions():
         # ✅ NEW: MFE/MAE Tracker - Maximum Favorable/Adverse Excursion
         logger.info("📦 Importing mfe_mae_tracker...")
         import workers.mfe_mae_tracker as mfe
-        
+
         _mfe_tracker = mfe.MFEMAETracker()
-        
+
         workers['mfe_mae_tracker'] = _mfe_tracker.update_all_trades
-        
+
     except Exception as e:
         logger.error(f"Failed to import mfe_mae_tracker: {e}")
-    
+
+    try:
+        # ✅ NEW: Telegram Daily Report - sends report at 23:00
+        logger.info("📦 Importing telegram_daily_worker...")
+        from workers.telegram_daily_worker import telegram_daily_scheduler
+
+        workers['telegram_daily'] = telegram_daily_scheduler
+
+    except Exception as e:
+        logger.error(f"Failed to import telegram_daily_worker: {e}")
+
     return workers
 
 
@@ -678,8 +688,12 @@ def main():
             'function': worker_functions.get('smart_trailing_v2'),
             'interval': int(os.getenv('SMART_TRAILING_V2_INTERVAL', 10)),  # 10 seconds - adaptive (5-30s based on volatility)
         },
+        'telegram_daily': {
+            'function': worker_functions.get('telegram_daily'),
+            'interval': int(os.getenv('TELEGRAM_DAILY_CHECK_INTERVAL', 300)),  # 5 minutes - checks if it's 23:00
+        },
     }
-    
+
     # Start worker threads
     logger.info("\n🧵 Starting worker threads...")
     threads: Dict[str, WorkerThread] = {}

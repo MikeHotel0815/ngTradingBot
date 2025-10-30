@@ -168,6 +168,59 @@ class WebDashboardServer:
                 logger.error(f"Error generating chart {chart_type}: {e}", exc_info=True)
                 return jsonify({'error': str(e)}), 500
 
+        @app.route('/api/pnl-timeseries/<interval>')
+        def api_pnl_timeseries(interval):
+            """
+            Get P/L time series data for charts
+
+            Args:
+                interval: One of '1h', '12h', '24h', '1w', '1y'
+
+            Query params:
+                aggregated: 'true' to use aggregated buckets
+
+            Returns:
+                JSON with P/L time series data
+            """
+            try:
+                from pnl_analyzer import PnLAnalyzer
+
+                aggregated = request.args.get('aggregated', 'false').lower() == 'true'
+
+                with PnLAnalyzer(account_id=self.account_id) as analyzer:
+                    if aggregated:
+                        data = analyzer.get_aggregated_pnl(interval)
+                    else:
+                        data = analyzer.get_pnl_timeseries(interval)
+
+                return jsonify(data)
+
+            except ValueError as e:
+                return jsonify({'error': str(e)}), 400
+            except Exception as e:
+                logger.error(f"Error getting P/L timeseries for {interval}: {e}", exc_info=True)
+                return jsonify({'error': str(e)}), 500
+
+        @app.route('/api/pnl-summary')
+        def api_pnl_summary():
+            """
+            Get P/L summary for all time intervals
+
+            Returns:
+                JSON with P/L data for 1h, 12h, 24h, 1w, 1y
+            """
+            try:
+                from pnl_analyzer import PnLAnalyzer
+
+                with PnLAnalyzer(account_id=self.account_id) as analyzer:
+                    summary = analyzer.get_multi_interval_summary()
+
+                return jsonify(summary)
+
+            except Exception as e:
+                logger.error(f"Error getting P/L summary: {e}", exc_info=True)
+                return jsonify({'error': str(e)}), 500
+
         @app.route('/health')
         def health_check():
             """Health check endpoint"""
