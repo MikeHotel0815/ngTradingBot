@@ -3993,6 +3993,55 @@ def get_signals():
                 # Use server-side market hours check
                 tradeable = is_symbol_tradeable_now(sig.symbol)
 
+                # Calculate age in minutes
+                age_minutes = int((datetime.utcnow() - sig.created_at).total_seconds() / 60) if sig.created_at else None
+
+                # Calculate risk amount (default to fixed 1% of account balance)
+                risk_amount = 0.0
+                lot_size = 0.01
+                if sig.entry_price and sig.sl_price:
+                    # Get account balance
+                    if account and account.balance:
+                        balance = float(account.balance)
+                        risk_percent = 0.01  # 1% risk
+                        risk_amount = balance * risk_percent
+
+                        # Calculate lot size based on risk
+                        pip_value = abs(float(sig.entry_price) - float(sig.sl_price))
+                        if pip_value > 0:
+                            # For forex pairs, 1 standard lot = $10 per pip for major pairs
+                            # Adjust based on symbol type
+                            if 'USD' in sig.symbol or 'EUR' in sig.symbol or 'GBP' in sig.symbol:
+                                pip_value_per_lot = 10.0  # $10 per pip for 1 standard lot
+                            else:
+                                pip_value_per_lot = 1.0  # Conservative for other symbols
+
+                            # Calculate lot size: risk_amount / (pip_distance * pip_value_per_lot)
+                            lot_size = risk_amount / (pip_value * pip_value_per_lot * 10000)  # Convert to pips
+                            lot_size = round(lot_size, 2)
+                            lot_size = max(0.01, min(lot_size, 10.0))  # Clamp between 0.01 and 10 lots
+
+                # Extract indicator values from indicators_used JSONB
+                indicators = sig.indicators_used or {}
+
+                # RSI - handle both old format (number) and new format (dict with 'value')
+                rsi_data = indicators.get('RSI')
+                if isinstance(rsi_data, dict):
+                    rsi = rsi_data.get('value')
+                elif isinstance(rsi_data, (int, float)):
+                    rsi = rsi_data
+                else:
+                    rsi = None
+
+                # MACD - handle dict format
+                macd_data = indicators.get('MACD', {})
+                macd_value = macd_data.get('macd') if isinstance(macd_data, dict) else None
+                macd_signal_value = macd_data.get('signal') if isinstance(macd_data, dict) else None
+
+                # Bollinger Bands - handle dict format
+                bb_data = indicators.get('BB', {})
+                bb_position = bb_data.get('position') if isinstance(bb_data, dict) else None
+
                 signals_data.append({
                     'id': sig.id,
                     'symbol': sig.symbol,
@@ -4002,6 +4051,13 @@ def get_signals():
                     'entry_price': float(sig.entry_price) if sig.entry_price else None,
                     'sl_price': float(sig.sl_price) if sig.sl_price else None,
                     'tp_price': float(sig.tp_price) if sig.tp_price else None,
+                    'lot_size': lot_size,
+                    'risk_amount': risk_amount,
+                    'age_minutes': age_minutes,
+                    'rsi': rsi,
+                    'macd_value': macd_value,
+                    'macd_signal': macd_signal_value,
+                    'bb_position': bb_position,
                     'indicators_used': sig.indicators_used,
                     'patterns_detected': sig.patterns_detected,
                     'reasons': sig.reasons,
@@ -4770,6 +4826,150 @@ def update_settings():
         # Other errors - return 500 Internal Server Error
         logger.error(f"Error updating settings: {e}")
         return jsonify({'error': str(e)}), 500
+
+
+# ============================================================================
+# TRADE P/L HISTORY API
+# ============================================================================
+
+@app_webui.route('/api/trade/<int:ticket>/pnl-history', methods=['GET'])
+def get_trade_pnl_history(ticket):
+    """
+    Get P/L history for an open trade over time.
+    Calculates P/L at each candle based on entry price vs current price.
+
+    Args:
+        ticket: Trade ticket number
+
+    Query params:
+        timeframe: H1, H4, D1, etc. (default: H1)
+        limit: Number of candles (default: 100)
+
+    Returns:
+        JSON with P/L data points synchronized with OHLC candles
+    """
+    try:
+        from models import Trade, OHLCData
+        from input_validator import InputValidator, validate_timeframe
+
+        # Validate query params
+        timeframe_raw = request.args.get('timeframe', 'H1')
+        limit = request.args.get('limit', 100, type=int)
+
+        timeframe = validate_timeframe(timeframe_raw)
+        limit = InputValidator.validate_integer(limit, min_value=1, max_value=500, default=100)
+
+        db = ScopedSession()
+        try:
+            # Get the trade
+            trade = db.query(Trade).filter(Trade.ticket == ticket).first()
+
+            if not trade:
+                return jsonify({
+                    'status': 'error',
+                    'message': f'Trade #{ticket} not found'
+                }), 404
+
+            if trade.status != 'open':
+                return jsonify({
+                    'status': 'error',
+                    'message': f'Trade #{ticket} is not open (status: {trade.status})'
+                }), 400
+
+            # Get OHLC data for the symbol starting from trade open time
+            ohlc_query = db.query(OHLCData).filter(
+                OHLCData.symbol == trade.symbol,
+                OHLCData.timeframe == timeframe,
+                OHLCData.timestamp >= trade.open_time
+            ).order_by(OHLCData.timestamp.asc()).limit(limit)
+
+            candles = ohlc_query.all()
+
+            if not candles:
+                return jsonify({
+                    'status': 'success',
+                    'trade': {
+                        'ticket': trade.ticket,
+                        'symbol': trade.symbol,
+                        'type': trade.type,
+                        'entry_price': float(trade.open_price),
+                        'lot_size': float(trade.volume),
+                        'open_time': trade.open_time.isoformat(),
+                    },
+                    'pnl_history': [],
+                    'message': 'No OHLC data available for this trade'
+                }), 200
+
+            # Calculate P/L for each candle
+            entry_price = float(trade.open_price)
+            lot_size = float(trade.volume)
+            trade_type = trade.type  # BUY or SELL
+
+            # Get symbol specs for pip calculation
+            from models import SymbolSpec
+            symbol_spec = db.query(SymbolSpec).filter(SymbolSpec.symbol == trade.symbol).first()
+
+            # Default pip values (will be overridden by symbol specs if available)
+            pip_value = 10.0  # Default: $10 per pip for 1 standard lot
+            point_multiplier = 10000  # For forex pairs (0.0001 = 1 pip)
+
+            if symbol_spec:
+                # Use actual contract size for accurate P/L
+                pip_value = float(symbol_spec.contract_size) / point_multiplier
+
+            pnl_history = []
+
+            for candle in candles:
+                # Use close price for P/L calculation
+                current_price = float(candle.close)
+
+                # Calculate P/L based on trade direction
+                if trade_type == 'BUY':
+                    price_diff = current_price - entry_price
+                elif trade_type == 'SELL':
+                    price_diff = entry_price - current_price
+                else:
+                    price_diff = 0
+
+                # Convert price difference to pips and then to EUR
+                pips = price_diff * point_multiplier
+                pnl_eur = pips * pip_value * lot_size
+
+                pnl_history.append({
+                    'time': candle.timestamp.isoformat(),
+                    'timestamp': int(candle.timestamp.timestamp()),
+                    'price': current_price,
+                    'pnl': round(pnl_eur, 2),
+                    'pips': round(pips, 1)
+                })
+
+            return jsonify({
+                'status': 'success',
+                'trade': {
+                    'ticket': trade.ticket,
+                    'symbol': trade.symbol,
+                    'type': trade_type,
+                    'entry_price': entry_price,
+                    'tp_price': float(trade.tp) if trade.tp else None,
+                    'sl_price': float(trade.sl) if trade.sl else None,
+                    'lot_size': lot_size,
+                    'open_time': trade.open_time.isoformat(),
+                    'current_pnl': float(trade.profit) if trade.profit else 0.0
+                },
+                'pnl_history': pnl_history,
+                'timeframe': timeframe,
+                'candle_count': len(pnl_history)
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Error getting P/L history for trade #{ticket}: {e}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'error': str(e)
+        }), 500
 
 
 # ============================================================================

@@ -68,7 +68,7 @@ class PnLAnalyzer:
         """
 
         # Define time periods
-        now = datetime.utcnow()
+        now = datetime.now()
 
         intervals = {
             '1h': timedelta(hours=1),
@@ -151,7 +151,7 @@ class PnLAnalyzer:
             Dict with aggregated P/L data in time buckets
         """
 
-        now = datetime.utcnow()
+        now = datetime.now()
 
         intervals = {
             '1h': timedelta(hours=1),

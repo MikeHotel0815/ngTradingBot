@@ -189,7 +189,202 @@ def create_webui_app():
         except Exception as e:
             logger.error(f"System status error: {e}", exc_info=True)
             return jsonify({'error': str(e)}), 500
-    
+
+    # Safety Monitor endpoint
+    @app.route('/api/safety-monitor/status', methods=['GET'])
+    def get_safety_monitor_status():
+        """
+        Get comprehensive safety monitoring status for live dashboard.
+
+        Returns:
+            - Circuit breaker status
+            - Daily drawdown protection
+            - SL-hit protection cooldowns
+            - News filter status
+            - Failed command count
+            - Multi-timeframe conflicts
+            - Position limits
+        """
+        from flask import jsonify, request
+        from datetime import datetime
+        from database import ScopedSession
+
+        try:
+            from auto_trader import get_auto_trader
+            from daily_drawdown_protection import get_drawdown_protection
+            from sl_hit_protection import get_sl_hit_protection
+            from news_filter import get_news_filter
+            from multi_timeframe_analyzer import MultiTimeframeAnalyzer
+
+            account_id = request.args.get('account_id', 1, type=int)
+
+            # Get auto-trader instance
+            auto_trader = get_auto_trader()
+
+            # 1. Circuit Breaker Status
+            circuit_breaker = {
+                'enabled': auto_trader.circuit_breaker_enabled,
+                'tripped': auto_trader.circuit_breaker_tripped,
+                'reason': auto_trader.circuit_breaker_reason,
+                'failed_command_count': auto_trader.failed_command_count,
+                'max_daily_loss_percent': auto_trader.max_daily_loss_percent,
+                'max_total_drawdown_percent': auto_trader.max_total_drawdown_percent,
+                'daily_loss_override': getattr(auto_trader, 'daily_loss_override', False)
+            }
+
+            # 2. Daily Drawdown Protection
+            dd_protection = get_drawdown_protection(account_id)
+            dd_status = dd_protection.get_status()
+
+            # 3. SL-Hit Protection Cooldowns
+            sl_protection = get_sl_hit_protection()
+            cooldowns = sl_protection.get_all_cooldowns()
+
+            # 4. News Filter Status
+            news_filter = get_news_filter(account_id)
+            upcoming_events = news_filter.get_upcoming_events(hours=2)  # Next 2 hours
+
+            # 5. Position Limits
+            db = ScopedSession()
+            try:
+                from models import Trade, GlobalSettings
+
+                settings = GlobalSettings.get_settings(db)
+
+                open_positions = db.query(Trade).filter(
+                    Trade.account_id == account_id,
+                    Trade.status == 'open'
+                ).count()
+
+                # Count positions by symbol
+                positions_by_symbol = {}
+                open_trades = db.query(Trade).filter(
+                    Trade.account_id == account_id,
+                    Trade.status == 'open'
+                ).all()
+
+                for trade in open_trades:
+                    symbol = trade.symbol
+                    if symbol not in positions_by_symbol:
+                        positions_by_symbol[symbol] = 0
+                    positions_by_symbol[symbol] += 1
+
+                position_limits = {
+                    'open_positions': open_positions,
+                    'max_positions': settings.max_positions,
+                    'max_positions_per_symbol_timeframe': settings.max_positions_per_symbol_timeframe,
+                    'positions_by_symbol': positions_by_symbol,
+                    'utilization_percent': round((open_positions / settings.max_positions) * 100, 1) if settings.max_positions > 0 else 0
+                }
+
+                # 6. Multi-Timeframe Conflicts
+                from models import TradingSignal
+
+                # Note: Signals are now global (no account_id)
+                active_signals = db.query(TradingSignal).filter(
+                    TradingSignal.status == 'active'
+                ).all()
+
+                # Group signals by symbol
+                signals_by_symbol = {}
+                for signal in active_signals:
+                    symbol = signal.symbol
+                    if symbol not in signals_by_symbol:
+                        signals_by_symbol[symbol] = []
+                    signals_by_symbol[symbol].append({
+                        'timeframe': signal.timeframe,
+                        'signal_type': signal.signal_type,
+                        'confidence': float(signal.confidence or 0)
+                    })
+
+                # Detect conflicts
+                mtf_conflicts = []
+                for symbol, signals in signals_by_symbol.items():
+                    summary = MultiTimeframeAnalyzer.get_multi_timeframe_summary(
+                        symbol, account_id, db
+                    )
+                    if summary['conflicts']:
+                        mtf_conflicts.append({
+                            'symbol': symbol,
+                            'conflicts': summary['conflicts'],
+                            'signals': signals
+                        })
+
+                # 7. Auto-Trading Status
+                auto_trading = {
+                    'enabled': auto_trader.enabled,
+                    'min_confidence': auto_trader.min_autotrade_confidence
+                }
+
+            finally:
+                db.close()
+
+            # Compile response
+            response = {
+                'status': 'success',
+                'timestamp': datetime.utcnow().isoformat(),
+                'account_id': account_id,
+                'safety_status': {
+                    'circuit_breaker': circuit_breaker,
+                    'daily_drawdown': dd_status,
+                    'sl_hit_cooldowns': cooldowns,
+                    'news_filter': {
+                        'upcoming_events': upcoming_events[:5],  # Next 5 events
+                        'total_upcoming': len(upcoming_events)
+                    },
+                    'position_limits': position_limits,
+                    'multi_timeframe_conflicts': mtf_conflicts,
+                    'auto_trading': auto_trading
+                },
+                'overall_health': 'HEALTHY'  # Will be calculated below
+            }
+
+            # Calculate overall health status
+            warnings = []
+            errors = []
+
+            if circuit_breaker['tripped']:
+                errors.append(f"Circuit breaker tripped: {circuit_breaker['reason']}")
+
+            if circuit_breaker['failed_command_count'] >= 2:
+                warnings.append(f"{circuit_breaker['failed_command_count']} consecutive failed commands")
+
+            if dd_status.get('limit_reached'):
+                errors.append("Daily drawdown limit reached")
+
+            if cooldowns:
+                warnings.append(f"{len(cooldowns)} symbol(s) in cooldown")
+
+            if mtf_conflicts:
+                warnings.append(f"{len(mtf_conflicts)} multi-timeframe conflict(s)")
+
+            if position_limits['utilization_percent'] >= 80:
+                warnings.append(f"Position limit utilization: {position_limits['utilization_percent']}%")
+
+            if not auto_trading['enabled']:
+                warnings.append("Auto-trading is disabled")
+
+            # Determine overall health
+            if errors:
+                response['overall_health'] = 'ERROR'
+                response['health_messages'] = {'errors': errors, 'warnings': warnings}
+            elif warnings:
+                response['overall_health'] = 'WARNING'
+                response['health_messages'] = {'warnings': warnings}
+            else:
+                response['overall_health'] = 'HEALTHY'
+                response['health_messages'] = {'info': ['All systems operational']}
+
+            return jsonify(response), 200
+
+        except Exception as e:
+            logger.error(f"Error getting safety monitor status: {e}", exc_info=True)
+            return jsonify({
+                'status': 'error',
+                'error': str(e),
+                'overall_health': 'UNKNOWN'
+            }), 500
+
     logger.info("✅ WebUI app created (Port 9905)")
     return app
 

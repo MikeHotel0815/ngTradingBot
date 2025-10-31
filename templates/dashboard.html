@@ -987,9 +987,14 @@
     <div class="container">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
             <h1 style="margin: 0;">🤖 ngTradingBot Dashboard</h1>
-            <button onclick="showSettingsModal()" style="background: #666; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 1em;">
-                ⚙️ Global Settings
-            </button>
+            <div style="display: flex; gap: 10px;">
+                <button onclick="resetDashboardLayout()" style="background: #ff9800; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 1em;" title="Layout auf Standard zurücksetzen">
+                    🔄 Layout zurücksetzen
+                </button>
+                <button onclick="showSettingsModal()" style="background: #666; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 1em;">
+                    ⚙️ Global Settings
+                </button>
+            </div>
         </div>
 
         <div class="info-bar">
@@ -1236,6 +1241,53 @@
             .drag-handle:active {
                 cursor: grabbing;
             }
+
+            .panel-header {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                margin-bottom: 15px;
+            }
+
+            .panel-drag-handle {
+                cursor: grab;
+                color: #666;
+                font-size: 1.3em;
+                padding: 5px;
+                transition: color 0.2s ease;
+                user-select: none;
+            }
+
+            .panel-drag-handle:hover {
+                color: #4CAF50;
+            }
+
+            .panel-drag-handle:active {
+                cursor: grabbing;
+                color: #45a049;
+            }
+
+            @keyframes slideIn {
+                from {
+                    transform: translateX(400px);
+                    opacity: 0;
+                }
+                to {
+                    transform: translateX(0);
+                    opacity: 1;
+                }
+            }
+
+            @keyframes slideOut {
+                from {
+                    transform: translateX(0);
+                    opacity: 1;
+                }
+                to {
+                    transform: translateX(400px);
+                    opacity: 0;
+                }
+            }
         </style>
 
         <!-- Dashboard Panels Container (Draggable) -->
@@ -1247,6 +1299,7 @@
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
                     <div style="display: flex; align-items: center; gap: 15px;">
+                        <span class="panel-drag-handle" title="Ziehen um Block zu verschieben">⣿</span>
                         <h2 style="margin: 0;">📊 Open Positions (<span id="open-trades-count">0</span>)</h2>
                         <span style="font-size: 0.9em; color: #888;">
                             🔄 <span id="positions-last-update" style="font-weight: 600;">--:--:--</span>
@@ -1274,7 +1327,10 @@
         <div class="grid">
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                    <h2 style="margin: 0;">🎯 Trading Signals</h2>
+                    <div style="display: flex; align-items: center; gap: 15px;">
+                        <span class="panel-drag-handle" title="Ziehen um Block zu verschieben">⣿</span>
+                        <h2 style="margin: 0;">🎯 Trading Signals</h2>
+                    </div>
                     <div class="signal-countdown-container"
                          style="font-size: 1.1em; color: #4CAF50; font-weight: 600; cursor: pointer; user-select: none;"
                          onclick="triggerImmediateSignalUpdate()"
@@ -1350,7 +1406,10 @@
         <div class="draggable-panel" data-panel-id="symbol-performance">
         <div class="grid">
             <div class="card">
-                <h2>🎯 Symbol Performance (Live 24h)</h2>
+                <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 15px;">
+                    <span class="panel-drag-handle" title="Ziehen um Block zu verschieben">⣿</span>
+                    <h2 style="margin: 0;">🎯 Symbol Performance (Live 24h)</h2>
+                </div>
                 <div id="symbol-performance-container" style="margin-top: 15px;">
                     <table style="width: 100%; border-collapse: collapse;">
                         <thead>
@@ -1372,10 +1431,14 @@
         </div>
 
         <!-- P/L PERFORMANCE CHARTS -->
+        <div class="draggable-panel" data-panel-id="pnl-performance">
         <div class="grid">
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                    <h2 style="margin: 0;">📊 P/L Performance</h2>
+                    <div style="display: flex; align-items: center; gap: 15px;">
+                        <span class="panel-drag-handle" title="Ziehen um Block zu verschieben">⣿</span>
+                        <h2 style="margin: 0;">📊 P/L Performance</h2>
+                    </div>
                     <button id="send-charts-btn" style="padding: 8px 16px; background: #10b981; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 500;">
                         📱 Charts an Telegram senden
                     </button>
@@ -1386,11 +1449,17 @@
                 <div id="pnl-charts-container"></div>
             </div>
         </div>
+        </div>
+        <!-- END P/L PERFORMANCE -->
 
         <!-- SPREAD CONFIGURATION MANAGEMENT -->
+        <div class="draggable-panel" data-panel-id="spread-config">
         <div class="grid">
             <div class="card">
-                <h2>⚙️ Spread Limits Configuration</h2>
+                <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 15px;">
+                    <span class="panel-drag-handle" title="Ziehen um Block zu verschieben">⣿</span>
+                    <h2 style="margin: 0;">⚙️ Spread Limits Configuration</h2>
+                </div>
                 <p style="color: #888; margin-bottom: 15px;">
                     Configure maximum allowed spreads per symbol. Wider spreads during volatile sessions or low liquidity can lead to poor execution.
                 </p>
@@ -1483,11 +1552,17 @@
                 </form>
             </div>
         </div>
+        </div>
+        <!-- END SPREAD CONFIG -->
 
         <!-- TRADING STATISTICS -->
+        <div class="draggable-panel" data-panel-id="trading-statistics">
         <div class="grid">
             <div class="card">
-                <h2>📈 Trading Statistics</h2>
+                <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 15px;">
+                    <span class="panel-drag-handle" title="Ziehen um Block zu verschieben">⣿</span>
+                    <h2 style="margin: 0;">📈 Trading Statistics</h2>
+                </div>
                 <div id="trading-statistics">
                     <div class="stats-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-top: 15px;">
                         <div class="stat-period-card" id="stats-today"></div>
@@ -1498,12 +1573,18 @@
                 </div>
             </div>
         </div>
+        </div>
+        <!-- END TRADING STATISTICS -->
 
         <!-- AI DECISION LOG -->
+        <div class="draggable-panel" data-panel-id="ai-decision-log">
         <div class="grid">
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                    <h2 style="margin: 0;">🤖 AI Decision Log</h2>
+                    <div style="display: flex; align-items: center; gap: 15px;">
+                        <span class="panel-drag-handle" title="Ziehen um Block zu verschieben">⣿</span>
+                        <h2 style="margin: 0;">🤖 AI Decision Log</h2>
+                    </div>
                     <div style="display: flex; gap: 10px; align-items: center;">
                         <span id="action-required-badge" style="display: none; background: #f44336; color: white; padding: 5px 10px; border-radius: 12px; font-size: 0.85em; font-weight: 600;">
                             ⚠️ <span id="action-required-count">0</span> Action Required
@@ -1529,12 +1610,18 @@
                 </div>
             </div>
         </div>
+        </div>
+        <!-- END AI DECISION LOG -->
 
         <!-- ML/AI MACHINE LEARNING SECTION -->
+        <div class="draggable-panel" data-panel-id="ml-models">
         <div class="grid">
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-                    <h2 style="margin: 0;">🧠 Machine Learning Models</h2>
+                    <div style="display: flex; align-items: center; gap: 15px;">
+                        <span class="panel-drag-handle" title="Ziehen um Block zu verschieben">⣿</span>
+                        <h2 style="margin: 0;">🧠 Machine Learning Models</h2>
+                    </div>
                     <div style="display: flex; gap: 10px;">
                         <button onclick="trainMLModel(null)" style="background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: 600;">
                             🎓 Train Global Model
@@ -1629,11 +1716,17 @@
                 </div>
             </div>
         </div>
+        </div>
+        <!-- END ML MODELS -->
 
         <!-- TRADE HISTORY -->
+        <div class="draggable-panel" data-panel-id="trade-history">
         <div class="grid">
             <div class="card">
-                <h2>📜 Trade History</h2>
+                <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 15px;">
+                    <span class="panel-drag-handle" title="Ziehen um Block zu verschieben">⣿</span>
+                    <h2 style="margin: 0;">📜 Trade History</h2>
+                </div>
                 <div class="trade-filters" style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 15px;">
                     <select id="history-period" onchange="loadTradeHistory()">
                         <option value="all">All Time</option>
@@ -1669,7 +1762,10 @@
         <div class="draggable-panel" data-panel-id="live-prices">
         <div class="grid">
             <div class="card">
-                <h2>📊 Abonnierte Symbole & Live-Kurse</h2>
+                <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 15px;">
+                    <span class="panel-drag-handle" title="Ziehen um Block zu verschieben">⣿</span>
+                    <h2 style="margin: 0;">📊 Abonnierte Symbole & Live-Kurse</h2>
+                </div>
                 <div id="symbols-list"></div>
             </div>
         </div>
@@ -1777,6 +1873,23 @@ const SymbolModal = (function() {
             tab.addEventListener('click', function() {
                 const timeframe = this.dataset.timeframe;
                 switchTimeframe(timeframe);
+            });
+        });
+
+        // P/L Chart timeframe button clicks
+        const pnlTfButtons = document.querySelectorAll('.pnl-tf-btn');
+        pnlTfButtons.forEach(btn => {
+            btn.addEventListener('click', function() {
+                // Remove active class from all buttons
+                pnlTfButtons.forEach(b => b.classList.remove('active'));
+
+                // Add active class to clicked button
+                this.classList.add('active');
+
+                // Update timeframe and reload chart
+                currentPnlTimeframe = this.dataset.timeframe;
+                console.log(`📈 P/L timeframe switched to ${currentPnlTimeframe}`);
+                updatePnLChart();
             });
         });
     }
@@ -1952,6 +2065,9 @@ const SymbolModal = (function() {
 
         // Update open trades
         await updateOpenTrades();
+
+        // Update P/L chart
+        await updatePnLChart();
     }
 
     /**
@@ -3021,6 +3137,140 @@ const SymbolModal = (function() {
             console.error('❌ Error fetching open trades:', error);
             tradesContainer.innerHTML = `<div class="error">Fehler beim Laden der Trades: ${error.message}</div>`;
         }
+    }
+
+    /**
+     * P/L Chart Management
+     */
+    let pnlChart = null;
+    let pnlLineSeries = null;
+    let currentPnlTimeframe = 'H1';
+    let currentTradeTicket = null;
+
+    async function updatePnLChart() {
+        console.log('📈 updatePnLChart() called');
+
+        // Check if there's an open trade for current symbol
+        try {
+            const apiBase = window.location.protocol + '//' + window.location.hostname + ':9900';
+            const url = apiBase + '/api/monitoring/1';
+            const monitoringResponse = await fetch(url);
+            const monitoringData = await monitoringResponse.json();
+
+            if (monitoringData.status === 'success' && monitoringData.open_trades) {
+                const symbolTrades = monitoringData.open_trades.filter(trade =>
+                    trade.symbol === currentSymbol
+                );
+
+                const pnlSection = document.getElementById('pnl-chart-section');
+
+                if (symbolTrades.length > 0) {
+                    // Show P/L chart section
+                    pnlSection.style.display = 'block';
+
+                    // Use first trade for this symbol
+                    const trade = symbolTrades[0];
+                    currentTradeTicket = trade.ticket;
+
+                    console.log(`📈 Loading P/L chart for trade #${trade.ticket}`);
+
+                    // Fetch P/L history
+                    const pnlApiBase = window.location.protocol + '//' + window.location.hostname + ':9905';
+                    const pnlUrl = `${pnlApiBase}/api/trade/${trade.ticket}/pnl-history?timeframe=${currentPnlTimeframe}&limit=100`;
+
+                    const pnlResponse = await fetch(pnlUrl);
+                    const pnlData = await pnlResponse.json();
+
+                    if (pnlData.status === 'success' && pnlData.pnl_history && pnlData.pnl_history.length > 0) {
+                        renderPnLChart(pnlData);
+                    } else {
+                        console.warn('No P/L history data available');
+                        pnlSection.style.display = 'none';
+                    }
+                } else {
+                    // No trades, hide P/L section
+                    pnlSection.style.display = 'none';
+                }
+            }
+        } catch (error) {
+            console.error('❌ Error fetching P/L data:', error);
+        }
+    }
+
+    function renderPnLChart(pnlData) {
+        console.log('📊 renderPnLChart() called with', pnlData.pnl_history.length, 'data points');
+
+        const container = document.getElementById('pnl-chart-container');
+        if (!container) {
+            console.error('P/L chart container not found');
+            return;
+        }
+
+        // Convert P/L history to chart data
+        const chartData = pnlData.pnl_history.map(point => ({
+            time: point.timestamp,
+            value: point.pnl
+        }));
+
+        // Create chart if not exists
+        if (!pnlChart) {
+            container.innerHTML = '';
+            pnlChart = window.LightweightCharts.createChart(container, {
+                width: container.clientWidth,
+                height: 300,
+                layout: {
+                    background: { color: '#1a1a1a' },
+                    textColor: '#d1d4dc',
+                },
+                grid: {
+                    vertLines: { color: '#2a2a2a' },
+                    horzLines: { color: '#2a2a2a' },
+                },
+                timeScale: {
+                    timeVisible: true,
+                    secondsVisible: false,
+                },
+            });
+
+            pnlLineSeries = pnlChart.addLineSeries({
+                color: '#4CAF50',
+                lineWidth: 3,
+                crosshairMarkerVisible: true,
+                crosshairMarkerRadius: 6,
+                lastValueVisible: true,
+                priceLineVisible: true,
+            });
+        }
+
+        // Update data
+        pnlLineSeries.setData(chartData);
+
+        // Calculate stats
+        const pnlValues = pnlData.pnl_history.map(p => p.pnl);
+        const currentPnL = pnlValues[pnlValues.length - 1];
+        const peakPnL = Math.max(...pnlValues);
+        const lowestPnL = Math.min(...pnlValues);
+        const drawdown = currentPnL - peakPnL;
+
+        // Update info display
+        document.getElementById('pnl-current-value').textContent = `Aktuell: €${currentPnL.toFixed(2)}`;
+        document.getElementById('pnl-current-value').style.color = currentPnL >= 0 ? '#4CAF50' : '#f44336';
+
+        document.getElementById('pnl-peak-value').textContent = `Peak: €${peakPnL.toFixed(2)}`;
+        document.getElementById('pnl-drawdown').textContent = `Drawdown: €${drawdown.toFixed(2)}`;
+        document.getElementById('pnl-drawdown').style.color = drawdown < 0 ? '#ff9800' : '#4CAF50';
+
+        // Change line color based on profitability
+        if (currentPnL < 0) {
+            pnlLineSeries.applyOptions({ color: '#f44336' });
+        } else {
+            pnlLineSeries.applyOptions({ color: '#4CAF50' });
+        }
+
+        // Fit content
+        pnlChart.timeScale().fitContent();
+
+        console.log('✅ P/L chart rendered successfully');
     }
 
     /**
@@ -5263,7 +5513,10 @@ const SymbolModal = (function() {
     <div class="draggable-panel" data-panel-id="backtesting">
     <div class="card" style="margin-top: 20px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-            <h2 style="margin: 0;">🔬 Backtesting</h2>
+            <div style="display: flex; align-items: center; gap: 15px;">
+                <span class="panel-drag-handle" title="Ziehen um Block zu verschieben">⣿</span>
+                <h2 style="margin: 0;">🔬 Backtesting</h2>
+            </div>
             <button onclick="showBacktestForm()" style="background: #4CAF50; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 1em;">
                 + Neuer Backtest
             </button>
@@ -6678,6 +6931,24 @@ const SymbolModal = (function() {
                         <h3 class="symbol-modal-section-title">Offene Trades</h3>
                         <div class="loading">Lade offene Trades...</div>
                     </div>
+
+                    <!-- P/L Chart Section -->
+                    <div class="symbol-modal-pnl-chart" id="pnl-chart-section" style="display: none;">
+                        <div class="pnl-chart-header">
+                            <h3 class="symbol-modal-section-title">P/L Verlauf</h3>
+                            <div class="pnl-timeframe-buttons">
+                                <button class="pnl-tf-btn active" data-timeframe="H1">1H</button>
+                                <button class="pnl-tf-btn" data-timeframe="H4">4H</button>
+                                <button class="pnl-tf-btn" data-timeframe="D1">1D</button>
+                            </div>
+                        </div>
+                        <div id="pnl-chart-container" style="width: 100%; height: 300px; background: #1a1a1a; border-radius: 8px;"></div>
+                        <div class="pnl-chart-info">
+                            <span id="pnl-current-value">Aktuell: €0.00</span>
+                            <span id="pnl-peak-value">Peak: €0.00</span>
+                            <span id="pnl-drawdown">Drawdown: €0.00</span>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -7351,6 +7622,76 @@ const SymbolModal = (function() {
     color: #f44336;
 }
 
+/* P/L Chart Styles */
+.symbol-modal-pnl-chart {
+    margin-bottom: 30px;
+}
+
+.pnl-chart-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+}
+
+.pnl-timeframe-buttons {
+    display: flex;
+    gap: 8px;
+}
+
+.pnl-tf-btn {
+    background: #2a2a2a;
+    border: 2px solid #3a3a3a;
+    color: #888;
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.pnl-tf-btn:hover {
+    border-color: #4a4a4a;
+    color: #bbb;
+}
+
+.pnl-tf-btn.active {
+    background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+    border-color: #4CAF50;
+    color: white;
+    box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
+}
+
+#pnl-chart-container {
+    margin-bottom: 15px;
+    border: 2px solid #2a2a2a;
+}
+
+.pnl-chart-info {
+    display: flex;
+    justify-content: space-around;
+    padding: 12px;
+    background: #2a2a2a;
+    border-radius: 8px;
+    font-size: 14px;
+}
+
+.pnl-chart-info span {
+    font-weight: 600;
+}
+
+#pnl-current-value {
+    color: #4CAF50;
+}
+
+#pnl-peak-value {
+    color: #2196F3;
+}
+
+#pnl-drawdown {
+    color: #ff9800;
+}
+
 /* Scrollbar Styling */
 .symbol-modal-content::-webkit-scrollbar,
 .symbol-modal-timeframes::-webkit-scrollbar {
@@ -7914,7 +8255,7 @@ const SymbolModal = (function() {
         if (dashboardContainer) {
             const sortable = new Sortable(dashboardContainer, {
                 animation: 150,
-                handle: '.card',  // Entire card is draggable
+                handle: '.panel-drag-handle',  // Only drag handle is draggable
                 ghostClass: 'sortable-ghost',
                 dragClass: 'sortable-drag',
 
@@ -7929,45 +8270,34 @@ const SymbolModal = (function() {
         }
 
         /**
-         * Save current dashboard panel order to backend
+         * Save current dashboard panel order to localStorage
          */
-        async function saveDashboardLayout() {
+        function saveDashboardLayout() {
             try {
                 const panels = document.querySelectorAll('.draggable-panel');
                 const panelOrder = Array.from(panels).map(panel => panel.dataset.panelId);
 
-                const response = await fetch('/api/dashboard-layout', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        panel_order: panelOrder
-                    })
-                });
+                // Save to localStorage
+                localStorage.setItem('dashboardPanelOrder', JSON.stringify(panelOrder));
 
-                const data = await response.json();
+                console.log('✅ Dashboard layout saved to localStorage:', panelOrder);
 
-                if (data.success) {
-                    console.log('✅ Dashboard layout saved:', panelOrder);
-                } else {
-                    console.error('❌ Failed to save dashboard layout:', data.error);
-                }
+                // Show visual feedback
+                showSaveNotification();
             } catch (error) {
                 console.error('❌ Error saving dashboard layout:', error);
             }
         }
 
         /**
-         * Load saved dashboard layout from backend
+         * Load saved dashboard layout from localStorage
          */
-        async function loadDashboardLayout() {
+        function loadDashboardLayout() {
             try {
-                const response = await fetch('/api/dashboard-layout');
-                const data = await response.json();
+                const savedOrder = localStorage.getItem('dashboardPanelOrder');
 
-                if (data.success && data.panel_order && data.panel_order.length > 0) {
-                    const panelOrder = data.panel_order;
+                if (savedOrder) {
+                    const panelOrder = JSON.parse(savedOrder);
                     const container = document.getElementById('dashboard-panels');
 
                     // Reorder panels according to saved order
@@ -7978,12 +8308,71 @@ const SymbolModal = (function() {
                         }
                     });
 
-                    console.log('✅ Dashboard layout loaded:', panelOrder);
+                    console.log('✅ Dashboard layout loaded from localStorage:', panelOrder);
                 } else {
                     console.log('ℹ️ Using default dashboard layout');
                 }
             } catch (error) {
                 console.error('❌ Error loading dashboard layout:', error);
+            }
+        }
+
+        /**
+         * Show visual notification when layout is saved
+         */
+        function showSaveNotification() {
+            const notification = document.createElement('div');
+            notification.textContent = '✓ Layout gespeichert';
+            notification.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                background: #4CAF50;
+                color: white;
+                padding: 12px 20px;
+                border-radius: 5px;
+                font-weight: 600;
+                z-index: 10000;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+                animation: slideIn 0.3s ease, slideOut 0.3s ease 2.7s;
+            `;
+
+            document.body.appendChild(notification);
+
+            setTimeout(() => {
+                notification.remove();
+            }, 3000);
+        }
+
+        /**
+         * Reset dashboard layout to default
+         */
+        function resetDashboardLayout() {
+            if (confirm('Möchten Sie das Dashboard-Layout auf die Standardreihenfolge zurücksetzen?')) {
+                localStorage.removeItem('dashboardPanelOrder');
+
+                // Show notification
+                const notification = document.createElement('div');
+                notification.textContent = '✓ Layout zurückgesetzt - Seite wird neu geladen...';
+                notification.style.cssText = `
+                    position: fixed;
+                    top: 20px;
+                    right: 20px;
+                    background: #ff9800;
+                    color: white;
+                    padding: 12px 20px;
+                    border-radius: 5px;
+                    font-weight: 600;
+                    z-index: 10000;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+                `;
+
+                document.body.appendChild(notification);
+
+                // Reload page after short delay
+                setTimeout(() => {
+                    window.location.reload();
+                }, 1000);
             }
         }
 
