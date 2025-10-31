@@ -36,8 +36,8 @@ const PnLCharts = {
         this.renderContainer();
         this.loadAllCharts();
 
-        // Auto-refresh every 5 minutes
-        setInterval(() => this.loadAllCharts(), 5 * 60 * 1000);
+        // Auto-refresh every 15 seconds for real-time updates
+        setInterval(() => this.loadAllCharts(), 15 * 1000);
     },
 
     /**
@@ -238,7 +238,7 @@ const PnLCharts = {
                         borderWidth: 1,
                         callbacks: {
                             label: function(context) {
-                                return `P/L: $${context.parsed.y.toFixed(2)}`;
+                                return `P/L: €${context.parsed.y.toFixed(2)}`;
                             }
                         }
                     }
@@ -263,7 +263,7 @@ const PnLCharts = {
                         ticks: {
                             color: '#9ca3af',
                             callback: function(value) {
-                                return '$' + value.toFixed(2);
+                                return '€' + value.toFixed(2);
                             }
                         }
                     }
@@ -284,7 +284,7 @@ const PnLCharts = {
         statsDiv.innerHTML = `
             <div class="stat">
                 <span class="stat-label">Total P/L</span>
-                <span class="stat-value ${pnlClass}">$${data.total_pnl.toFixed(2)}</span>
+                <span class="stat-value ${pnlClass}">€${data.total_pnl.toFixed(2)}</span>
             </div>
             <div class="stat">
                 <span class="stat-label">Trades</span>
