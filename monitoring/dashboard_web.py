@@ -59,8 +59,8 @@ class WebDashboardServer:
 
         @app.route('/')
         def index():
-            """Serve mobile dashboard page"""
-            return render_template('dashboard_mobile.html')
+            """Serve dashboard page"""
+            return render_template('dashboard.html')
 
         @app.route('/ultimate')
         def ultimate():
@@ -220,6 +220,100 @@ class WebDashboardServer:
             except Exception as e:
                 logger.error(f"Error getting P/L summary: {e}", exc_info=True)
                 return jsonify({'error': str(e)}), 500
+
+        @app.route('/api/dashboard-layout', methods=['GET'])
+        def api_get_dashboard_layout():
+            """
+            Get saved dashboard layout for the current account
+
+            Returns:
+                JSON with panel_order array or default order if not found
+            """
+            try:
+                from database import get_db_connection
+
+                with get_db_connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("""
+                            SELECT panel_order
+                            FROM dashboard_layout
+                            WHERE account_id = %s
+                        """, (self.account_id,))
+
+                        result = cur.fetchone()
+
+                        if result:
+                            return jsonify({
+                                'success': True,
+                                'panel_order': result[0]
+                            })
+                        else:
+                            # Return default order
+                            default_order = [
+                                "open-positions",
+                                "trading-signals",
+                                "symbol-performance",
+                                "pnl-performance",
+                                "spread-config",
+                                "trading-stats",
+                                "ai-decision-log",
+                                "ml-models",
+                                "trade-history",
+                                "live-prices",
+                                "backtesting",
+                                "global-settings"
+                            ]
+                            return jsonify({
+                                'success': True,
+                                'panel_order': default_order
+                            })
+
+            except Exception as e:
+                logger.error(f"Error getting dashboard layout: {e}", exc_info=True)
+                return jsonify({'success': False, 'error': str(e)}), 500
+
+        @app.route('/api/dashboard-layout', methods=['POST'])
+        def api_save_dashboard_layout():
+            """
+            Save dashboard layout for the current account
+
+            Request JSON:
+                {
+                    "panel_order": ["open-positions", "trading-signals", ...]
+                }
+
+            Returns:
+                JSON with success status
+            """
+            try:
+                data = request.get_json()
+                panel_order = data.get('panel_order', [])
+
+                if not isinstance(panel_order, list):
+                    return jsonify({'success': False, 'error': 'panel_order must be an array'}), 400
+
+                from database import get_db_connection
+
+                with get_db_connection() as conn:
+                    with conn.cursor() as cur:
+                        # Upsert layout
+                        cur.execute("""
+                            INSERT INTO dashboard_layout (account_id, panel_order, updated_at)
+                            VALUES (%s, %s, CURRENT_TIMESTAMP)
+                            ON CONFLICT (account_id)
+                            DO UPDATE SET
+                                panel_order = EXCLUDED.panel_order,
+                                updated_at = CURRENT_TIMESTAMP
+                        """, (self.account_id, json.dumps(panel_order)))
+
+                        conn.commit()
+
+                logger.info(f"Saved dashboard layout for account {self.account_id}: {len(panel_order)} panels")
+                return jsonify({'success': True, 'message': 'Layout saved successfully'})
+
+            except Exception as e:
+                logger.error(f"Error saving dashboard layout: {e}", exc_info=True)
+                return jsonify({'success': False, 'error': str(e)}), 500
 
         @app.route('/health')
         def health_check():

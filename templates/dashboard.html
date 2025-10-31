@@ -6,6 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
+    <!-- Version: 2025-10-31-v2 - Fixed signals null-safe rendering -->
     <title>ngTradingBot Dashboard</title>
     <!-- Inline SVG favicon to avoid 404 -->
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>🤖</text></svg>">
@@ -1203,9 +1204,45 @@
             .safety-detail-content div {
                 margin-bottom: 3px;
             }
+
+            /* Drag and Drop Styles */
+            .dashboard-panels-container {
+                display: flex;
+                flex-direction: column;
+                gap: 0;
+            }
+
+            .draggable-panel {
+                cursor: move;
+                transition: transform 0.2s ease, box-shadow 0.2s ease;
+            }
+
+            .draggable-panel.sortable-ghost {
+                opacity: 0.4;
+            }
+
+            .draggable-panel.sortable-drag {
+                box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            }
+
+            .drag-handle {
+                cursor: grab;
+                padding: 5px 10px;
+                color: #666;
+                font-size: 1.2em;
+                user-select: none;
+            }
+
+            .drag-handle:active {
+                cursor: grabbing;
+            }
         </style>
 
+        <!-- Dashboard Panels Container (Draggable) -->
+        <div id="dashboard-panels" class="dashboard-panels-container">
+
         <!-- OPEN POSITIONS -->
+        <div class="draggable-panel" data-panel-id="open-positions">
         <div class="grid">
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
@@ -1229,7 +1266,11 @@
                 </div>
             </div>
         </div>
+        </div>
+        <!-- END OPEN POSITIONS -->
 
+        <!-- TRADING SIGNALS -->
+        <div class="draggable-panel" data-panel-id="trading-signals">
         <div class="grid">
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
@@ -1302,8 +1343,11 @@
                 <div id="signals-list"></div>
             </div>
         </div>
+        </div>
+        <!-- END TRADING SIGNALS -->
 
         <!-- SYMBOL PERFORMANCE TRACKING -->
+        <div class="draggable-panel" data-panel-id="symbol-performance">
         <div class="grid">
             <div class="card">
                 <h2>🎯 Symbol Performance (Live 24h)</h2>
@@ -1618,7 +1662,11 @@
                 <div id="trade-pagination" style="display: flex; justify-content: center; gap: 10px; margin-top: 15px; align-items: center;"></div>
             </div>
         </div>
+        </div>
+        <!-- END TRADE HISTORY -->
 
+        <!-- LIVE PRICES -->
+        <div class="draggable-panel" data-panel-id="live-prices">
         <div class="grid">
             <div class="card">
                 <h2>📊 Abonnierte Symbole & Live-Kurse</h2>
@@ -2756,16 +2804,23 @@ const SymbolModal = (function() {
      */
     async function updateIndicators() {
         const indicatorsContainer = modalElement.querySelector('.symbol-modal-indicators');
-        if (!indicatorsContainer) return;
+        if (!indicatorsContainer) {
+            console.warn('⚠️ Indicators container not found');
+            return;
+        }
 
+        console.log(`📊 Updating indicators for ${currentSymbol} ${currentTimeframe}`);
         indicatorsContainer.innerHTML = '<div class="loading">Lade Indikatoren...</div>';
 
         try {
             // Fetch signals to get indicator data
-            const response = await fetch(`/api/signals?symbol=${currentSymbol}&timeframe=${currentTimeframe}`);
+            const url = `/api/signals?symbol=${currentSymbol}&timeframe=${currentTimeframe}`;
+            console.log(`📡 Fetching indicators from: ${url}`);
+            const response = await fetch(url);
             const data = await response.json();
+            console.log(`📊 Indicators response:`, data);
 
-            if (data.status === 'success' && data.signals.length > 0) {
+            if (data.status === 'success' && data.signals && data.signals.length > 0) {
                 // Use the most recent signal for indicator data
                 const signal = data.signals[0];
 
@@ -2799,67 +2854,83 @@ const SymbolModal = (function() {
                     </div>
                 `;
             } else {
+                console.warn(`⚠️ No indicator data: status=${data.status}, signals=${data.signals?.length || 0}`);
                 indicatorsContainer.innerHTML = '<div class="no-data">Keine Indikator-Daten verfügbar</div>';
             }
         } catch (error) {
-            console.error('Error fetching indicators:', error);
-            indicatorsContainer.innerHTML = '<div class="error">Fehler beim Laden der Indikatoren</div>';
+            console.error('❌ Error fetching indicators:', error);
+            indicatorsContainer.innerHTML = `<div class="error">Fehler beim Laden der Indikatoren: ${error.message}</div>`;
         }
     }
 
     /**
      * Update signals section
+     * Version: 2025-10-31-v2 - Null-safe rendering
      */
     async function updateSignals() {
         const signalsContainer = modalElement.querySelector('.symbol-modal-signals');
-        if (!signalsContainer) return;
+        if (!signalsContainer) {
+            console.warn('⚠️ Signals container not found');
+            return;
+        }
 
+        console.log(`🎯 [v2025-10-31] Updating signals for ${currentSymbol} ${currentTimeframe}`);
         signalsContainer.innerHTML = '<div class="loading">Lade Signale...</div>';
 
         try {
-            const response = await fetch(`/api/signals?symbol=${currentSymbol}&timeframe=${currentTimeframe}`);
+            const url = `/api/signals?symbol=${currentSymbol}&timeframe=${currentTimeframe}`;
+            console.log(`📡 Fetching signals from: ${url}`);
+            const response = await fetch(url);
             const data = await response.json();
+            console.log(`🎯 Signals response:`, data);
 
-            if (data.status === 'success' && data.signals.length > 0) {
+            // Log first signal structure for debugging
+            if (data.signals && data.signals.length > 0) {
+                console.log(`🎯 First signal structure:`, Object.keys(data.signals[0]));
+                console.log(`🎯 First signal data:`, data.signals[0]);
+            }
+
+            if (data.status === 'success' && data.signals && data.signals.length > 0) {
                 signalsContainer.innerHTML = `
                     <div class="signals-list">
                         ${data.signals.map(signal => `
-                            <div class="signal-card signal-${signal.signal_type.toLowerCase()}">
+                            <div class="signal-card signal-${(signal.signal_type || 'neutral').toLowerCase()}">
                                 <div class="signal-card-header">
-                                    <span class="signal-type">${signal.signal_type}</span>
-                                    <span class="signal-confidence">${signal.confidence.toFixed(1)}%</span>
+                                    <span class="signal-type">${signal.signal_type || 'N/A'}</span>
+                                    <span class="signal-confidence">${signal.confidence ? signal.confidence.toFixed(1) : 'N/A'}%</span>
                                 </div>
                                 <div class="signal-card-body">
                                     <div class="signal-row">
                                         <span class="signal-label">Entry:</span>
-                                        <span class="signal-value">${signal.entry_price}</span>
+                                        <span class="signal-value">${signal.entry_price || 'N/A'}</span>
                                     </div>
                                     <div class="signal-row">
                                         <span class="signal-label">SL:</span>
-                                        <span class="signal-value">${signal.sl_price}</span>
+                                        <span class="signal-value">${signal.sl_price || 'N/A'}</span>
                                     </div>
                                     <div class="signal-row">
                                         <span class="signal-label">TP:</span>
-                                        <span class="signal-value">${signal.tp_price}</span>
+                                        <span class="signal-value">${signal.tp_price || 'N/A'}</span>
                                     </div>
                                     <div class="signal-row">
                                         <span class="signal-label">Lot Size:</span>
-                                        <span class="signal-value">${signal.lot_size}</span>
+                                        <span class="signal-value">${signal.lot_size || 'N/A'}</span>
                                     </div>
                                 </div>
                                 <div class="signal-card-footer">
-                                    <small>Alter: ${signal.age_minutes}min | Risiko: €${signal.risk_amount.toFixed(2)}</small>
+                                    <small>Alter: ${signal.age_minutes || 'N/A'}min | Risiko: €${signal.risk_amount ? signal.risk_amount.toFixed(2) : 'N/A'}</small>
                                 </div>
                             </div>
                         `).join('')}
                     </div>
                 `;
             } else {
+                console.warn(`⚠️ No signals data: status=${data.status}, signals=${data.signals?.length || 0}`);
                 signalsContainer.innerHTML = '<div class="no-data">Keine aktiven Signale für diesen Timeframe</div>';
             }
         } catch (error) {
-            console.error('Error fetching signals:', error);
-            signalsContainer.innerHTML = '<div class="error">Fehler beim Laden der Signale</div>';
+            console.error('❌ Error fetching signals:', error);
+            signalsContainer.innerHTML = `<div class="error">Fehler beim Laden der Signale: ${error.message}</div>`;
         }
     }
 
@@ -2868,14 +2939,21 @@ const SymbolModal = (function() {
      */
     async function updateOpenTrades() {
         const tradesContainer = modalElement.querySelector('.symbol-modal-trades');
-        if (!tradesContainer) return;
+        if (!tradesContainer) {
+            console.warn('⚠️ Trades container not found');
+            return;
+        }
 
+        console.log(`💼 Updating open trades for ${currentSymbol}`);
         tradesContainer.innerHTML = '<div class="loading">Lade offene Trades...</div>';
 
         try {
             const apiBase = window.location.protocol + '//' + window.location.hostname + ':9900';
-            const monitoringResponse = await fetch(apiBase + '/api/monitoring/1');
+            const url = apiBase + '/api/monitoring/1';
+            console.log(`📡 Fetching trades from: ${url}`);
+            const monitoringResponse = await fetch(url);
             const monitoringData = await monitoringResponse.json();
+            console.log(`💼 Trades response:`, monitoringData);
 
             if (monitoringData.status === 'success' && monitoringData.open_trades) {
                 // Filter trades for current symbol
@@ -2932,14 +3010,16 @@ const SymbolModal = (function() {
                         </div>
                     `;
                 } else {
+                    console.log(`ℹ️ No open trades for symbol ${currentSymbol}`);
                     tradesContainer.innerHTML = '<div class="no-data">Keine offenen Trades für dieses Symbol</div>';
                 }
             } else {
+                console.warn(`⚠️ No trades data: status=${monitoringData.status}, open_trades=${monitoringData.open_trades?.length || 0}`);
                 tradesContainer.innerHTML = '<div class="no-data">Keine offenen Trades</div>';
             }
         } catch (error) {
-            console.error('Error fetching open trades:', error);
-            tradesContainer.innerHTML = '<div class="error">Fehler beim Laden der Trades</div>';
+            console.error('❌ Error fetching open trades:', error);
+            tradesContainer.innerHTML = `<div class="error">Fehler beim Laden der Trades: ${error.message}</div>`;
         }
     }
 
@@ -5176,7 +5256,11 @@ const SymbolModal = (function() {
         </div>
     </div>
 
-    <!-- Backtesting Section -->
+    </div>
+    <!-- END LIVE PRICES -->
+
+    <!-- BACKTESTING -->
+    <div class="draggable-panel" data-panel-id="backtesting">
     <div class="card" style="margin-top: 20px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
             <h2 style="margin: 0;">🔬 Backtesting</h2>
@@ -6735,7 +6819,7 @@ const SymbolModal = (function() {
 .symbol-modal-fullscreen {
     position: absolute;
     top: 20px;
-    right: 70px;
+    right: 80px;
     background: transparent;
     border: none;
     color: #999;
@@ -6811,7 +6895,7 @@ const SymbolModal = (function() {
 /* Position fullscreen/close buttons closer */
 #symbol-modal.fullscreen .symbol-modal-fullscreen {
     top: 8px;
-    right: 50px;
+    right: 60px;
     width: 32px;
     height: 32px;
     font-size: 22px;
@@ -6819,7 +6903,7 @@ const SymbolModal = (function() {
 
 #symbol-modal.fullscreen .symbol-modal-close {
     top: 8px;
-    right: 10px;
+    right: 15px;
     width: 32px;
     height: 32px;
     font-size: 26px;
@@ -7815,6 +7899,104 @@ const SymbolModal = (function() {
                     btn.style.background = '#10b981';
                     btn.disabled = false;
                 }, 3000);
+            }
+        });
+    </script>
+
+    <!-- SortableJS Library -->
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+
+    <!-- Dashboard Drag & Drop Script -->
+    <script>
+        // Initialize Sortable for dashboard panels
+        const dashboardContainer = document.getElementById('dashboard-panels');
+
+        if (dashboardContainer) {
+            const sortable = new Sortable(dashboardContainer, {
+                animation: 150,
+                handle: '.card',  // Entire card is draggable
+                ghostClass: 'sortable-ghost',
+                dragClass: 'sortable-drag',
+
+                // Save order when drag ends
+                onEnd: function(evt) {
+                    saveDashboardLayout();
+                }
+            });
+
+            // Load saved layout on page load
+            loadDashboardLayout();
+        }
+
+        /**
+         * Save current dashboard panel order to backend
+         */
+        async function saveDashboardLayout() {
+            try {
+                const panels = document.querySelectorAll('.draggable-panel');
+                const panelOrder = Array.from(panels).map(panel => panel.dataset.panelId);
+
+                const response = await fetch('/api/dashboard-layout', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        panel_order: panelOrder
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    console.log('✅ Dashboard layout saved:', panelOrder);
+                } else {
+                    console.error('❌ Failed to save dashboard layout:', data.error);
+                }
+            } catch (error) {
+                console.error('❌ Error saving dashboard layout:', error);
+            }
+        }
+
+        /**
+         * Load saved dashboard layout from backend
+         */
+        async function loadDashboardLayout() {
+            try {
+                const response = await fetch('/api/dashboard-layout');
+                const data = await response.json();
+
+                if (data.success && data.panel_order && data.panel_order.length > 0) {
+                    const panelOrder = data.panel_order;
+                    const container = document.getElementById('dashboard-panels');
+
+                    // Reorder panels according to saved order
+                    panelOrder.forEach(panelId => {
+                        const panel = document.querySelector(`[data-panel-id="${panelId}"]`);
+                        if (panel) {
+                            container.appendChild(panel);
+                        }
+                    });
+
+                    console.log('✅ Dashboard layout loaded:', panelOrder);
+                } else {
+                    console.log('ℹ️ Using default dashboard layout');
+                }
+            } catch (error) {
+                console.error('❌ Error loading dashboard layout:', error);
+            }
+        }
+
+        // Optional: Add visual feedback on drag start/end
+        dashboardContainer?.addEventListener('dragstart', function(e) {
+            if (e.target.classList.contains('draggable-panel')) {
+                e.target.style.opacity = '0.5';
+            }
+        });
+
+        dashboardContainer?.addEventListener('dragend', function(e) {
+            if (e.target.classList.contains('draggable-panel')) {
+                e.target.style.opacity = '1';
             }
         });
     </script>
