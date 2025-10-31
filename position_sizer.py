@@ -181,11 +181,37 @@ class PositionSizer:
             # 5. Final lot = average of base_lot and risk_based_lot (prevents extremes)
             final_lot = (base_lot + risk_based_lot) / 2
 
-            # 6. Round to lot step
+            # 6. ✅ NEW: Check against SL enforcement max loss limits
+            from sl_enforcement import SLEnforcement
+            max_loss_limit = SLEnforcement.MAX_LOSS_PER_TRADE.get(
+                symbol.upper(),
+                SLEnforcement.MAX_LOSS_PER_TRADE.get('DEFAULT', 40.0)
+            )
+
+            # Calculate what loss this lot size would generate with current SL distance
+            potential_loss = final_lot * sl_distance_pips * pip_value_per_lot
+
+            # If potential loss exceeds limit, reduce lot size proportionally
+            if potential_loss > max_loss_limit:
+                # Calculate max safe lot size
+                max_safe_lot = max_loss_limit / (sl_distance_pips * pip_value_per_lot)
+
+                logger.warning(
+                    f"⚠️ Reducing lot size for {symbol}: "
+                    f"Original: {final_lot:.3f} lot (loss: {potential_loss:.2f} EUR) → "
+                    f"Adjusted: {max_safe_lot:.3f} lot (loss: {max_loss_limit:.2f} EUR max)"
+                )
+
+                final_lot = max_safe_lot
+
+            # 7. Round to lot step
             final_lot = round(final_lot / lot_step) * lot_step
 
-            # 7. Apply min/max limits
+            # 8. Apply min/max limits
             final_lot = max(self.min_lot_size, min(self.max_lot_size, final_lot))
+
+            # Recalculate final potential loss
+            final_potential_loss = final_lot * sl_distance_pips * pip_value_per_lot
 
             logger.info(
                 f"📊 Position Size: {symbol} | "
@@ -194,7 +220,8 @@ class PositionSizer:
                 f"Symbol Factor: x{symbol_risk_factor:.2f} | "
                 f"Base Lot: {base_lot:.2f} | "
                 f"Risk Lot: {risk_based_lot:.3f} | "
-                f"Final: {final_lot:.2f} lot"
+                f"Final: {final_lot:.2f} lot | "
+                f"Max Loss: {final_potential_loss:.2f} EUR (limit: {max_loss_limit:.2f})"
             )
 
             return final_lot

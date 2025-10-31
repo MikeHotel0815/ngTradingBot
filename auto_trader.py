@@ -1124,39 +1124,93 @@ class AutoTrader:
             )
 
             if not sl_validation['valid']:
-                logger.error(
-                    f"🚨 TRADE REJECTED BY SL ENFORCEMENT: {signal.symbol} {signal.signal_type} | "
-                    f"{sl_validation['reason']} | "
-                    f"Potential Loss: {sl_validation.get('max_loss_eur', 0):.2f} EUR"
-                )
+                # ✅ NEW: Instead of rejecting, try to reduce volume to fit max loss limit
+                max_loss_eur = sl_validation.get('max_loss_eur', 0)
+                reason = sl_validation.get('reason', '')
 
-                # Log to AI Decision Log
-                try:
-                    from ai_decision_log import log_auto_trade_decision
-                    log_auto_trade_decision(
-                        account_id=account_id,
-                        symbol=signal.symbol,
-                        timeframe=signal.timeframe,
-                        signal_id=signal.id,
-                        decision='REJECTED',
-                        reason=f"SL Enforcement: {sl_validation['reason']}",
-                        confidence=float(signal.confidence) if signal.confidence else 0,
-                        details={
-                            'entry_price': entry_price,
-                            'sl_price': adjusted_sl,
-                            'volume': volume,
-                            'max_loss_eur': sl_validation.get('max_loss_eur'),
-                            'suggested_sl': sl_validation.get('suggested_sl')
-                        }
+                # Check if reason is about exceeding max loss
+                if 'Max loss exceeded' in reason and max_loss_eur > 0:
+                    # Extract the max allowed loss from sl_enforcer
+                    from sl_enforcement import SLEnforcement
+                    max_loss_limit = SLEnforcement.MAX_LOSS_PER_TRADE.get(
+                        signal.symbol.upper(),
+                        SLEnforcement.MAX_LOSS_PER_TRADE.get('DEFAULT', 40.0)
                     )
-                except Exception as log_error:
-                    logger.warning(f"Could not log rejection to AI Decision Log: {log_error}")
 
-                return None  # ABORT trade execution
+                    # Calculate adjusted volume to fit within limit
+                    # max_loss_eur / volume = loss_per_lot
+                    # adjusted_volume = max_loss_limit / loss_per_lot
+                    if max_loss_eur > 0:
+                        loss_per_lot = max_loss_eur / volume
+                        adjusted_volume = max_loss_limit / loss_per_lot
+
+                        # Round down to 0.01 step
+                        adjusted_volume = max(0.01, round(adjusted_volume * 100) / 100)
+
+                        logger.warning(
+                            f"⚠️ VOLUME ADJUSTED for {signal.symbol}: "
+                            f"{volume:.2f} lot ({max_loss_eur:.2f} EUR loss) → "
+                            f"{adjusted_volume:.2f} lot (~{max_loss_limit:.2f} EUR loss max)"
+                        )
+
+                        # Update volume and re-validate
+                        volume = float(adjusted_volume)
+
+                        # Re-validate with adjusted volume
+                        sl_validation = sl_enforcer.validate_trade_sl(
+                            db=db,
+                            symbol=signal.symbol,
+                            signal_type=signal.signal_type,
+                            entry_price=entry_price,
+                            sl_price=adjusted_sl,
+                            volume=volume
+                        )
+
+                        if not sl_validation['valid']:
+                            logger.error(
+                                f"🚨 TRADE STILL REJECTED after volume adjustment: {signal.symbol} | "
+                                f"{sl_validation['reason']}"
+                            )
+                            return None
+                    else:
+                        logger.error(f"🚨 TRADE REJECTED (cannot adjust volume): {signal.symbol} | {reason}")
+                        return None
+                else:
+                    # Other validation failure (not about max loss)
+                    logger.error(
+                        f"🚨 TRADE REJECTED BY SL ENFORCEMENT: {signal.symbol} {signal.signal_type} | "
+                        f"{reason} | "
+                        f"Potential Loss: {max_loss_eur:.2f} EUR"
+                    )
+
+                    # Log to AI Decision Log
+                    try:
+                        from ai_decision_log import log_auto_trade_decision
+                        log_auto_trade_decision(
+                            account_id=account_id,
+                            symbol=signal.symbol,
+                            timeframe=signal.timeframe,
+                            signal_id=signal.id,
+                            decision='REJECTED',
+                            reason=f"SL Enforcement: {reason}",
+                            confidence=float(signal.confidence) if signal.confidence else 0,
+                            details={
+                                'entry_price': entry_price,
+                                'sl_price': adjusted_sl,
+                                'volume': volume,
+                                'max_loss_eur': max_loss_eur,
+                                'suggested_sl': sl_validation.get('suggested_sl')
+                            }
+                        )
+                    except Exception as log_error:
+                        logger.warning(f"Could not log rejection to AI Decision Log: {log_error}")
+
+                    return None  # ABORT trade execution
 
             logger.info(
                 f"✅ SL ENFORCEMENT PASSED: {signal.symbol} | "
                 f"Max Loss: {sl_validation.get('max_loss_eur', 0):.2f} EUR | "
+                f"Volume: {volume:.2f} lot | "
                 f"SL: {adjusted_sl:.5f}"
             )
 
