@@ -17,6 +17,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application files
 COPY *.py .
 COPY templates templates/
+COPY static static/
 COPY workers workers/
 COPY scripts scripts/
 COPY ml ml/
