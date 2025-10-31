@@ -101,7 +101,7 @@ class TelegramChartsGenerator:
                 pad=15
             )
             ax.set_xlabel('Zeit', color=self.colors['text'], fontsize=10)
-            ax.set_ylabel('P/L ($)', color=self.colors['text'], fontsize=10)
+            ax.set_ylabel('P/L (€)', color=self.colors['text'], fontsize=10)
 
             # Grid
             ax.grid(True, alpha=0.2, color=self.colors['text'], linestyle='-', linewidth=0.5)
@@ -132,7 +132,7 @@ class TelegramChartsGenerator:
             stats_text = (
                 f"Trades: {data['trade_count']} | "
                 f"Win Rate: {data['win_rate']}% | "
-                f"Total P/L: ${data['total_pnl']:.2f}"
+                f"Total P/L: €{data['total_pnl']:.2f}"
             )
             ax.text(
                 0.5, 0.02, stats_text,
