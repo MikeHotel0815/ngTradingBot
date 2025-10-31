@@ -247,6 +247,47 @@ Entry: {open_price:.5f} → Exit: {close_price:.5f}
 
         return self.send_message(message, silent=silent)
 
+    def send_photo(self, photo, caption: str = '', silent: bool = True) -> bool:
+        """
+        Send a photo via Telegram
+
+        Args:
+            photo: BytesIO buffer or file path with image data
+            caption: Optional caption text
+            silent: Send silently (no notification sound)
+
+        Returns:
+            True if photo was sent successfully
+        """
+        if not self.enabled:
+            logger.debug(f"Telegram disabled, would have sent photo: {caption}")
+            return False
+
+        try:
+            url = f"https://api.telegram.org/bot{self.bot_token}/sendPhoto"
+
+            payload = {
+                'chat_id': self.chat_id,
+                'caption': caption,
+                'disable_notification': silent
+            }
+
+            # Prepare photo file
+            files = {'photo': photo}
+
+            response = requests.post(url, data=payload, files=files, timeout=30)
+
+            if response.status_code == 200:
+                logger.debug(f"Telegram photo sent successfully: {caption}")
+                return True
+            else:
+                logger.error(f"Telegram API error: {response.status_code} - {response.text}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error sending Telegram photo: {e}")
+            return False
+
     def send_daily_summary(self, stats: Dict) -> bool:
         """Send daily performance summary"""
 

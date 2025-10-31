@@ -263,7 +263,7 @@ const PnLCharts = {
                         ticks: {
                             color: '#9ca3af',
                             callback: function(value) {
-                                return '$' + value.toFixed(0);
+                                return '$' + value.toFixed(2);
                             }
                         }
                     }

@@ -5849,6 +5849,37 @@ def api_pnl_summary():
         return jsonify({'error': str(e)}), 500
 
 
+@app_webui.route('/api/pnl-charts/send-telegram', methods=['POST'])
+def api_send_pnl_charts_telegram():
+    """Send P/L charts to Telegram"""
+    try:
+        from telegram_charts import TelegramChartsGenerator
+
+        account_id = request.json.get('account_id', 3) if request.is_json else 3
+
+        generator = TelegramChartsGenerator(account_id=account_id)
+
+        if not generator.notifier.enabled:
+            return jsonify({
+                'success': False,
+                'error': 'Telegram not configured'
+            }), 400
+
+        success = generator.send_charts_to_telegram()
+
+        return jsonify({
+            'success': success,
+            'message': 'Charts sent to Telegram' if success else 'Failed to send charts'
+        })
+
+    except Exception as e:
+        logger.error(f"Error sending P/L charts to Telegram: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
 # ============================================================================
 # ML/AI MACHINE LEARNING API ENDPOINTS
 # ============================================================================

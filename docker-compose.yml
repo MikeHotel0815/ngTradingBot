@@ -169,6 +169,34 @@ services:
       - tradingbot_network
     restart: unless-stopped
 
+  # ============================================================================
+  # TELEGRAM BOT - Webhook handler for bot commands
+  # Handles incoming commands like /charts, /report
+  # Port 9907: Webhook endpoint for Telegram Bot API
+  # ============================================================================
+  telegram_bot:
+    build: .
+    container_name: ngtradingbot_telegram_bot
+    env_file:
+      - .env.telegram
+    command: python telegram_bot.py
+    ports:
+      - "9907:9907"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql://trader:${DB_PASSWORD:-tradingbot_secret_2025}@postgres:5432/ngtradingbot
+      - REDIS_URL=redis://redis:6379/0
+      - TELEGRAM_BOT_TOKEN=8454891267:AAHKrGTcGCVfXjb0LNjq6QAC816Un9ig7VA
+      - TELEGRAM_CHAT_ID=557944459
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - tradingbot_network
+    restart: unless-stopped
+
 volumes:
   pgdata:
   redisdata:

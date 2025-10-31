@@ -1330,9 +1330,14 @@
         <!-- P/L PERFORMANCE CHARTS -->
         <div class="grid">
             <div class="card">
-                <h2>📊 P/L Performance</h2>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <h2 style="margin: 0;">📊 P/L Performance</h2>
+                    <button id="send-charts-btn" style="padding: 8px 16px; background: #10b981; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 500;">
+                        📱 Charts an Telegram senden
+                    </button>
+                </div>
                 <p style="color: #888; margin-bottom: 20px;">
-                    Profit/Loss Entwicklung über verschiedene Zeitintervalle (1 Std, 12 Std, 24 Std, 1 Woche, 1 Jahr)
+                    Profit/Loss Entwicklung über verschiedene Zeitintervalle (1 Std, 12 Std, 24 Std, 1 Woche, Aktuelles Jahr)
                 </p>
                 <div id="pnl-charts-container"></div>
             </div>
@@ -7765,6 +7770,53 @@ const SymbolModal = (function() {
         } else {
             console.error('❌ PnLCharts is not defined!');
         }
+
+        // Send Charts to Telegram Button Handler
+        document.getElementById('send-charts-btn').addEventListener('click', async function() {
+            const btn = this;
+            const originalText = btn.textContent;
+
+            // Disable button and show loading state
+            btn.disabled = true;
+            btn.textContent = '⏳ Sende Charts...';
+            btn.style.background = '#6b7280';
+
+            try {
+                const response = await fetch('/api/pnl-charts/send-telegram', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ account_id: 3 })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    btn.textContent = '✅ Charts gesendet!';
+                    btn.style.background = '#10b981';
+
+                    // Reset button after 3 seconds
+                    setTimeout(() => {
+                        btn.textContent = originalText;
+                        btn.disabled = false;
+                    }, 3000);
+                } else {
+                    throw new Error(data.error || 'Failed to send charts');
+                }
+            } catch (error) {
+                console.error('Error sending charts:', error);
+                btn.textContent = '❌ Fehler beim Senden';
+                btn.style.background = '#ef4444';
+
+                // Reset button after 3 seconds
+                setTimeout(() => {
+                    btn.textContent = originalText;
+                    btn.style.background = '#10b981';
+                    btn.disabled = false;
+                }, 3000);
+            }
+        });
     </script>
 
 </body>
