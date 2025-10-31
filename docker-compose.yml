@@ -52,6 +52,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./backups:/app/backups
+      - ./ml_models:/app/ml_models
     environment:
       - PYTHONUNBUFFERED=1
       - DATABASE_URL=postgresql://trader:${DB_PASSWORD:-tradingbot_secret_2025}@postgres:5432/ngtradingbot
