@@ -35,18 +35,18 @@ class SmartTrailingStop:
 
     def __init__(self):
         # Symbol-specific base configs
-        # 🔧 OPTIMIZED 2025-10-28: Reduced ATR multipliers for tighter trailing (higher profits)
+        # 🔧 OPTIMIZED 2025-11-03: Increased min_profit to prevent premature trailing in small profits
         self.configs = {
-            'BTCUSD': {'min_profit_pts': 100, 'atr_period': 14, 'atr_multiplier': 1.5, 'point': 0.01},
-            'ETHUSD': {'min_profit_pts': 50, 'atr_period': 14, 'atr_multiplier': 1.5, 'point': 0.01},
-            'XAUUSD': {'min_profit_pts': 10, 'atr_period': 14, 'atr_multiplier': 1.0, 'point': 0.01},  # 1.2 → 1.0 (tighter trail)
-            'DE40.c': {'min_profit_pts': 30, 'atr_period': 14, 'atr_multiplier': 1.8, 'point': 1.0},   # 2.0 → 1.8 (tighter)
-            'EURUSD': {'min_profit_pts': 5, 'atr_period': 14, 'atr_multiplier': 1.0, 'point': 0.00001},
-            'GBPUSD': {'min_profit_pts': 5, 'atr_period': 14, 'atr_multiplier': 1.0, 'point': 0.00001},
-            'USDJPY': {'min_profit_pts': 5, 'atr_period': 14, 'atr_multiplier': 1.0, 'point': 0.001},
-            'US500.c': {'min_profit_pts': 8, 'atr_period': 14, 'atr_multiplier': 1.3, 'point': 0.01},  # NEW: Tighter for US500
+            'BTCUSD': {'min_profit_pts': 200, 'atr_period': 14, 'atr_multiplier': 1.5, 'point': 0.01},  # 100 → 200 ($2 profit min)
+            'ETHUSD': {'min_profit_pts': 100, 'atr_period': 14, 'atr_multiplier': 1.5, 'point': 0.01},  # 50 → 100 ($1 profit min)
+            'XAUUSD': {'min_profit_pts': 100, 'atr_period': 14, 'atr_multiplier': 1.0, 'point': 0.01},  # 10 → 100 ($1 profit min, was TOO LOW!)
+            'DE40.c': {'min_profit_pts': 100, 'atr_period': 14, 'atr_multiplier': 1.8, 'point': 1.0},   # 30 → 100 (100pts profit min)
+            'EURUSD': {'min_profit_pts': 15, 'atr_period': 14, 'atr_multiplier': 1.0, 'point': 0.00001},  # 5 → 15 (15 pips min)
+            'GBPUSD': {'min_profit_pts': 15, 'atr_period': 14, 'atr_multiplier': 1.0, 'point': 0.00001},  # 5 → 15 (15 pips min)
+            'USDJPY': {'min_profit_pts': 15, 'atr_period': 14, 'atr_multiplier': 1.0, 'point': 0.001},    # 5 → 15 (15 pips min)
+            'US500.c': {'min_profit_pts': 25, 'atr_period': 14, 'atr_multiplier': 1.3, 'point': 0.01},    # 8 → 25 (25pts min)
         }
-        self.default = {'min_profit_pts': 10, 'atr_period': 14, 'atr_multiplier': 1.0, 'point': 0.00001}
+        self.default = {'min_profit_pts': 20, 'atr_period': 14, 'atr_multiplier': 1.0, 'point': 0.00001}  # 10 → 20
 
         self.last_update = {}
         self.update_interval = 5  # Seconds between updates

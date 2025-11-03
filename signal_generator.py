@@ -2,10 +2,13 @@
 Signal Generator Module
 Combines pattern recognition and technical indicators to generate trading signals
 
-ML Integration:
-- Uses XGBoost model for confidence calibration (when available)
-- Falls back to rules-based confidence if ML unavailable
-- A/B testing: 80% ML, 10% rules-only, 10% hybrid
+Features:
+- Configurable thresholds and parameters (see signal_config.py)
+- Optional ML confidence enhancement
+- News filter integration
+- Market hours checking
+- Multi-timeframe analysis
+- Continuous signal validation
 """
 
 import logging
@@ -15,6 +18,7 @@ from database import ScopedSession
 from models import TradingSignal, OHLCData
 from technical_indicators import TechnicalIndicators
 from pattern_recognition import PatternRecognizer
+from signal_config import get_config
 
 # ML Integration (optional - graceful degradation if unavailable)
 try:
@@ -46,10 +50,18 @@ class SignalGenerator:
         self.symbol = symbol
         self.timeframe = timeframe
         self.risk_profile = risk_profile
-        # Reduced cache TTL from 300s (default) to 15s for faster signal updates in live trading
-        # Pass risk_profile to TechnicalIndicators for regime filter adjustments
-        self.indicators = TechnicalIndicators(account_id, symbol, timeframe, cache_ttl=15, risk_profile=risk_profile)
-        self.patterns = PatternRecognizer(account_id, symbol, timeframe, cache_ttl=15)
+
+        # Load symbol-specific configuration
+        self.config = get_config(symbol)
+
+        # Initialize indicators and patterns with configured cache TTL
+        cache_ttl = self.config['CACHE_TTL']
+        self.indicators = TechnicalIndicators(
+            account_id, symbol, timeframe,
+            cache_ttl=cache_ttl,
+            risk_profile=risk_profile
+        )
+        self.patterns = PatternRecognizer(account_id, symbol, timeframe, cache_ttl=cache_ttl)
 
         # ML Integration (initialized lazily when needed)
         self.ml_manager = None
@@ -102,34 +114,14 @@ class SignalGenerator:
             # Aggregate signals
             signal = self._aggregate_signals(pattern_signals, indicator_signals)
 
-            # ✅ UPDATED: Minimum confidence threshold for signal generation (45%)
-            # Note: This is NOT the display/auto-trade threshold
-            # - Trading Signals slider controls which signals are SHOWN in UI
-            # - Auto-Trade slider controls which signals are AUTO-TRADED
-            # This ensures we generate only moderately strong signals
-            # OPTIMIZED to 50% based on performance analysis (2025-10-22)
-            # Analysis showed: 50-60% confidence → 94.7% Win Rate vs 70-80% → 71.4% Win Rate
-            # - Prevents weak signals from entering the system
-            # - Filter systems will boost quality signals to 60-70%+
-            MIN_GENERATION_CONFIDENCE = 50
+            # Check minimum confidence threshold (from config)
+            min_confidence = self.config['MIN_GENERATION_CONFIDENCE']
 
-            if signal and signal['confidence'] >= MIN_GENERATION_CONFIDENCE:
-                # ✅ SIMPLIFIED: REMOVED overengineered filters!
-                # REMOVED: Loss-adaptive filter (unused, added complexity)
-                # REMOVED: Ensemble validation (blocked 84-100% win rate signals!)
-                # REMOVED: Multi-timeframe analyzer (unused, overengineered)
-                #
-                # REASON: We already have 84-100% win rates with just:
-                # - Pattern Recognition ✅
-                # - Technical Indicators ✅
-                # - 50% minimum confidence ✅
-                #
-                # The additional filters were blocking profitable signals (DE40.c 100% win rate!)
-                # KISS principle: Keep It Simple, Stupid
-
+            if signal and signal['confidence'] >= min_confidence:
                 logger.info(
                     f"✅ Signal PASSED: {self.symbol} {self.timeframe} "
-                    f"{signal['signal_type']} | Confidence: {signal['confidence']:.1f}%"
+                    f"{signal['signal_type']} | Confidence: {signal['confidence']:.1f}% "
+                    f"(min: {min_confidence}%)"
                 )
 
                 # Calculate entry, SL, TP
@@ -171,8 +163,8 @@ class SignalGenerator:
 
                 return signal
 
-            # Signal too weak (< 40%) - expire existing signals
-            self._expire_active_signals(f"confidence too low (< {MIN_GENERATION_CONFIDENCE}%)")
+            # Signal too weak - expire existing signals
+            self._expire_active_signals(f"confidence too low (< {min_confidence}%)")
             return None
 
         except Exception as e:
@@ -210,27 +202,20 @@ class SignalGenerator:
             elif sig['type'] == 'SELL':
                 sell_signals.append(sig)
 
-        # ✅ CONFIGURABLE: BUY signal consensus requirement
-        # NOTE: Adjusted based on parameter analysis (2025-10-21)
-        # - 0 = No bias (simple majority for both)
-        # - 1 = BUY needs 1 more confirming signal than SELL
-        # - 2 = BUY needs 2 more confirming signals than SELL (PROVEN BETTER - 2025-10-22)
-        # REVERTED to 2 based on performance analysis showing better results with conservative BUY filtering
-        # Historical data: Lower confidence + advantage=1 correlated with losses
-        # Multi-layer validation (Ensemble/MTF/Regime) provides additional filtering
-        BUY_SIGNAL_ADVANTAGE = 2  # Conservative: requires stronger BUY confirmation
+        # Get BUY signal advantage from config
+        buy_advantage = self.config['BUY_SIGNAL_ADVANTAGE']
 
         buy_count = len(buy_signals)
         sell_count = len(sell_signals)
 
         signal_type = None
-        if buy_count >= sell_count + BUY_SIGNAL_ADVANTAGE:
+        if buy_count >= sell_count + buy_advantage:
             # BUY: Need advantage over SELL signals
             signal_type = 'BUY'
             signals = buy_signals
             logger.debug(
                 f"BUY signal consensus: {buy_count} BUY vs {sell_count} SELL "
-                f"(advantage: {BUY_SIGNAL_ADVANTAGE})"
+                f"(advantage: {buy_advantage})"
             )
         elif sell_count > buy_count:
             # SELL: Just need majority
@@ -241,7 +226,7 @@ class SignalGenerator:
             # Not enough consensus or conflicting signals
             logger.debug(
                 f"No consensus: {buy_count} BUY vs {sell_count} SELL "
-                f"(BUY needs {sell_count + BUY_SIGNAL_ADVANTAGE})"
+                f"(BUY needs {sell_count + buy_advantage})"
             )
             return None
 
@@ -345,10 +330,10 @@ class SignalGenerator:
         """
         Calculate confidence score (0-100) using symbol-specific indicator weights
 
-        Formula:
-        - Pattern Reliability: 30%
-        - Weighted Indicator Confluence: 40%
-        - Signal Strength: 30%
+        Formula (from config):
+        - Pattern Reliability: PATTERN_WEIGHT%
+        - Weighted Indicator Confluence: INDICATOR_WEIGHT%
+        - Signal Strength: STRENGTH_WEIGHT%
 
         Uses IndicatorScorer to weight indicators based on historical performance
 
@@ -362,15 +347,20 @@ class SignalGenerator:
         """
         from indicator_scorer import IndicatorScorer
 
-        # Pattern reliability score (0-30)
+        # Get weights from config
+        pattern_weight = self.config['PATTERN_WEIGHT']
+        indicator_weight = self.config['INDICATOR_WEIGHT']
+        strength_weight = self.config['STRENGTH_WEIGHT']
+
+        # Pattern reliability score
         pattern_score = 0
         if pattern_signals:
             avg_reliability = sum(
                 sig.get('reliability', 50) for sig in pattern_signals
             ) / len(pattern_signals)
-            pattern_score = (avg_reliability / 100) * 30
+            pattern_score = (avg_reliability / 100) * pattern_weight
 
-        # Indicator confluence score (0-40) - NOW WEIGHTED BY SYMBOL-SPECIFIC SCORES
+        # Indicator confluence score - weighted by symbol-specific performance
         indicator_score = 0
         if indicator_signals:
             scorer = IndicatorScorer(self.account_id, self.symbol, self.timeframe)
@@ -391,57 +381,57 @@ class SignalGenerator:
                 weighted_score += strength_value * weight
                 total_weight += weight
 
-            # Normalize to 0-40 range
+            # Normalize to indicator_weight range
             if total_weight > 0:
                 # Average weighted score
                 avg_weighted = weighted_score / total_weight
 
-                # Scale to 0-40 (assuming max strength_value is 10)
-                indicator_score = (avg_weighted / 10) * 40
+                # Scale to indicator_weight range (assuming max strength_value is 10)
+                indicator_score = (avg_weighted / 10) * indicator_weight
 
                 # Bonus for multiple indicators agreeing (confluence)
-                confluence_bonus = min(10, len(indicator_signals) * 2)
-                indicator_score = min(40, indicator_score + confluence_bonus)
+                confluence_bonus_per = self.config['CONFLUENCE_BONUS_PER_INDICATOR']
+                confluence_bonus = min(10, len(indicator_signals) * confluence_bonus_per)
+                indicator_score = min(indicator_weight, indicator_score + confluence_bonus)
 
             # ADX bonus: Add confidence if strong trend is present
+            adx_bonus = self.config['ADX_STRONG_TREND_BONUS']
             adx_signal = next((sig for sig in indicator_signals if sig.get('indicator') == 'ADX'), None)
             if adx_signal and 'Strong Trend' in adx_signal.get('reason', ''):
-                indicator_score = min(40, indicator_score + 3)  # +3 bonus for trend confirmation
+                indicator_score = min(indicator_weight, indicator_score + adx_bonus)
 
             # OBV bonus: Add confidence if volume confirms the move
+            obv_bonus = self.config['OBV_DIVERGENCE_BONUS']
             obv_signal = next((sig for sig in indicator_signals if sig.get('indicator') == 'OBV'), None)
             if obv_signal and 'Divergence' in obv_signal.get('reason', ''):
-                indicator_score = min(40, indicator_score + 2)  # +2 bonus for volume divergence
+                indicator_score = min(indicator_weight, indicator_score + obv_bonus)
 
-        # Signal strength score (0-30)
-        strength_map = {'strong': 30, 'medium': 20, 'weak': 10}
+        # Signal strength score
+        # Scale strength values to match strength_weight
+        strength_map = {
+            'strong': strength_weight,
+            'medium': strength_weight * 0.67,
+            'weak': strength_weight * 0.33
+        }
         strength_scores = [
-            strength_map.get(sig.get('strength', 'weak'), 10)
+            strength_map.get(sig.get('strength', 'weak'), strength_weight * 0.33)
             for sig in signals
         ]
-        strength_score = sum(strength_scores) / len(strength_scores) if strength_scores else 10
+        strength_score = sum(strength_scores) / len(strength_scores) if strength_scores else (strength_weight * 0.33)
 
         # Total confidence (before direction adjustment)
         confidence = pattern_score + indicator_score + strength_score
 
-        # ✅ CONFIGURABLE: BUY signal confidence penalty
-        # NOTE: Adjusted based on parameter analysis (2025-10-21)
-        # - 0.0 = No penalty (treat BUY and SELL equally)
-        # - 2.0 = Reduce BUY confidence by 2% (CURRENT - more balanced)
-        # - 3.0 = Reduce BUY confidence by 3% (TOO HARSH)
-        # - 5.0 = Reduce BUY confidence by 5% (way too conservative)
-        # CHANGED from 3.0 to 2.0 to reduce double-penalty on BUY signals
-        # (Already have BUY_SIGNAL_ADVANTAGE, don't need harsh penalty too)
-        BUY_CONFIDENCE_PENALTY = 2.0  # Reduced: -2% for BUY signals
-
+        # Apply BUY confidence penalty from config
+        buy_penalty = self.config['BUY_CONFIDENCE_PENALTY']
         signal_type = signals[0]['type'] if signals else 'UNKNOWN'
-        if signal_type == 'BUY' and BUY_CONFIDENCE_PENALTY > 0:
-            # Reduce BUY confidence to make them harder to trigger
+
+        if signal_type == 'BUY' and buy_penalty > 0:
             original_confidence = confidence
-            confidence = max(0, confidence - BUY_CONFIDENCE_PENALTY)
+            confidence = max(0, confidence - buy_penalty)
             logger.debug(
                 f"Applied BUY penalty: {original_confidence:.1f}% → {confidence:.1f}% "
-                f"(-{BUY_CONFIDENCE_PENALTY}%)"
+                f"(-{buy_penalty}%)"
             )
 
         return round(min(100, confidence), 2)
@@ -483,12 +473,12 @@ class SignalGenerator:
                 # Calculate average spread from recent ticks (last 100 ticks)
                 avg_spread = self._get_average_spread(db)
 
-                # Reject signal if spread is abnormally high (> 3x normal)
-                MAX_SPREAD_MULTIPLIER = 3.0
-                if avg_spread > 0 and spread > avg_spread * MAX_SPREAD_MULTIPLIER:
+                # Reject signal if spread is abnormally high
+                max_spread_mult = self.config['MAX_SPREAD_MULTIPLIER']
+                if avg_spread > 0 and spread > avg_spread * max_spread_mult:
                     logger.warning(
                         f"Spread too high for {self.symbol}: {spread:.5f} "
-                        f"(avg: {avg_spread:.5f}, max allowed: {avg_spread * MAX_SPREAD_MULTIPLIER:.5f}) - rejecting signal"
+                        f"(avg: {avg_spread:.5f}, max allowed: {avg_spread * max_spread_mult:.5f}) - rejecting signal"
                     )
                     return (0, 0, 0)  # Reject signal
 
@@ -610,7 +600,8 @@ class SignalGenerator:
                 status='active'
             ).with_for_update().first()
 
-            MIN_CONFIDENCE_THRESHOLD = 50  # Expire signals below this (raised from 40% for more conservative approach)
+            # Get minimum confidence threshold from config
+            min_confidence = self.config['MIN_ACTIVE_CONFIDENCE']
 
             # Case 1: Signal exists with SAME direction → UPDATE
             if existing_signal and existing_signal.signal_type == signal['signal_type']:
@@ -618,12 +609,12 @@ class SignalGenerator:
                 new_confidence = float(signal['confidence'])
 
                 # Check if confidence dropped below minimum
-                if new_confidence < MIN_CONFIDENCE_THRESHOLD:
+                if new_confidence < min_confidence:
                     existing_signal.status = 'expired'
                     db.commit()
                     logger.warning(
                         f"❌ Signal EXPIRED [ID:{existing_signal.id}]: {self.symbol} {self.timeframe} "
-                        f"{signal['signal_type']} - Confidence dropped to {new_confidence:.1f}% (min: {MIN_CONFIDENCE_THRESHOLD}%)"
+                        f"{signal['signal_type']} - Confidence dropped to {new_confidence:.1f}% (min: {min_confidence}%)"
                     )
                     return
 
@@ -660,6 +651,7 @@ class SignalGenerator:
                 )
 
             # Case 3: Create new signal with indicator snapshot (signals are now global)
+            expiration_hours = self.config['SIGNAL_EXPIRATION_HOURS']
             new_signal = TradingSignal(
                 symbol=self.symbol,
                 timeframe=self.timeframe,
@@ -676,7 +668,7 @@ class SignalGenerator:
                 is_valid=True,
                 status='active',
                 created_at=datetime.utcnow(),
-                expires_at=datetime.utcnow() + timedelta(hours=24)
+                expires_at=datetime.utcnow() + timedelta(hours=expiration_hours)
             )
 
             db.add(new_signal)
@@ -929,10 +921,11 @@ class SignalGenerator:
 
     def _expire_active_signals(self, reason: str):
         """
-        Expire active signals for this symbol/timeframe when conditions no longer apply
+        Expire or delete active signals for this symbol/timeframe when conditions no longer apply
 
         Args:
             reason: Reason for expiration (for logging)
+                   If reason is "market closed", signals will be DELETED instead of expired
         """
         db = ScopedSession()
         try:
@@ -944,17 +937,27 @@ class SignalGenerator:
             ).all()
 
             if active_signals:
-                for sig in active_signals:
-                    sig.status = 'expired'
-                    logger.info(
-                        f"Signal #{sig.id} ({sig.symbol} {sig.timeframe} {sig.signal_type}) "
-                        f"expired: {reason}"
-                    )
+                # DELETE signals when market closes (don't keep them as expired)
+                if reason == "market closed":
+                    for sig in active_signals:
+                        logger.info(
+                            f"🗑️  Signal #{sig.id} ({sig.symbol} {sig.timeframe} {sig.signal_type}) "
+                            f"DELETED: {reason}"
+                        )
+                        db.delete(sig)
+                else:
+                    # EXPIRE signals for other reasons (keep in DB for analysis)
+                    for sig in active_signals:
+                        sig.status = 'expired'
+                        logger.info(
+                            f"Signal #{sig.id} ({sig.symbol} {sig.timeframe} {sig.signal_type}) "
+                            f"expired: {reason}"
+                        )
 
                 db.commit()
 
         except Exception as e:
-            logger.error(f"Error expiring active signals: {e}")
+            logger.error(f"Error expiring/deleting active signals: {e}")
             db.rollback()
         finally:
             db.close()
@@ -1009,41 +1012,56 @@ class SignalGenerator:
     def expire_old_signals():
         """
         Expire old signals (run periodically)
+        DELETE signals for symbols outside trading hours (market closed)
         """
         from models import Tick
+        from market_hours import is_market_open
         db = ScopedSession()
         try:
             now = datetime.utcnow()
 
-            # Expire signals that passed their expiry time
+            # Expire signals that passed their expiry time (keep in DB for analysis)
             expired_count = db.query(TradingSignal).filter(
                 TradingSignal.status == 'active',
                 TradingSignal.expires_at <= now
             ).update({'status': 'expired'})
 
-            # Also expire signals for symbols outside trading hours
+            # DELETE signals for symbols outside trading hours (market closed)
             active_signals = db.query(TradingSignal).filter(
                 TradingSignal.status == 'active'
             ).all()
 
-            non_tradeable_expired = 0
+            deleted_market_closed = 0
             for signal in active_signals:
-                # Check if symbol is tradeable (ticks are global - no account_id)
-                latest_tick = db.query(Tick).filter_by(
-                    symbol=signal.symbol
-                ).order_by(Tick.timestamp.desc()).first()
+                # Check if market is open using market_hours configuration
+                if not is_market_open(signal.symbol, now):
+                    logger.info(
+                        f"🗑️  Signal #{signal.id} ({signal.symbol} {signal.timeframe} {signal.signal_type}) "
+                        f"DELETED: market closed"
+                    )
+                    db.delete(signal)
+                    deleted_market_closed += 1
+                else:
+                    # Fallback: Check if symbol is tradeable via tick data
+                    latest_tick = db.query(Tick).filter_by(
+                        symbol=signal.symbol
+                    ).order_by(Tick.timestamp.desc()).first()
 
-                if latest_tick and not latest_tick.tradeable:
-                    signal.status = 'expired'
-                    non_tradeable_expired += 1
+                    if latest_tick and not latest_tick.tradeable:
+                        logger.info(
+                            f"🗑️  Signal #{signal.id} ({signal.symbol} {signal.timeframe} {signal.signal_type}) "
+                            f"DELETED: not tradeable (tick flag)"
+                        )
+                        db.delete(signal)
+                        deleted_market_closed += 1
 
             db.commit()
 
             if expired_count > 0:
                 logger.info(f"Expired {expired_count} old signals")
 
-            if non_tradeable_expired > 0:
-                logger.info(f"Expired {non_tradeable_expired} signals (outside trading hours)")
+            if deleted_market_closed > 0:
+                logger.info(f"🗑️  Deleted {deleted_market_closed} signals (market closed)")
 
         except Exception as e:
             logger.error(f"Error expiring signals: {e}")

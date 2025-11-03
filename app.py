@@ -1831,6 +1831,17 @@ def receive_ticks(account, db):
 
         data = request.get_json()
         ticks = data.get('ticks', [])
+
+        # CRITICAL DEBUG: Log what we're receiving
+        logger.info(f"🔍 /api/ticks called: ticks_count={len(ticks)}, has_positions={bool(data.get('positions'))}")
+
+        # DEBUG: Log first tick timestamp
+        if ticks and len(ticks) > 0:
+            first_tick = ticks[0]
+            tick_ts = first_tick.get('timestamp')
+            current_ts = datetime.utcnow().timestamp()
+            age = current_ts - tick_ts if tick_ts else 0
+            logger.info(f"🕒 TICK BATCH: {len(ticks)} ticks, first_ts={tick_ts}, age={age:.0f}s")
         positions_from_ea = data.get('positions', [])  # Get MT5 profit values from EA
 
         if not ticks:
@@ -1912,13 +1923,30 @@ def receive_ticks(account, db):
                 ask = tick_data.get('ask', 0)
                 spread = tick_data.get('spread', ask - bid if ask and bid else None)
 
-                # FIX: MT5 EA sends local time (GMT+3), convert to UTC
-                tick_timestamp = tick_data.get('timestamp')
-                if tick_timestamp:
-                    # Subtract 3 hours to convert from GMT+3 to UTC
-                    tick_timestamp = tick_timestamp - (3 * 3600)
-                else:
-                    tick_timestamp = datetime.utcnow().timestamp()
+                # TIMEZONE OFFSET FIX: Convert EA's local time to UTC using broker's timezone offset
+                # EA sends: TimeCurrent() (broker local time) + TimeGMTOffset() (seconds from GMT)
+                # NOTE: MT5's TimeGMTOffset() returns NEGATIVE values for positive UTC offsets!
+                #   CET (UTC+1): TimeGMTOffset() = -3600
+                #   CEST (UTC+2): TimeGMTOffset() = -7200
+                # We calculate: UTC = local_time + tz_offset (because MT5 uses negative convention)
+                ea_local_timestamp = tick_data.get('timestamp')
+                tz_offset = tick_data.get('tz_offset', 0)  # Offset in seconds (NEGATIVE for positive UTC zones)
+
+                # BROKER-SPECIFIC CORRECTION: This broker uses GMT+2 but TimeGMTOffset() reports GMT+1
+                # Apply -3600 correction to account for broker's incorrect offset reporting
+                tz_offset_corrected = tz_offset - 3600  # Subtract 1 hour (broker is GMT+2, not GMT+1)
+
+                # Convert to UTC by adding the corrected offset
+                tick_timestamp = ea_local_timestamp + tz_offset_corrected
+
+                # ALWAYS log timezone conversion for first tick of each batch
+                if len(buffered_ticks) == 0:
+                    logger.info(
+                        f"🕒 TIMEZONE CONVERSION: {tick_data.get('symbol')} | "
+                        f"EA Local: {ea_local_timestamp} ({datetime.fromtimestamp(ea_local_timestamp)}) | "
+                        f"TZ Offset: {tz_offset}s ({tz_offset/3600:.1f}h) → Corrected: {tz_offset_corrected}s ({tz_offset_corrected/3600:.1f}h) | "
+                        f"UTC: {tick_timestamp} ({datetime.fromtimestamp(tick_timestamp)})"
+                    )
 
                 # Prepare tick data for buffering (Ticks are global - no account_id)
                 tick_buffer_data = {
