@@ -24,11 +24,28 @@ logger = logging.getLogger(__name__)
 class SLEnforcement:
     """Enforce Stop Loss requirements across all trading operations"""
 
-    # Symbol-specific maximum loss per trade (in account currency)
-    # UPDATED 2025-10-30 (16:35): Increased limits to allow realistic trade execution
-    # Previous limits were TOO LOW blocking all valid signals
-    # Problem: Trades rejected with losses like 13-66 EUR but limits were 4-5.5 EUR
-    # Strategy: Balance between risk protection and allowing valid trades
+    # Risk percentage per trade (% of account balance)
+    # UPDATED 2025-11-03: Changed from FIXED limits to PERCENTAGE-based (balance-aware)
+    # Problem: Fixed €100 limit for XAUUSD = 16.5% risk at €613 balance (WAY TOO HIGH!)
+    # Solution: Use percentage of balance instead (2% max = €12.26 at €613 balance)
+    # Strategy: Risk scales with account size automatically
+    MAX_RISK_PCT_PER_TRADE = {
+        'XAGUSD': 2.0,    # Silver: Max 2% of balance per trade
+        'XAUUSD': 2.0,    # Gold: Max 2% of balance per trade
+        'DE40.c': 2.0,    # DAX: Max 2% of balance per trade
+        'US500.c': 2.0,   # S&P500: Max 2% of balance per trade
+        'BTCUSD': 2.5,    # Bitcoin: Max 2.5% of balance (can handle more volatility)
+        'ETHUSD': 2.5,    # Ethereum: Max 2.5% of balance
+        'USDJPY': 2.0,    # USDJPY: Max 2% of balance
+        'EURUSD': 2.0,    # EURUSD: Max 2% of balance
+        'GBPUSD': 2.0,    # GBPUSD: Max 2% of balance
+        'AUDUSD': 2.0,    # AUDUSD: Max 2% of balance
+        'FOREX': 2.0,     # Default Forex: Max 2% of balance
+        'DEFAULT': 2.0    # Fallback: Max 2% of balance
+    }
+
+    # DEPRECATED - Kept for backward compatibility but NOT USED anymore
+    # Use MAX_RISK_PCT_PER_TRADE instead
     MAX_LOSS_PER_TRADE = {
         'XAGUSD': 50.00,   # Silver: Max 50 EUR loss (volatile metal)
         'XAUUSD': 100.00,  # Gold: Max 100 EUR loss (volatile, high value metal)
@@ -227,14 +244,32 @@ class SLEnforcement:
         # Calculate potential loss
         potential_loss_eur = sl_distance_pips * pip_value * volume
 
-        # Get max allowed loss for this symbol
-        max_loss = self.MAX_LOSS_PER_TRADE.get(symbol)
-        if not max_loss:
+        # UPDATED 2025-11-03: Balance-aware risk management
+        # Get current account balance
+        account = db.query(Account).first()
+        if not account:
+            logger.error("No account found in database! Using default balance €1000")
+            balance = 1000.0
+        else:
+            balance = float(account.balance)
+
+        # Get max risk percentage for this symbol
+        max_risk_pct = self.MAX_RISK_PCT_PER_TRADE.get(symbol)
+        if not max_risk_pct:
             # Check if it's a forex pair
             if any(curr in symbol for curr in ['USD', 'EUR', 'GBP', 'JPY', 'AUD', 'CAD', 'CHF', 'NZD']):
-                max_loss = self.MAX_LOSS_PER_TRADE['FOREX']
+                max_risk_pct = self.MAX_RISK_PCT_PER_TRADE['FOREX']
             else:
-                max_loss = self.MAX_LOSS_PER_TRADE['DEFAULT']
+                max_risk_pct = self.MAX_RISK_PCT_PER_TRADE['DEFAULT']
+
+        # Calculate max allowed loss based on balance
+        max_loss = balance * (max_risk_pct / 100.0)
+
+        logger.info(
+            f"SL Validation: {symbol} | Balance: €{balance:.2f} | "
+            f"Max Risk: {max_risk_pct}% (€{max_loss:.2f}) | "
+            f"Potential Loss: €{potential_loss_eur:.2f}"
+        )
 
         if potential_loss_eur > max_loss:
             # Calculate suggested SL that respects max loss
@@ -250,7 +285,8 @@ class SLEnforcement:
             return {
                 'valid': False,
                 'reason': (
-                    f'Max loss exceeded: {potential_loss_eur:.2f} EUR > {max_loss:.2f} EUR max. '
+                    f'Max loss exceeded: €{potential_loss_eur:.2f} > €{max_loss:.2f} max '
+                    f'({max_risk_pct}% of €{balance:.2f} balance). '
                     f'Reduce lot size or tighten SL.'
                 ),
                 'max_loss_eur': potential_loss_eur,
@@ -259,7 +295,10 @@ class SLEnforcement:
 
         return {
             'valid': True,
-            'reason': f'Max loss OK: {potential_loss_eur:.2f} EUR <= {max_loss:.2f} EUR',
+            'reason': (
+                f'Max loss OK: €{potential_loss_eur:.2f} <= €{max_loss:.2f} '
+                f'({max_risk_pct}% of €{balance:.2f} balance)'
+            ),
             'max_loss_eur': potential_loss_eur,
             'suggested_sl': None
         }

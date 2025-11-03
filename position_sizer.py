@@ -181,12 +181,18 @@ class PositionSizer:
             # 5. Final lot = average of base_lot and risk_based_lot (prevents extremes)
             final_lot = (base_lot + risk_based_lot) / 2
 
-            # 6. ✅ NEW: Check against SL enforcement max loss limits
+            # 6. ✅ UPDATED 2025-11-03: Check against BALANCE-AWARE max loss limits
             from sl_enforcement import SLEnforcement
-            max_loss_limit = SLEnforcement.MAX_LOSS_PER_TRADE.get(
+            sl_enforcer = SLEnforcement()
+
+            # Get max risk percentage for this symbol (balance-aware)
+            max_risk_pct = sl_enforcer.MAX_RISK_PCT_PER_TRADE.get(
                 symbol.upper(),
-                SLEnforcement.MAX_LOSS_PER_TRADE.get('DEFAULT', 40.0)
+                sl_enforcer.MAX_RISK_PCT_PER_TRADE.get('DEFAULT', 2.0)
             )
+
+            # Calculate max loss based on CURRENT balance (dynamic!)
+            max_loss_limit = balance * (max_risk_pct / 100.0)
 
             # Calculate what loss this lot size would generate with current SL distance
             potential_loss = final_lot * sl_distance_pips * pip_value_per_lot
@@ -198,8 +204,9 @@ class PositionSizer:
 
                 logger.warning(
                     f"⚠️ Reducing lot size for {symbol}: "
-                    f"Original: {final_lot:.3f} lot (loss: {potential_loss:.2f} EUR) → "
-                    f"Adjusted: {max_safe_lot:.3f} lot (loss: {max_loss_limit:.2f} EUR max)"
+                    f"Original: {final_lot:.3f} lot (loss: €{potential_loss:.2f}) → "
+                    f"Adjusted: {max_safe_lot:.3f} lot (max loss: €{max_loss_limit:.2f} "
+                    f"= {max_risk_pct}% of €{balance:.2f})"
                 )
 
                 final_lot = max_safe_lot
@@ -215,13 +222,13 @@ class PositionSizer:
 
             logger.info(
                 f"📊 Position Size: {symbol} | "
-                f"Balance: {balance:.2f} EUR | "
+                f"Balance: €{balance:.2f} | "
                 f"Confidence: {confidence:.1f}% (x{confidence_multiplier:.2f}) | "
                 f"Symbol Factor: x{symbol_risk_factor:.2f} | "
                 f"Base Lot: {base_lot:.2f} | "
                 f"Risk Lot: {risk_based_lot:.3f} | "
                 f"Final: {final_lot:.2f} lot | "
-                f"Max Loss: {final_potential_loss:.2f} EUR (limit: {max_loss_limit:.2f})"
+                f"Max Loss: €{final_potential_loss:.2f} (limit: €{max_loss_limit:.2f} = {max_risk_pct}% of balance)"
             )
 
             return final_lot
