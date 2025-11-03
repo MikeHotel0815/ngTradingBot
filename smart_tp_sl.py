@@ -65,22 +65,22 @@ class SymbolConfig:
         },
         'METALS': {
             'symbols': ['XAUUSD', 'XAGUSD', 'XPTUSD', 'XPDUSD'],
-            'atr_tp_multiplier': 1.2,      # ✅ INCREASED from 0.8 to 1.2 (wider TP for better R:R)
-            'atr_sl_multiplier': 0.4,      # ✅ REDUCED from 0.5 to 0.4 (tighter SL - prevent -$66 losses)
-            'trailing_multiplier': 0.6,    # ✅ REDUCED from 0.8 to 0.6 (lock profits faster)
-            'max_tp_pct': 1.5,             # ✅ REDUCED from 2.0% to 1.5% (realistic targets)
-            'min_sl_pct': 0.2,             # ✅ REDUCED from 0.3 to 0.2 (allow tighter stops)
-            'fallback_atr_pct': 0.006,     # ✅ REDUCED from 0.008 to 0.006 (0.6%)
+            'atr_tp_multiplier': 2.5,      # ✅ FURTHER INCREASED from 1.2 to 2.5 (wider TP - target 1:3 R:R)
+            'atr_sl_multiplier': 0.3,      # ✅ FURTHER REDUCED from 0.4 to 0.3 (much tighter SL - prevent -$66 losses)
+            'trailing_multiplier': 0.5,    # ✅ FURTHER REDUCED from 0.6 to 0.5 (lock profits even faster)
+            'max_tp_pct': 2.0,             # ✅ INCREASED from 1.5% to 2.0% (allow wider TP targets)
+            'min_sl_pct': 0.15,            # ✅ REDUCED from 0.2 to 0.15 (allow very tight stops)
+            'fallback_atr_pct': 0.004,     # ✅ REDUCED from 0.006 to 0.004 (0.4% - tighter fallback)
         },
         'INDICES': {
             'symbols': ['US30', 'NAS100', 'SPX500', 'GER40', 'UK100', 'JPN225',
-                       'AUS200', 'FRA40', 'ESP35', 'ITA40', 'DE40.c'],  # ✅ ADDED DE40.c
-            'atr_tp_multiplier': 4.5,      # ✅ INCREASED to maintain 1:1.5 R/R ratio with wider SL
-            'atr_sl_multiplier': 3.0,      # ✅ INCREASED from 1.0 to 3.0 (DAX needs more room due to volatility)
-            'trailing_multiplier': 0.9,
-            'max_tp_pct': 2.5,             # ✅ INCREASED to accommodate wider TP
-            'min_sl_pct': 0.4,             # ✅ INCREASED to accommodate wider SL
-            'fallback_atr_pct': 0.008,     # ✅ INCREASED from 0.6% to 0.8% for wider stops
+                       'AUS200', 'FRA40', 'ESP35', 'ITA40', 'DE40.c', 'US500.c'],  # ✅ ADDED US500.c
+            'atr_tp_multiplier': 6.0,      # ✅ INCREASED from 4.5 to 6.0 (wider TP - target 1:2 R:R)
+            'atr_sl_multiplier': 2.0,      # ✅ REDUCED from 3.0 to 2.0 (tighter SL - prevent large losses)
+            'trailing_multiplier': 0.7,    # ✅ REDUCED from 0.9 to 0.7 (lock profits faster)
+            'max_tp_pct': 3.0,             # ✅ INCREASED from 2.5% to 3.0% (allow wider TP for better R:R)
+            'min_sl_pct': 0.3,             # ✅ REDUCED from 0.4 to 0.3 (allow tighter stops)
+            'fallback_atr_pct': 0.006,     # ✅ REDUCED from 0.008 to 0.006 (0.6% - tighter fallback)
         },
         'COMMODITIES': {
             'symbols': ['XTIUSD', 'XBRUSD', 'NATGAS', 'UKOUSD'],  # Oil, Brent, Gas

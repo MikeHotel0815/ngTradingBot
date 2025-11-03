@@ -5,14 +5,14 @@
 //+------------------------------------------------------------------+
 #property copyright "ngTradingBot"
 #property link      ""
-#property version   "3.00"
+#property version   "3.01"
 #property strict
 #property description "⚡⚡⚡ MAXIMUM PERFORMANCE MODE ⚡⚡⚡"
 #property description "Optimized for 2 EAs - NO COMPROMISES!"
 #property description "2s Heartbeat | 50ms Command Polling - REAL-TIME!"
 
 // MANUAL: Update this date when code is modified!
-#define CODE_LAST_MODIFIED "2025-11-03 - TIMEZONE_OFFSET_FIX"  // 🚨 DST Fix: Send TimeCurrent() + TimeGMTOffset() instead of broken TimeGMT() (lines 2662-2663, 2697)
+#define CODE_LAST_MODIFIED "2025-11-03 - SLTP_IN_INITIAL_ORDER"  // 🚨 Critical Fix: Set SL/TP in initial order to prevent opening unprotected positions (lines 1417-1418, 1500-1520)
 
 // ⚡⚡⚡ MAXIMUM PERFORMANCE INPUT PARAMETERS ⚡⚡⚡
 input string ServerURL = "http://100.97.100.50:9900";  // Python server URL (Tailscale)
@@ -1411,9 +1411,11 @@ void ExecuteOpenTrade(string commandId, string cmdObj)
    request.volume = volume;
    request.type = orderType;
    request.price = 0;        // 0 means "use current market price" for TRADE_ACTION_DEAL
-   // ✅ CRITICAL FIX: Do NOT set request.sl or request.tp here
-   // Setting them (even to 0) causes error 4756 with some brokers
-   // We'll set SL/TP via TRADE_ACTION_SLTP modify after order opens
+   // ✅ NEW APPROACH 2025-11-03: Set SL/TP in initial request
+   // If broker rejects SL/TP, the order will NOT be opened at all
+   // This prevents opening positions without protection
+   request.sl = sl;
+   request.tp = tp;
    request.deviation = 10;
    request.magic = MagicNumber;
    request.comment = comment;
@@ -1451,114 +1453,30 @@ void ExecuteOpenTrade(string commandId, string cmdObj)
       {
          if(result.retcode == TRADE_RETCODE_DONE)
          {
-            // CRITICAL FIX: Verify TP/SL were actually set by broker
-            // Some brokers/symbols don't accept TP/SL in initial order and return 0
-            Sleep(500);  // Give broker time to process
+            // ✅ NEW APPROACH 2025-11-03: Trade opened successfully WITH SL/TP
+            // Verify that SL/TP were actually set by broker
+            Sleep(300);  // Give broker time to process
 
             double actualSL = 0;
             double actualTP = 0;
             bool tpslVerified = false;
 
-            // Try to read actual TP/SL from opened position (with retries)
-            for(int retry = 0; retry < 3; retry++)
+            // Verify actual TP/SL from opened position
+            if(PositionSelectByTicket(result.order))
             {
-               if(PositionSelectByTicket(result.order))
+               actualSL = PositionGetDouble(POSITION_SL);
+               actualTP = PositionGetDouble(POSITION_TP);
+
+               if(actualSL != 0 && actualTP != 0)
                {
-                  actualSL = PositionGetDouble(POSITION_SL);
-                  actualTP = PositionGetDouble(POSITION_TP);
-
-                  if(actualSL != 0 && actualTP != 0)
-                  {
-                     tpslVerified = true;
-                     break;
-                  }
-               }
-               Sleep(200);
-            }
-
-            // If broker didn't set TP/SL, try to modify position
-            if(!tpslVerified || actualSL == 0 || actualTP == 0)
-            {
-               Print("WARNING: Broker did not set TP/SL in initial order! Attempting to modify position...");
-               Print("  Requested: SL=", sl, " TP=", tp);
-               Print("  Got: SL=", actualSL, " TP=", actualTP);
-
-               // Attempt to modify position with TP/SL
-               MqlTradeRequest modifyReq;
-               MqlTradeResult modifyRes;
-               ZeroMemory(modifyReq);
-               ZeroMemory(modifyRes);
-
-               modifyReq.action = TRADE_ACTION_SLTP;
-               modifyReq.position = result.order;
-               modifyReq.symbol = symbol;
-               modifyReq.sl = sl;
-               modifyReq.tp = tp;
-
-               if(OrderSend(modifyReq, modifyRes))
-               {
-                  if(modifyRes.retcode == TRADE_RETCODE_DONE)
-                  {
-                     Print("SUCCESS: TP/SL set via modify! SL:", sl, " TP:", tp);
-                     actualSL = sl;
-                     actualTP = tp;
-                     tpslVerified = true;
-                  }
-                  else
-                  {
-                     Print("ERROR: Modify failed with retcode: ", modifyRes.retcode);
-                     SendLog("ERROR", "TP/SL modification failed", StringFormat("Ticket %d retcode %d", result.order, modifyRes.retcode));
-                  }
+                  tpslVerified = true;
+                  Print("✅ SL/TP verified: SL=", actualSL, " TP=", actualTP);
                }
                else
                {
-                  int modError = GetLastError();
-                  Print("ERROR: Modify OrderSend failed: ", modError, " - ", ErrorDescription(modError));
-                  SendLog("ERROR", "TP/SL modification failed", StringFormat("Ticket %d error %d", result.order, modError));
+                  Print("⚠️ WARNING: Position opened but SL/TP are 0! Requested: SL=", sl, " TP=", tp, " Got: SL=", actualSL, " TP=", actualTP);
+                  SendLog("WARNING", "SL/TP not set correctly", StringFormat("Ticket %d - Requested SL=%.5f TP=%.5f, Got SL=%.5f TP=%.5f", result.order, sl, tp, actualSL, actualTP));
                }
-            }
-
-            // 🚨 CRITICAL SAFETY: If SL/TP could not be set, CLOSE THE POSITION IMMEDIATELY!
-            // Trading without Stop Loss is CATASTROPHICALLY DANGEROUS (XAGUSD lost -€78.92!)
-            if(!tpslVerified || actualSL == 0 || actualTP == 0)
-            {
-               Print("🚨 CRITICAL: Cannot trade without SL/TP! Closing position immediately to prevent catastrophic loss...");
-               SendLog("ERROR", "Position closed - no SL/TP", StringFormat("Ticket %d opened without SL/TP, closing immediately", result.order));
-
-               // Close the position immediately
-               MqlTradeRequest closeReq;
-               MqlTradeResult closeRes;
-               ZeroMemory(closeReq);
-               ZeroMemory(closeRes);
-
-               closeReq.action = TRADE_ACTION_DEAL;
-               closeReq.position = result.order;
-               closeReq.symbol = symbol;
-               closeReq.volume = volume;
-               closeReq.type = (orderTypeStr == "BUY") ? ORDER_TYPE_SELL : ORDER_TYPE_BUY;  // Opposite to close
-               closeReq.price = (orderTypeStr == "BUY") ? SymbolInfoDouble(symbol, SYMBOL_BID) : SymbolInfoDouble(symbol, SYMBOL_ASK);
-               closeReq.deviation = 10;
-               closeReq.magic = MagicNumber;
-               closeReq.comment = "Emergency close - no SL/TP";
-
-               if(OrderSend(closeReq, closeRes))
-               {
-                  Print("Position closed successfully. No loss incurred.");
-               }
-               else
-               {
-                  Print("ERROR: Could not close position! Manual intervention required!");
-               }
-
-               // Send FAILED response to prevent system from tracking this as successful trade
-               string errorData = StringFormat(
-                  "{\"error\":\"Broker does not support SL/TP for %s\",\"error_code\":\"NO_SLTP_SUPPORT\",\"ticket\":%d,\"status\":\"CLOSED\"}",
-                  symbol,
-                  result.order
-               );
-               SendCommandResponse(commandId, "failed", errorData);
-               orderSuccess = true;  // Stop trying other filling modes
-               break;
             }
 
             // Send response with ACTUAL TP/SL values (not requested ones!)
@@ -1579,7 +1497,26 @@ void ExecuteOpenTrade(string commandId, string cmdObj)
          }
          else
          {
-            Print("Order failed with retcode: ", result.retcode, " for filling mode: ", fillingModes[fm]);
+            // Order was sent but broker rejected it - log detailed reason
+            string retcodeDesc = GetRetcodeDescription(result.retcode);
+            Print("❌ Order REJECTED by broker - Retcode: ", result.retcode, " (", retcodeDesc, ") | Filling mode: ", fillingModes[fm]);
+            Print("  Requested: ", orderTypeStr, " ", symbol, " ", volume, " lot | SL: ", sl, " TP: ", tp);
+            SendLog("ERROR", "Order rejected by broker", StringFormat("Retcode %d (%s) - %s %s %.2f | SL:%.5f TP:%.5f", result.retcode, retcodeDesc, orderTypeStr, symbol, volume, sl, tp));
+
+            // If SL/TP is the problem, don't try other filling modes
+            if(result.retcode == 10016 || result.retcode == 10017)  // TRADE_RETCODE_INVALID_STOPS
+            {
+               string errorData = StringFormat(
+                  "{\"error\":\"Broker rejected SL/TP\",\"error_code\":%d,\"error_desc\":\"%s\",\"sl\":%.5f,\"tp\":%.5f}",
+                  result.retcode,
+                  retcodeDesc,
+                  sl,
+                  tp
+               );
+               SendCommandResponse(commandId, "failed", errorData);
+               orderSuccess = true;  // Stop trying other filling modes
+               break;
+            }
          }
       }
       else
@@ -1733,6 +1670,7 @@ void ExecuteModifyTrade(string commandId, string cmdObj)
    request.symbol = symbol;
    request.sl = sl;
    request.tp = tp;
+   request.type_filling = ORDER_FILLING_RETURN;  // ✅ FIX: Required for TRADE_ACTION_SLTP
 
    // Send modify order
    if(OrderSend(request, result))
@@ -3395,6 +3333,53 @@ string ErrorDescription(int errorCode)
    }
 
    return error;
+}
+
+//+------------------------------------------------------------------+
+//| Get human-readable description for MqlTradeResult retcode        |
+//+------------------------------------------------------------------+
+string GetRetcodeDescription(uint retcode)
+{
+   string desc = "";
+
+   switch(retcode)
+   {
+      case 10004: desc = "Requote"; break;
+      case 10006: desc = "Request rejected"; break;
+      case 10007: desc = "Request canceled by trader"; break;
+      case 10008: desc = "Order placed"; break;
+      case 10009: desc = "Request completed (DONE)"; break;
+      case 10010: desc = "Only part filled"; break;
+      case 10011: desc = "Request processing error"; break;
+      case 10012: desc = "Request canceled by timeout"; break;
+      case 10013: desc = "Invalid request"; break;
+      case 10014: desc = "Invalid volume"; break;
+      case 10015: desc = "Invalid price"; break;
+      case 10016: desc = "Invalid stops (SL/TP)"; break;
+      case 10017: desc = "Trade disabled"; break;
+      case 10018: desc = "Market closed"; break;
+      case 10019: desc = "Not enough money"; break;
+      case 10020: desc = "Prices changed"; break;
+      case 10021: desc = "No quotes"; break;
+      case 10022: desc = "Invalid order expiration"; break;
+      case 10023: desc = "Order state changed"; break;
+      case 10024: desc = "Too frequent requests"; break;
+      case 10025: desc = "No changes in request"; break;
+      case 10026: desc = "Autotrading disabled by server"; break;
+      case 10027: desc = "Autotrading disabled by client"; break;
+      case 10028: desc = "Request locked for processing"; break;
+      case 10029: desc = "Order/position frozen"; break;
+      case 10030: desc = "Invalid fill type"; break;
+      case 10031: desc = "No connection"; break;
+      case 10032: desc = "Only for live accounts"; break;
+      case 10033: desc = "Pending orders limit reached"; break;
+      case 10034: desc = "Volume limit reached"; break;
+      case 10035: desc = "Invalid order type"; break;
+      case 10036: desc = "Position already closed"; break;
+      default:    desc = StringFormat("Unknown retcode (%d)", retcode); break;
+   }
+
+   return desc;
 }
 
 //+------------------------------------------------------------------+

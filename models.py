@@ -365,7 +365,9 @@ class TradingSignal(Base):
     symbol = Column(String(20), nullable=False)
     timeframe = Column(String(10), nullable=False)  # M5, M15, H1, H4, D1
     signal_type = Column(String(10), nullable=False)  # BUY, SELL, HOLD
-    confidence = Column(Numeric(5, 2), nullable=False)  # 0-100%
+    confidence = Column(Numeric(5, 2), nullable=False)  # 0-100% (final confidence - may be ML-enhanced)
+    ml_confidence = Column(Numeric(5, 2))  # Raw ML model confidence (0-100%, NULL if ML not used)
+    ab_test_group = Column(String(20))  # A/B test group: 'ml_enhanced', 'rules_only', NULL (before AB testing)
     entry_price = Column(Numeric(20, 5))
     sl_price = Column(Numeric(20, 5))
     tp_price = Column(Numeric(20, 5))

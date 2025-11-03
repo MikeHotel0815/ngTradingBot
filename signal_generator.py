@@ -657,6 +657,8 @@ class SignalGenerator:
                 timeframe=self.timeframe,
                 signal_type=signal['signal_type'],
                 confidence=float(signal['confidence']),
+                ml_confidence=float(signal['ml_confidence']) if signal.get('ml_confidence') is not None else None,
+                ab_test_group=signal.get('ab_test_group'),
                 entry_price=float(signal.get('entry_price', 0)),
                 sl_price=float(signal.get('sl_price', 0)),
                 tp_price=float(signal.get('tp_price', 0)),
