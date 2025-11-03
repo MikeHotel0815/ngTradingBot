@@ -403,8 +403,12 @@ class XGBoostConfidenceModel:
                     # Unknown category, use most common (0)
                     X[col] = 0
 
-        # Scale
-        X_scaled = self.scaler.transform(X)
+        # Scale (if scaler is available)
+        if self.scaler is not None:
+            X_scaled = self.scaler.transform(X)
+        else:
+            # No scaling available - use raw features
+            X_scaled = X.values
 
         # Predict probability
         confidence = self.model.predict_proba(X_scaled)[0][1]

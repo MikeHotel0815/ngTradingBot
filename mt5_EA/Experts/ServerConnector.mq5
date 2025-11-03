@@ -12,7 +12,7 @@
 #property description "2s Heartbeat | 50ms Command Polling - REAL-TIME!"
 
 // MANUAL: Update this date when code is modified!
-#define CODE_LAST_MODIFIED "2025-10-26 - SL_ENFORCEMENT_EA_FIX"  // 🚨 CRITICAL: Emergency close if SL/TP cannot be set (prevents XAGUSD -€78.92 scenario)
+#define CODE_LAST_MODIFIED "2025-11-03 - TIMEZONE_OFFSET_FIX"  // 🚨 DST Fix: Send TimeCurrent() + TimeGMTOffset() instead of broken TimeGMT() (lines 2662-2663, 2697)
 
 // ⚡⚡⚡ MAXIMUM PERFORMANCE INPUT PARAMETERS ⚡⚡⚡
 input string ServerURL = "http://100.97.100.50:9900";  // Python server URL (Tailscale)
@@ -83,6 +83,7 @@ struct TickData {
    double ask;
    ulong volume;
    long timestamp;
+   int tz_offset;   // Broker timezone offset from GMT in seconds
    bool tradeable;  // Trading hours check
 };
 TickData tickBuffer[];
@@ -2658,7 +2659,8 @@ void AddTickToBuffer(string symbol, MqlTick &tick)
    tickBuffer[tickBufferCount].bid = tick.bid;
    tickBuffer[tickBufferCount].ask = tick.ask;
    tickBuffer[tickBufferCount].volume = tick.volume;
-   tickBuffer[tickBufferCount].timestamp = tick.time;
+   tickBuffer[tickBufferCount].timestamp = (long)TimeCurrent();  // Broker's local time
+   tickBuffer[tickBufferCount].tz_offset = (int)TimeGMTOffset();  // Offset from GMT in seconds
    tickBuffer[tickBufferCount].tradeable = IsSymbolTradeable(symbol);
 
    tickBufferCount++;
@@ -2685,13 +2687,14 @@ void SendTickBatch()
       double spread = tickBuffer[i].ask - tickBuffer[i].bid;
 
       ticksJSON += StringFormat(
-         "{\"symbol\":\"%s\",\"bid\":%.5f,\"ask\":%.5f,\"spread\":%.5f,\"volume\":%d,\"timestamp\":%d,\"tradeable\":%s}",
+         "{\"symbol\":\"%s\",\"bid\":%.5f,\"ask\":%.5f,\"spread\":%.5f,\"volume\":%d,\"timestamp\":%d,\"tz_offset\":%d,\"tradeable\":%s}",
          tickBuffer[i].symbol,
          tickBuffer[i].bid,
          tickBuffer[i].ask,
          spread,
          tickBuffer[i].volume,
          tickBuffer[i].timestamp,
+         tickBuffer[i].tz_offset,
          tickBuffer[i].tradeable ? "true" : "false"
       );
    }
