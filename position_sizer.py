@@ -186,15 +186,10 @@ class PositionSizer:
             # 5. Final lot = average of base_lot and risk_based_lot (prevents extremes)
             final_lot = (base_lot + risk_based_lot) / 2
 
-            # 6. ✅ UPDATED 2025-11-03: Check against BALANCE-AWARE max loss limits
-            from sl_enforcement import SLEnforcement
-            sl_enforcer = SLEnforcement()
-
-            # Get max risk percentage for this symbol (balance-aware)
-            max_risk_pct = sl_enforcer.MAX_RISK_PCT_PER_TRADE.get(
-                symbol.upper(),
-                sl_enforcer.MAX_RISK_PCT_PER_TRADE.get('DEFAULT', 2.0)
-            )
+            # 6. ✅ UPDATED 2025-11-05: Use SAME risk percentage from GlobalSettings (not hardcoded)
+            # Note: self.base_risk_percent was already loaded from GlobalSettings above (line 136)
+            # Use the SAME percentage for max loss limit to keep it consistent
+            max_risk_pct = self.base_risk_percent
 
             # Calculate max loss based on CURRENT balance (dynamic!)
             max_loss_limit = balance * (max_risk_pct / 100.0)
