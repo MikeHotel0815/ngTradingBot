@@ -244,7 +244,7 @@ class SLEnforcement:
         # Calculate potential loss
         potential_loss_eur = sl_distance_pips * pip_value * volume
 
-        # UPDATED 2025-11-03: Balance-aware risk management
+        # UPDATED 2025-11-05: Use GlobalSettings for dynamic risk management
         # Get current account balance
         account = db.query(Account).first()
         if not account:
@@ -253,14 +253,13 @@ class SLEnforcement:
         else:
             balance = float(account.balance)
 
-        # Get max risk percentage for this symbol
-        max_risk_pct = self.MAX_RISK_PCT_PER_TRADE.get(symbol)
-        if not max_risk_pct:
-            # Check if it's a forex pair
-            if any(curr in symbol for curr in ['USD', 'EUR', 'GBP', 'JPY', 'AUD', 'CAD', 'CHF', 'NZD']):
-                max_risk_pct = self.MAX_RISK_PCT_PER_TRADE['FOREX']
-            else:
-                max_risk_pct = self.MAX_RISK_PCT_PER_TRADE['DEFAULT']
+        # Load max risk percentage from GlobalSettings (dynamic!)
+        from models import GlobalSettings
+        settings = GlobalSettings.get_settings(db)
+        max_risk_pct = float(settings.risk_per_trade_percent) * 100  # Convert 0.05 → 5.0
+
+        # Note: MAX_RISK_PCT_PER_TRADE is now deprecated in favor of GlobalSettings
+        # Symbol-specific overrides could be added to GlobalSettings table in future
 
         # Calculate max allowed loss based on balance
         max_loss = balance * (max_risk_pct / 100.0)

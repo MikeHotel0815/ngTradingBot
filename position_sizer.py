@@ -27,8 +27,8 @@ class PositionSizer:
     """
 
     def __init__(self):
-        # Base risk percentage per trade
-        self.base_risk_percent = 1.0  # 1% of account per trade
+        # Base risk percentage per trade - will be loaded from GlobalSettings dynamically
+        self.base_risk_percent = None  # Loaded from DB per calculation
 
         # Confidence-based multipliers
         self.confidence_multipliers = {
@@ -130,6 +130,11 @@ class PositionSizer:
             Lot size (rounded to symbol's lot step)
         """
         try:
+            # Load base risk percent from GlobalSettings (dynamic!)
+            from models import GlobalSettings
+            settings = GlobalSettings.get_settings(db)
+            self.base_risk_percent = float(settings.risk_per_trade_percent) * 100  # Convert 0.05 → 5.0
+
             # Get account balance
             account = db.query(Account).filter_by(id=account_id).first()
             if not account or not account.balance:
