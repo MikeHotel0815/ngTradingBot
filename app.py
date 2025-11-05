@@ -2492,20 +2492,45 @@ def sync_trades(account, db):
                 incoming_sl = trade_data.get('sl')
                 incoming_tp = trade_data.get('tp')
 
+                # ✅ CRITICAL FIX 2025-11-05: Set initial_sl/initial_tp from Command if not set
+                # This fixes trades that were created before this fix was implemented
+                if (existing_trade.initial_sl is None or existing_trade.initial_tp is None or
+                    existing_trade.initial_sl == 0 or existing_trade.initial_tp == 0):
+                    # Try to get original values from the Command that opened this trade
+                    from models import Command
+                    original_command = db.query(Command).filter(
+                        Command.account_id == account.id,
+                        Command.command_type == 'OPEN_TRADE',
+                        Command.status == 'completed',
+                        Command.response['ticket'].astext == str(ticket)
+                    ).order_by(Command.created_at.desc()).first()
+
+                    if original_command:
+                        cmd_sl = original_command.response.get('sl') if original_command.response else None
+                        cmd_tp = original_command.response.get('tp') if original_command.response else None
+
+                        # Fallback to payload if response doesn't have it
+                        if not cmd_sl and original_command.payload:
+                            cmd_sl = original_command.payload.get('sl')
+                        if not cmd_tp and original_command.payload:
+                            cmd_tp = original_command.payload.get('tp')
+
+                        if cmd_sl and (existing_trade.initial_sl is None or existing_trade.initial_sl == 0):
+                            existing_trade.initial_sl = cmd_sl
+                            logger.info(f"🔧 Fixed initial_sl for trade #{ticket}: {cmd_sl}")
+
+                        if cmd_tp and (existing_trade.initial_tp is None or existing_trade.initial_tp == 0):
+                            existing_trade.initial_tp = cmd_tp
+                            logger.info(f"🔧 Fixed initial_tp for trade #{ticket}: {cmd_tp}")
+
                 # Only update SL/TP if trade is still OPEN
                 # When closing, preserve the last known values
                 if new_status == 'open':
                     # Trade is open - update SL/TP from EA heartbeat
                     if incoming_sl is not None:
                         existing_trade.sl = incoming_sl
-                        # ✅ Set initial_sl if not set yet (for trades opened before this fix)
-                        if existing_trade.initial_sl is None and incoming_sl != 0:
-                            existing_trade.initial_sl = incoming_sl
                     if incoming_tp is not None:
                         existing_trade.tp = incoming_tp
-                        # ✅ Set initial_tp if not set yet (for trades opened before this fix)
-                        if existing_trade.initial_tp is None and incoming_tp != 0:
-                            existing_trade.initial_tp = incoming_tp
                 else:
                     # Trade is closing/closed - PRESERVE existing SL/TP, don't overwrite with 0
                     # Keep existing_trade.sl and existing_trade.tp unchanged
@@ -2597,7 +2622,30 @@ def sync_trades(account, db):
                     else:
                         # ✅ Fallback: Check if trade was opened before server started tracking it
                         logger.warning(f"⚠️ No command found for trade #{ticket} - marking as MT5 manual trade")
-                
+                        matching_command = None
+
+                # ✅ CRITICAL FIX 2025-11-05: Extract initial SL/TP from Command response
+                # This ensures we always have the ORIGINAL SL/TP values for strategy evaluation
+                # even if trailing stop has modified them to 0 or changed them
+                initial_sl_from_command = None
+                initial_tp_from_command = None
+
+                if matching_command and matching_command.response:
+                    # EA sends back actual SL/TP values in response: {"sl": 1.23, "tp": 1.45, "ticket": 123}
+                    initial_sl_from_command = matching_command.response.get('sl')
+                    initial_tp_from_command = matching_command.response.get('tp')
+
+                    if initial_sl_from_command or initial_tp_from_command:
+                        logger.info(f"📊 Retrieved initial SL/TP from command response: SL={initial_sl_from_command}, TP={initial_tp_from_command}")
+
+                # Fallback: If no command response, use payload values (what we SENT to EA)
+                if not initial_sl_from_command and matching_command and matching_command.payload:
+                    initial_sl_from_command = matching_command.payload.get('sl')
+                    initial_tp_from_command = matching_command.payload.get('tp')
+
+                    if initial_sl_from_command or initial_tp_from_command:
+                        logger.info(f"📊 Retrieved initial SL/TP from command payload: SL={initial_sl_from_command}, TP={initial_tp_from_command}")
+
                 # Try to find linked signal to generate entry_reason and extract metadata
                 timeframe_from_signal = None
                 entry_confidence_from_signal = None  # ✅ NEW: Extract confidence
@@ -2672,14 +2720,16 @@ def sync_trades(account, db):
                     open_time=datetime.fromisoformat(trade_data['open_time']) if trade_data.get('open_time') else datetime.utcnow(),
                     close_price=trade_data.get('close_price'),
                     close_time=datetime.fromisoformat(trade_data['close_time']) if trade_data.get('close_time') else None,
-                    sl=trade_data.get('sl'),
-                    tp=trade_data.get('tp'),
-                    original_tp=trade_data.get('tp'),  # Store original TP for extension tracking
+                    sl=trade_data.get('sl'),  # Current SL (may be modified by trailing stop)
+                    tp=trade_data.get('tp'),  # Current TP (may be modified)
+                    original_tp=initial_tp_from_command if initial_tp_from_command is not None else trade_data.get('tp'),  # ORIGINAL TP for extension tracking
                     tp_extended_count=0,  # Initialize extension counter
-                    
+
                     # ✅ COMPREHENSIVE TRACKING - Initial TP/SL Snapshot
-                    initial_tp=trade_data.get('tp'),
-                    initial_sl=trade_data.get('sl'),
+                    # Use values from Command response/payload (ORIGINAL values before any modifications)
+                    # Fallback to current position values if command not found
+                    initial_tp=initial_tp_from_command if initial_tp_from_command is not None else trade_data.get('tp'),
+                    initial_sl=initial_sl_from_command if initial_sl_from_command is not None else trade_data.get('sl'),
                     
                     # ✅ COMPREHENSIVE TRACKING - Entry Price Action
                     entry_bid=entry_bid,
