@@ -383,6 +383,8 @@ def heartbeat(account, db):
 def profit_update(account, db):
     """
     Instant profit update from EA when trade closes (OnTrade event)
+    ✅ UPDATED 2025-11-05: Always use EA data directly, no corrections
+    EA already filters out deposits/withdrawals in GetProfitSince()
     """
     try:
         data = request.get_json()
@@ -393,27 +395,28 @@ def profit_update(account, db):
         profit_month = data.get('profit_month')
         profit_year = data.get('profit_year')
 
-        # Correct profits by removing deposits/withdrawals
-        from profit_calculator import calculate_corrected_profits
-        corrected_today, corrected_week, corrected_month, corrected_year = calculate_corrected_profits(
-            db, account.id, profit_today, profit_week, profit_month, profit_year
-        )
+        # ✅ DIRECT EA DATA: No corrections needed, EA sends accurate trading profits
+        # EA's GetProfitSince() already excludes DEAL_TYPE_BALANCE operations
+        actual_profit_today = profit_today if profit_today is not None else 0.0
+        actual_profit_week = profit_week if profit_week is not None else 0.0
+        actual_profit_month = profit_month if profit_month is not None else 0.0
+        actual_profit_year = profit_year if profit_year is not None else 0.0
 
         # Update account data
         if balance is not None:
             account.balance = balance
         if equity is not None:
             account.equity = equity
-        
-        # Use corrected profits
-        account.profit_today = corrected_today
-        account.profit_week = corrected_week
-        account.profit_month = corrected_month
-        account.profit_year = corrected_year
-        
+
+        # Use EA profits directly
+        account.profit_today = actual_profit_today
+        account.profit_week = actual_profit_week
+        account.profit_month = actual_profit_month
+        account.profit_year = actual_profit_year
+
         db.commit()
 
-        logger.info(f"Instant profit update from {account.mt5_account_number} - Profit Today (corrected): {corrected_today}")
+        logger.info(f"Instant profit update from {account.mt5_account_number} - Profit Today: {actual_profit_today}")
 
         # Broadcast account update via WebSocket
         socketio.emit('account_update', {
@@ -424,12 +427,12 @@ def profit_update(account, db):
             'free_margin': float(account.free_margin) if account.free_margin else 0.0
         })
 
-        # Broadcast profit update via WebSocket (with corrected values)
+        # Broadcast profit update via WebSocket (with EA values)
         socketio.emit('profit_update', {
-            'today': float(corrected_today),
-            'week': float(corrected_week),
-            'month': float(corrected_month),
-            'year': float(corrected_year)
+            'today': float(actual_profit_today),
+            'week': float(actual_profit_week),
+            'month': float(actual_profit_month),
+            'year': float(actual_profit_year)
         })
 
         return jsonify({'status': 'success'}), 200
