@@ -571,6 +571,30 @@ def import_worker_functions():
     except Exception as e:
         logger.error(f"Failed to import telegram_daily_worker: {e}")
 
+    try:
+        # ✅ NEW: Auto-Resume Cooldown Worker - Auto-resumes paused symbols after cooldown
+        logger.info("📦 Importing symbol_auto_resume...")
+        from symbol_dynamic_manager import SymbolDynamicManager
+        from database import ScopedSession
+
+        def run_auto_resume():
+            """Auto-resume symbols that have passed cooldown period"""
+            db = ScopedSession()
+            try:
+                sdm = SymbolDynamicManager()
+                resumed = sdm.check_and_resume_cooldowns(db)
+                if resumed:
+                    logger.info(f"▶️  Auto-Resume: {len(resumed)} symbol(s) resumed after cooldown")
+            except Exception as e:
+                logger.error(f"Error in auto-resume worker: {e}")
+            finally:
+                db.close()
+
+        workers['symbol_auto_resume'] = run_auto_resume
+
+    except Exception as e:
+        logger.error(f"Failed to import symbol_auto_resume: {e}")
+
     return workers
 
 
@@ -691,6 +715,10 @@ def main():
         'telegram_daily': {
             'function': worker_functions.get('telegram_daily'),
             'interval': int(os.getenv('TELEGRAM_DAILY_CHECK_INTERVAL', 300)),  # 5 minutes - checks if it's 23:00
+        },
+        'symbol_auto_resume': {
+            'function': worker_functions.get('symbol_auto_resume'),
+            'interval': int(os.getenv('SYMBOL_AUTO_RESUME_INTERVAL', 3600)),  # 1 hour - check for expired cooldowns
         },
     }
 
