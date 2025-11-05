@@ -3092,6 +3092,28 @@ def update_trade(account, db):
                 else:
                     entry_reason = f"Trade from {source}"
 
+            # ✅ CRITICAL FIX 2025-11-05: Extract initial SL/TP from Command response
+            # This ensures we always have the ORIGINAL SL/TP values for strategy evaluation
+            # even if trailing stop has modified them to 0 or changed them
+            initial_sl_from_command = None
+            initial_tp_from_command = None
+
+            if matching_command and matching_command.response:
+                # EA sends back actual SL/TP values in response: {"sl": 1.23, "tp": 1.45, "ticket": 123}
+                initial_sl_from_command = matching_command.response.get('sl')
+                initial_tp_from_command = matching_command.response.get('tp')
+
+                if initial_sl_from_command or initial_tp_from_command:
+                    logger.info(f"📊 Retrieved initial SL/TP from command response: SL={initial_sl_from_command}, TP={initial_tp_from_command}")
+
+            # Fallback: If no command response, use payload values (what we SENT to EA)
+            if not initial_sl_from_command and matching_command and matching_command.payload:
+                initial_sl_from_command = matching_command.payload.get('sl')
+                initial_tp_from_command = matching_command.payload.get('tp')
+
+                if initial_sl_from_command or initial_tp_from_command:
+                    logger.info(f"📊 Retrieved initial SL/TP from command payload: SL={initial_sl_from_command}, TP={initial_tp_from_command}")
+
             new_trade = Trade(
                 account_id=account.id,
                 ticket=ticket,
@@ -3103,10 +3125,17 @@ def update_trade(account, db):
                 open_time=open_time,
                 close_price=data.get('close_price'),
                 close_time=close_time,
-                sl=data.get('sl'),
-                tp=data.get('tp'),
-                original_tp=data.get('tp'),  # 🎯 NEW: Store original TP for extension tracking
-                tp_extended_count=0,  # 🎯 NEW: Initialize extension counter
+                sl=data.get('sl'),  # Current SL (may be modified by trailing stop)
+                tp=data.get('tp'),  # Current TP (may be modified)
+                original_tp=initial_tp_from_command if initial_tp_from_command is not None else data.get('tp'),  # ORIGINAL TP for extension tracking
+                tp_extended_count=0,  # Initialize extension counter
+
+                # ✅ COMPREHENSIVE TRACKING - Initial TP/SL Snapshot
+                # Use values from Command response/payload (ORIGINAL values before any modifications)
+                # Fallback to current position values if command not found
+                initial_tp=initial_tp_from_command if initial_tp_from_command is not None else data.get('tp'),
+                initial_sl=initial_sl_from_command if initial_sl_from_command is not None else data.get('sl'),
+
                 profit=data.get('profit'),
                 commission=data.get('commission'),
                 swap=data.get('swap'),
