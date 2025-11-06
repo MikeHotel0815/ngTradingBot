@@ -2594,7 +2594,44 @@ def sync_trades(account, db):
                         f"Duration={existing_trade.hold_duration_minutes}min, "
                         f"Session={existing_trade.session}"
                     )
-                
+
+                    # ✅ Send Telegram notification for closed trade
+                    try:
+                        from telegram_notifier import get_telegram_notifier
+                        notifier = get_telegram_notifier()
+                        if notifier.enabled:
+                            # Calculate duration string
+                            duration_str = ''
+                            if existing_trade.hold_duration_minutes:
+                                hours = existing_trade.hold_duration_minutes // 60
+                                minutes = existing_trade.hold_duration_minutes % 60
+                                if hours > 0:
+                                    duration_str = f"{hours}h {minutes}m"
+                                else:
+                                    duration_str = f"{minutes}m"
+
+                            trade_info = {
+                                'ticket': existing_trade.ticket,
+                                'symbol': existing_trade.symbol,
+                                'direction': existing_trade.direction,
+                                'volume': existing_trade.volume,
+                                'open_price': existing_trade.open_price,
+                                'close_price': existing_trade.close_price,
+                                'profit': existing_trade.profit or 0,
+                                'swap': existing_trade.swap or 0,
+                                'commission': existing_trade.commission or 0,
+                                'close_reason': existing_trade.close_reason or 'Unknown',
+                                'duration': duration_str
+                            }
+
+                            # Get current account balance
+                            account_balance = account.balance or 0
+
+                            notifier.send_trade_closed_alert(trade_info, account_balance)
+                            logger.info(f"📱 Telegram notification sent for closed trade #{ticket}")
+                    except Exception as e:
+                        logger.error(f"Failed to send Telegram notification for closed trade: {e}")
+
                 updated_count += 1
                 logger.info(f"🔄 Trade sync update: {existing_trade.symbol} #{ticket} profit={existing_trade.profit} SL={existing_trade.sl} TP={existing_trade.tp}")
             else:
@@ -2763,6 +2800,25 @@ def sync_trades(account, db):
                 )
                 db.add(new_trade)
                 synced_count += 1
+
+                # ✅ Send Telegram notification for new trade
+                try:
+                    from telegram_notifier import get_telegram_notifier
+                    notifier = get_telegram_notifier()
+                    if notifier.enabled:
+                        trade_info = {
+                            'symbol': new_trade.symbol,
+                            'direction': new_trade.direction,
+                            'entry_price': new_trade.open_price,
+                            'sl': new_trade.sl,
+                            'tp': new_trade.tp,
+                            'confidence': new_trade.entry_confidence or 0,
+                            'volume': new_trade.volume
+                        }
+                        notifier.send_trade_alert(trade_info)
+                        logger.info(f"📱 Telegram notification sent for new trade #{ticket}")
+                except Exception as e:
+                    logger.error(f"Failed to send Telegram notification: {e}")
 
         # ✅ CRITICAL FIX: Close trades that are open in DB but not in MT5's list (MT5 is source of truth!)
         closed_count = 0
@@ -4623,6 +4679,127 @@ def set_trailing_stop(ticket):
 
     except Exception as e:
         logger.error(f"Set trailing stop error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app_webui.route('/api/set_dynamic_trailing_stop/<int:ticket>', methods=['POST'])
+def set_dynamic_trailing_stop(ticket):
+    """
+    Set noise-adaptive trailing stop instantly for a specific trade.
+    Calculates optimal TS distance based on 60s noise, session, regime, etc.
+    Sets TS just below noise threshold for immediate protection.
+    """
+    try:
+        from command_helper import create_command
+        from noise_adaptive_trailing_stop import NoiseAdaptiveTrailingStop
+
+        db = ScopedSession()
+        try:
+            account = db.query(Account).order_by(Account.last_heartbeat.desc()).first()
+            if not account:
+                return jsonify({'status': 'error', 'message': 'No account found'}), 404
+
+            # Verify trade exists and is open
+            trade = db.query(Trade).filter_by(ticket=ticket, status='open').first()
+            if not trade:
+                return jsonify({'status': 'error', 'message': f'Open trade with ticket {ticket} not found'}), 404
+
+            # Initialize noise-adaptive TS calculator
+            nas = NoiseAdaptiveTrailingStop(account_id=account.id)
+
+            # Get current price from latest tick
+            from models import Tick
+            latest_tick = db.query(Tick).filter_by(
+                symbol=trade.symbol
+            ).order_by(Tick.timestamp.desc()).first()
+
+            if not latest_tick:
+                return jsonify({'status': 'error', 'message': f'No tick data for {trade.symbol}'}), 404
+
+            # Use bid for BUY, ask for SELL
+            current_price = float(latest_tick.bid if trade.direction == 'BUY' else latest_tick.ask)
+
+            # Calculate dynamic trailing stop distance
+            result = nas.calculate_dynamic_trail_distance(db, trade, current_price)
+
+            if not result or 'error' in result:
+                error_msg = result.get('error', 'Unknown error') if result else 'Calculation failed'
+                return jsonify({'status': 'error', 'message': f'Could not calculate dynamic TS: {error_msg}'}), 500
+
+            # Get the final distance in points
+            final_distance_points = result['new_sl_distance']
+
+            # Get symbol info for pip calculation
+            from models import BrokerSymbol
+            symbol_info = db.query(BrokerSymbol).filter_by(symbol=trade.symbol).first()
+
+            if not symbol_info:
+                return jsonify({'status': 'error', 'message': f'Symbol info not found for {trade.symbol}'}), 404
+
+            # Convert points to pips (for MT5)
+            # For most forex: 1 pip = 10 points (0.0001 = 0.00010)
+            # For JPY pairs: 1 pip = 10 points (0.01 = 0.010)
+            # For indices/commodities: 1 pip = 1 point usually
+            digits = int(symbol_info.digits)
+
+            if digits == 5 or digits == 3:  # Forex with fractional pips
+                pip_multiplier = 10.0
+            elif digits == 2:  # JPY pairs
+                pip_multiplier = 10.0
+            else:  # Indices, commodities, crypto
+                pip_multiplier = 1.0
+
+            trailing_stop_pips = final_distance_points / pip_multiplier
+
+            # Create MODIFY_TRADE command with trailing stop
+            payload = {
+                'ticket': ticket,
+                'trailing_stop': float(trailing_stop_pips)
+            }
+
+            command = create_command(
+                db=db,
+                account_id=account.id,
+                command_type='MODIFY_TRADE',
+                payload=payload
+            )
+
+            # Extract analysis details
+            analysis = result.get('analysis', {})
+            volatility_data = analysis.get('volatility', {})
+            session_name = analysis.get('session', 'N/A')
+            regime = analysis.get('regime', 'UNKNOWN')
+            progress_to_tp = analysis.get('profit_pct_to_tp', 0)
+
+            logger.info(
+                f"🎯 Dynamic TS set for #{ticket} ({trade.symbol}): "
+                f"{trailing_stop_pips:.1f} pips ({final_distance_points:.5f} points) | "
+                f"60s volatility: {volatility_data.get('classification', 'N/A')} | "
+                f"Session: {session_name} | "
+                f"Regime: {regime} | "
+                f"Progress: {progress_to_tp:.1f}%"
+            )
+
+            return jsonify({
+                'status': 'success',
+                'message': f'Dynamic trailing stop set to {trailing_stop_pips:.1f} pips for trade #{ticket}',
+                'command_id': command.id,
+                'details': {
+                    'trailing_stop_pips': round(trailing_stop_pips, 1),
+                    'distance_points': round(final_distance_points, 5),
+                    'volatility_60s': volatility_data.get('avg_jump', 0),
+                    'session': session_name,
+                    'regime': regime,
+                    'progress_to_tp': round(progress_to_tp, 1),
+                    'noise_threshold': volatility_data.get('avg_jump', 0)
+                }
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Set dynamic trailing stop error: {e}", exc_info=True)
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 

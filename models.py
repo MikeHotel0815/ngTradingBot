@@ -723,6 +723,11 @@ class GlobalSettings(Base):
     min_sl_distance_points = Column(Numeric(6, 2), default=10.0, nullable=False)  # Min 10 points from price
     max_sl_move_per_update = Column(Numeric(6, 2), default=100.0, nullable=False)  # Max 100 points per update
 
+    # Telegram Notifications (Global)
+    telegram_enabled = Column(Boolean, default=True, nullable=False)
+    telegram_bot_token = Column(String(200))
+    telegram_chat_id = Column(String(50))
+
     # Metadata
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     updated_by = Column(String(100), default='system')

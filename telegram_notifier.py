@@ -24,9 +24,38 @@ class TelegramNotifier:
             bot_token: Telegram Bot Token (from @BotFather)
             chat_id: Your Telegram Chat ID
         """
-        self.bot_token = bot_token or os.getenv('TELEGRAM_BOT_TOKEN')
-        self.chat_id = chat_id or os.getenv('TELEGRAM_CHAT_ID')
-        self.enabled = bool(self.bot_token and self.chat_id)
+        # Priority: 1. Passed arguments, 2. Database (GlobalSettings), 3. Environment variables
+        if bot_token and chat_id:
+            self.bot_token = bot_token
+            self.chat_id = chat_id
+            self.enabled = True
+        else:
+            # Try to load from database first
+            try:
+                from database import ScopedSession
+                from models import GlobalSettings
+                db = ScopedSession()
+                try:
+                    settings = GlobalSettings.get_settings(db)
+                    if settings.telegram_enabled and settings.telegram_bot_token and settings.telegram_chat_id:
+                        self.bot_token = settings.telegram_bot_token
+                        self.chat_id = settings.telegram_chat_id
+                        self.enabled = True
+                        logger.info(f"📱 Telegram loaded from GlobalSettings - Chat ID: {self.chat_id}")
+                    else:
+                        # Fallback to environment variables
+                        self.bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
+                        self.chat_id = os.getenv('TELEGRAM_CHAT_ID')
+                        self.enabled = bool(self.bot_token and self.chat_id)
+                        if self.enabled:
+                            logger.info(f"📱 Telegram loaded from ENV - Chat ID: {self.chat_id}")
+                finally:
+                    db.close()
+            except Exception as e:
+                logger.warning(f"Could not load Telegram from database: {e}, falling back to ENV")
+                self.bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
+                self.chat_id = os.getenv('TELEGRAM_CHAT_ID')
+                self.enabled = bool(self.bot_token and self.chat_id)
 
         if not self.enabled:
             logger.warning(

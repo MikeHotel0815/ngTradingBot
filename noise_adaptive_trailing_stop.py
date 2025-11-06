@@ -123,8 +123,8 @@ class NoiseAdaptiveTrailingStop:
         # Calculate tick-to-tick price jumps
         jumps = []
         for i in range(1, len(ticks)):
-            prev_mid = (ticks[i-1].bid + ticks[i-1].ask) / 2
-            curr_mid = (ticks[i].bid + ticks[i].ask) / 2
+            prev_mid = (float(ticks[i-1].bid) + float(ticks[i-1].ask)) / 2
+            curr_mid = (float(ticks[i].bid) + float(ticks[i].ask)) / 2
             jump = abs(curr_mid - prev_mid)
             jumps.append(jump)
 
@@ -186,7 +186,7 @@ class NoiseAdaptiveTrailingStop:
                 # Get approximate price from recent tick
                 tick = db.query(Tick).filter(Tick.symbol == symbol).order_by(Tick.timestamp.desc()).first()
                 if tick:
-                    mid_price = (tick.bid + tick.ask) / 2
+                    mid_price = (float(tick.bid) + float(tick.ask)) / 2
                     return mid_price * fallback_atr_pct
 
         # Ultimate fallback
@@ -257,7 +257,7 @@ class NoiseAdaptiveTrailingStop:
         """Get current bid-ask spread from latest tick."""
         tick = db.query(Tick).filter(Tick.symbol == symbol).order_by(Tick.timestamp.desc()).first()
         if tick:
-            spread = tick.ask - tick.bid
+            spread = float(tick.ask) - float(tick.bid)
             return spread
 
         # Fallback to profile
@@ -300,7 +300,7 @@ class NoiseAdaptiveTrailingStop:
         symbol = trade.symbol
         direction = trade.direction.upper()
         entry_price = float(trade.open_price)
-        tp_price = float(trade.tp_price) if trade.tp_price else None
+        tp_price = float(trade.tp) if trade.tp else None
 
         logger.info(f"Calculating dynamic trail distance for Trade #{trade.ticket} ({symbol} {direction})")
 
@@ -414,7 +414,7 @@ class NoiseAdaptiveTrailingStop:
         Returns:
             (should_update, reason)
         """
-        current_sl = float(trade.sl_price) if trade.sl_price else None
+        current_sl = float(trade.sl) if trade.sl else None
         direction = trade.direction.upper()
 
         if not current_sl:
@@ -469,10 +469,10 @@ class NoiseAdaptiveTrailingStop:
             logger.info(f"Trade #{trade.ticket}: No SL update - {reason}")
             return None
 
-        old_sl = float(trade.sl_price) if trade.sl_price else None
+        old_sl = float(trade.sl) if trade.sl else None
 
         if not dry_run:
-            trade.sl_price = new_sl_price
+            trade.sl = new_sl_price
             db.commit()
             logger.info(f"✅ Trade #{trade.ticket}: Updated SL {old_sl:.5f} → {new_sl_price:.5f}")
         else:
@@ -527,8 +527,8 @@ if __name__ == '__main__':
 
         print(f"\n{'─'*80}")
         print(f"Trade #{trade.ticket}: {trade.symbol} {trade.direction}")
-        print(f"Entry: {trade.open_price:.5f}, Current: {current_price:.5f}, TP: {trade.tp_price:.5f}")
-        print(f"Current SL: {trade.sl_price:.5f}")
+        print(f"Entry: {trade.open_price:.5f}, Current: {current_price:.5f}, TP: {trade.tp:.5f if trade.tp else 0}")
+        print(f"Current SL: {trade.sl:.5f if trade.sl else 0}")
         print(f"{'─'*80}")
 
         result = nas.update_trailing_stop(db, trade, current_price, dry_run=True)

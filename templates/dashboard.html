@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <!-- Version: 2025-10-31-v2 - Fixed signals null-safe rendering -->
+    <!-- Version: 2025-11-06-v3 - Dynamic TS Button (no modal) -->
     <title>ngTradingBot Dashboard</title>
     <!-- Inline SVG favicon to avoid 404 -->
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>🤖</text></svg>">
@@ -5325,8 +5325,11 @@ const SymbolModal = (function() {
                         <button data-action="close-trade" data-ticket="${pos.ticket}" data-pnl="${pos.pnl}" class="trade-action-btn trade-close-btn" title="Close this trade and lock in ${pos.pnl >= 0 ? '+' : ''}€${pos.pnl.toFixed(2)}">
                             ✕ Close (€${pos.pnl.toFixed(2)})
                         </button>
-                        <button data-action="set-trailing-stop" data-ticket="${pos.ticket}" data-symbol="${pos.symbol}" data-volume="${pos.volume}" class="trade-action-btn trade-ts-btn" title="Set trailing stop to protect €${pos.pnl.toFixed(2)} profit">
-                            📈 Set TS (€${pos.pnl.toFixed(2)})
+                        <button data-action="set-dynamic-ts" data-ticket="${pos.ticket}" data-symbol="${pos.symbol}" class="trade-action-btn trade-ts-btn" title="Set dynamic trailing stop based on real-time noise analysis (instant, adaptive to 60s volatility, session, and regime)">
+                            🎯 Set Dynamic TS
+                        </button>
+                        <button data-action="set-manual-ts" data-ticket="${pos.ticket}" data-symbol="${pos.symbol}" data-volume="${pos.volume}" class="trade-action-btn trade-ts-btn" style="opacity: 0.7; font-size: 0.9em;" title="Open manual TS dialog">
+                            ⚙️
                         </button>
                     </div>
                 </div>
@@ -5476,7 +5479,14 @@ const SymbolModal = (function() {
                     btn.disabled = true;
                     btn.style.opacity = '0.5';
                     closeTrade(ticket, pnl);
-                } else if (action === 'set-trailing-stop') {
+                } else if (action === 'set-dynamic-ts') {
+                    const symbol = btn.dataset.symbol;
+                    // Disable button immediately to prevent double-clicks
+                    btn.disabled = true;
+                    btn.style.opacity = '0.5';
+                    btn.innerHTML = '⏳ Setting...';
+                    setDynamicTrailingStop(ticket, symbol, btn);
+                } else if (action === 'set-manual-ts') {
                     const symbol = btn.dataset.symbol;
                     const volume = parseFloat(btn.dataset.volume);
                     showSetTrailingStopModal(ticket, symbol, volume);
@@ -6595,7 +6605,53 @@ const SymbolModal = (function() {
             }
         }
 
-        // Set trailing stop
+        // Set dynamic trailing stop (noise-adaptive)
+        async function setDynamicTrailingStop(ticket, symbol, buttonElement) {
+            try {
+                const apiBase = window.location.protocol + '//' + window.location.hostname + ':9905';
+                const response = await fetch(`${apiBase}/api/set_dynamic_trailing_stop/${ticket}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                });
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    // Show success notification with details
+                    const details = data.details || {};
+                    const message = `✅ Dynamic TS Set for ${symbol}!\n\n` +
+                        `📊 Distance: ${details.trailing_stop_pips || 0} pips (${details.distance_points || 0} points)\n` +
+                        `📈 60s Noise: ${details.volatility_60s || 0}\n` +
+                        `🕐 Session: ${details.session || 'N/A'}\n` +
+                        `📉 Regime: ${details.regime || 'N/A'}\n` +
+                        `🎯 Progress to TP: ${details.progress_to_tp || 0}%\n\n` +
+                        `TS is set just below noise threshold for optimal protection.`;
+
+                    alert(message);
+
+                    // Re-enable button
+                    buttonElement.disabled = false;
+                    buttonElement.style.opacity = '1';
+                    buttonElement.innerHTML = '🎯 Set Dynamic TS';
+
+                    // Reload trades to show updated TS
+                    loadOpenTrades();
+                } else {
+                    alert(`❌ Error: ${data.message}`);
+                    // Re-enable button
+                    buttonElement.disabled = false;
+                    buttonElement.style.opacity = '1';
+                    buttonElement.innerHTML = '🎯 Set Dynamic TS';
+                }
+            } catch (error) {
+                alert(`❌ Error: ${error.message}`);
+                // Re-enable button
+                buttonElement.disabled = false;
+                buttonElement.style.opacity = '1';
+                buttonElement.innerHTML = '🎯 Set Dynamic TS';
+            }
+        }
+
+        // Set manual trailing stop (opens modal)
         async function setTrailingStop() {
             const ticket = document.getElementById('ts-ticket').textContent;
             const pips = document.getElementById('ts-input').value;
