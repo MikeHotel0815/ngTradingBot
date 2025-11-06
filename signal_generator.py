@@ -117,6 +117,18 @@ class SignalGenerator:
             # Check minimum confidence threshold (from config)
             min_confidence = self.config['MIN_GENERATION_CONFIDENCE']
 
+            # 🎯 ADDED 2025-11-06: Timeframe-specific confidence adjustments
+            # H1 loses -324€ vs H4 +131€, needs higher threshold
+            from signal_config import TIMEFRAME_MIN_CONFIDENCE
+            if self.timeframe in TIMEFRAME_MIN_CONFIDENCE:
+                timeframe_min = TIMEFRAME_MIN_CONFIDENCE[self.timeframe]
+                if timeframe_min > min_confidence:
+                    logger.debug(
+                        f"Applying timeframe-specific min confidence for {self.timeframe}: "
+                        f"{min_confidence}% → {timeframe_min}%"
+                    )
+                    min_confidence = timeframe_min
+
             if signal and signal['confidence'] >= min_confidence:
                 logger.info(
                     f"✅ Signal PASSED: {self.symbol} {self.timeframe} "

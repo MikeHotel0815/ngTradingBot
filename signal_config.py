@@ -34,8 +34,9 @@ BUY_SIGNAL_ADVANTAGE = 1  # Reduced from 2 - less conservative
 # BUY confidence penalty (percentage points)
 # Reduces BUY signal confidence to make them harder to trigger
 # 0.0 = No penalty (treat BUY and SELL equally)
-# 2.0 = Reduce BUY confidence by 2%
-BUY_CONFIDENCE_PENALTY = 1.0  # Reduced from 2.0 - less harsh
+# 5.0 = Reduce BUY confidence by 5%
+# 🎯 INCREASED 2025-11-06: BUY trades have -263€ loss vs SELL +52€ profit
+BUY_CONFIDENCE_PENALTY = 15.0  # Increased from 1.0 - BUY trades severely underperform
 
 # ============================================================================
 # CONFIDENCE CALCULATION WEIGHTS
@@ -91,6 +92,21 @@ SIGNAL_EXPIRATION_HOURS = 24
 
 # Cache TTL for indicators/patterns (seconds)
 CACHE_TTL = 15  # Reduced from 300 for faster updates
+
+# ============================================================================
+# TIMEFRAME-SPECIFIC ADJUSTMENTS
+# ============================================================================
+
+# 🎯 ADDED 2025-11-06: H1 timeframe loses -324€ vs H4 +131€
+# Increase minimum confidence for H1 to reduce low-quality signals
+TIMEFRAME_MIN_CONFIDENCE = {
+    'M1': 80,   # Very short-term, needs high confidence
+    'M5': 75,   # Short-term
+    'M15': 70,  # Medium-term
+    'H1': 85,   # 🔴 INCREASED: H1 severely underperforms
+    'H4': 60,   # ✅ H4 is profitable, keep lower threshold
+    'D1': 65,   # Long-term
+}
 
 # ============================================================================
 # SYMBOL-SPECIFIC OVERRIDES
