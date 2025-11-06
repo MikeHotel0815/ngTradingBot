@@ -605,6 +605,29 @@ def import_worker_functions():
     except Exception as e:
         logger.error(f"Failed to import symbol_auto_resume: {e}")
 
+    try:
+        # ✅ NEW: Noise-Adaptive Trailing Stop - Dynamic TS based on market noise
+        logger.info("📦 Importing noise_adaptive_trailing_stop...")
+        from workers.noise_adaptive_ts_worker import NoiseAdaptiveTrailingStopWorker
+        from database import ScopedSession
+
+        # Create worker instance (reused across iterations)
+        _nas_worker = NoiseAdaptiveTrailingStopWorker(account_id=3)
+
+        def run_noise_adaptive_ts():
+            """Update trailing stops dynamically based on market noise"""
+            result = _nas_worker.process_all_trades()
+            if result['updates_made'] > 0:
+                logger.info(
+                    f"🎯 Noise-Adaptive TS: {result['updates_made']}/{result['trades_processed']} SL updates "
+                    f"(volatility: {result['volatility_classifications']})"
+                )
+
+        workers['noise_adaptive_ts'] = run_noise_adaptive_ts
+
+    except Exception as e:
+        logger.error(f"Failed to import noise_adaptive_ts: {e}")
+
     return workers
 
 
@@ -733,6 +756,10 @@ def main():
         'post_close_tracker': {
             'function': worker_functions.get('post_close_tracker'),
             'interval': int(os.getenv('POST_CLOSE_TRACKER_INTERVAL', 60)),  # 1 minute - track TS post-close TP hits
+        },
+        'noise_adaptive_ts': {
+            'function': worker_functions.get('noise_adaptive_ts'),
+            'interval': int(os.getenv('NOISE_ADAPTIVE_TS_INTERVAL', 15)),  # 15 seconds - adjusts dynamically based on volatility
         },
     }
 
