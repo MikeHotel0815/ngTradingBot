@@ -4016,6 +4016,136 @@ def handle_disconnect():
     logger.info("WebSocket client disconnected")
 
 
+@socketio.on('request_price_chart')
+def handle_price_chart_request(data):
+    """Client requests price chart for specific symbol
+
+    Args:
+        data: dict with keys 'symbol', 'timeframe', 'bars', 'filter', 'hours'
+    """
+    try:
+        from monitoring.price_chart_generator import PriceChartGenerator
+
+        symbol = data.get('symbol')
+        timeframe = data.get('timeframe', 'H1')
+        bars = data.get('bars', 100)
+        trade_filter = data.get('filter', 'open')
+        hours_back = data.get('hours', 24)
+
+        if not symbol:
+            emit('error', {'message': 'Symbol is required'})
+            return
+
+        with PriceChartGenerator(account_id=3) as generator:
+            fig = generator.generate_price_chart_with_tpsl(
+                symbol=symbol,
+                timeframe=timeframe,
+                bars_back=bars,
+                trade_filter=trade_filter,
+                hours_back=hours_back
+            )
+
+            if not fig:
+                emit('error', {'message': f'No data available for {symbol}'})
+                return
+
+            img_base64 = generator.fig_to_base64(fig)
+
+        emit('price_chart_update', {
+            'symbol': symbol,
+            'timeframe': timeframe,
+            'bars': bars,
+            'filter': trade_filter,
+            'hours': hours_back,
+            'image': f'data:image/png;base64,{img_base64}',
+            'generated_at': datetime.utcnow().isoformat()
+        })
+
+    except Exception as e:
+        logger.error(f"Error generating price chart for {symbol}: {e}", exc_info=True)
+        emit('error', {'message': str(e)})
+
+
+@socketio.on('request_all_price_charts')
+def handle_all_price_charts_request(data):
+    """Client requests price charts for all symbols with trades
+
+    Args:
+        data: dict with keys 'timeframe', 'bars', 'filter', 'hours' (all optional)
+    """
+    try:
+        from monitoring.price_chart_generator import PriceChartGenerator
+        from sqlalchemy import distinct, or_
+
+        timeframe = data.get('timeframe', 'H1')
+        bars = data.get('bars', 100)
+        trade_filter = data.get('filter', 'open')
+        hours_back = data.get('hours', 24)
+
+        # Get all symbols with trades matching filter
+        db = ScopedSession()
+        try:
+            query = db.query(distinct(Trade.symbol)).filter(
+                Trade.account_id == 3
+            )
+
+            if trade_filter == 'open':
+                query = query.filter(Trade.status == 'open')
+            elif trade_filter == 'closed':
+                since = datetime.utcnow() - timedelta(hours=hours_back)
+                query = query.filter(
+                    Trade.status == 'closed',
+                    Trade.close_time >= since
+                )
+            elif trade_filter == 'all':
+                since = datetime.utcnow() - timedelta(hours=hours_back)
+                query = query.filter(
+                    or_(
+                        Trade.status == 'open',
+                        (Trade.status == 'closed') & (Trade.close_time >= since)
+                    )
+                )
+
+            symbols = [s[0] for s in query.all()]
+        finally:
+            db.close()
+
+        charts = []
+        with PriceChartGenerator(account_id=3) as generator:
+            for symbol in symbols:
+                try:
+                    fig = generator.generate_price_chart_with_tpsl(
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        bars_back=bars,
+                        trade_filter=trade_filter,
+                        hours_back=hours_back
+                    )
+
+                    if fig:
+                        img_base64 = generator.fig_to_base64(fig)
+                        charts.append({
+                            'symbol': symbol,
+                            'image': f'data:image/png;base64,{img_base64}'
+                        })
+                except Exception as e:
+                    logger.error(f"Error generating chart for {symbol}: {e}")
+                    continue
+
+        emit('price_charts_update', {
+            'timeframe': timeframe,
+            'bars': bars,
+            'filter': trade_filter,
+            'hours': hours_back,
+            'charts': charts,
+            'generated_at': datetime.utcnow().isoformat()
+        })
+
+    except Exception as e:
+        logger.error(f"Error generating price charts: {e}", exc_info=True)
+        emit('error', {'message': str(e)})
+
+
 def broadcast_tick_update(symbol, bid, ask):
     """Broadcast tick update to all connected clients"""
     socketio.emit('tick_update', {
@@ -6461,6 +6591,149 @@ def get_ml_stats():
             db.close()
     except Exception as e:
         logger.error(f"Error getting ML stats: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================================
+# PRICE CHARTS WITH TP/SL LEVELS
+# ============================================================================
+
+@app_webui.route('/api/price-chart/<symbol>')
+def api_price_chart(symbol):
+    """Get price chart with TP/SL levels for a symbol
+
+    Args:
+        symbol: Trading symbol (e.g., EURUSD, XAUUSD)
+
+    Query params:
+        timeframe: M1, M5, M15, H1, H4, D1 (default: H1)
+        bars: Number of bars to display (default: 100)
+        filter: 'open', 'closed', 'all' (default: 'open')
+        hours: For closed/all, hours back to look (default: 24)
+
+    Returns:
+        JSON with base64-encoded PNG
+    """
+    try:
+        from monitoring.price_chart_generator import PriceChartGenerator
+
+        timeframe = request.args.get('timeframe', 'H1')
+        bars = request.args.get('bars', 100, type=int)
+        trade_filter = request.args.get('filter', 'open')
+        hours_back = request.args.get('hours', 24, type=int)
+
+        with PriceChartGenerator(account_id=3) as generator:
+            fig = generator.generate_price_chart_with_tpsl(
+                symbol=symbol,
+                timeframe=timeframe,
+                bars_back=bars,
+                trade_filter=trade_filter,
+                hours_back=hours_back
+            )
+
+            if not fig:
+                return jsonify({'error': f'No data available for {symbol}'}), 404
+
+            img_base64 = generator.fig_to_base64(fig)
+
+            return jsonify({
+                'symbol': symbol,
+                'timeframe': timeframe,
+                'bars': bars,
+                'filter': trade_filter,
+                'hours': hours_back,
+                'image': f'data:image/png;base64,{img_base64}',
+                'generated_at': datetime.utcnow().isoformat()
+            })
+
+    except Exception as e:
+        logger.error(f"Error generating price chart for {symbol}: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app_webui.route('/api/price-charts')
+def api_price_charts_all():
+    """Get price charts for all symbols with trades
+
+    Query params:
+        timeframe: M1, M5, M15, H1, H4, D1 (default: H1)
+        bars: Number of bars to display (default: 100)
+        filter: 'open', 'closed', 'all' (default: 'open')
+        hours: For closed/all, hours back to look (default: 24)
+
+    Returns:
+        JSON with array of charts (base64-encoded PNGs)
+    """
+    try:
+        from monitoring.price_chart_generator import PriceChartGenerator
+        from sqlalchemy import distinct, or_
+
+        timeframe = request.args.get('timeframe', 'H1')
+        bars = request.args.get('bars', 100, type=int)
+        trade_filter = request.args.get('filter', 'open')
+        hours_back = request.args.get('hours', 24, type=int)
+
+        # Get all symbols with trades matching filter
+        db = ScopedSession()
+        try:
+            query = db.query(distinct(Trade.symbol)).filter(
+                Trade.account_id == 3
+            )
+
+            if trade_filter == 'open':
+                query = query.filter(Trade.status == 'open')
+            elif trade_filter == 'closed':
+                since = datetime.utcnow() - timedelta(hours=hours_back)
+                query = query.filter(
+                    Trade.status == 'closed',
+                    Trade.close_time >= since
+                )
+            elif trade_filter == 'all':
+                since = datetime.utcnow() - timedelta(hours=hours_back)
+                query = query.filter(
+                    or_(
+                        Trade.status == 'open',
+                        (Trade.status == 'closed') & (Trade.close_time >= since)
+                    )
+                )
+
+            symbols = [s[0] for s in query.all()]
+        finally:
+            db.close()
+
+        charts = []
+        with PriceChartGenerator(account_id=3) as generator:
+            for symbol in symbols:
+                try:
+                    fig = generator.generate_price_chart_with_tpsl(
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        bars_back=bars,
+                        trade_filter=trade_filter,
+                        hours_back=hours_back
+                    )
+
+                    if fig:
+                        img_base64 = generator.fig_to_base64(fig)
+                        charts.append({
+                            'symbol': symbol,
+                            'image': f'data:image/png;base64,{img_base64}'
+                        })
+                except Exception as e:
+                    logger.error(f"Error generating chart for {symbol}: {e}")
+                    continue
+
+        return jsonify({
+            'timeframe': timeframe,
+            'bars': bars,
+            'filter': trade_filter,
+            'hours': hours_back,
+            'charts': charts,
+            'generated_at': datetime.utcnow().isoformat()
+        })
+
+    except Exception as e:
+        logger.error(f"Error generating price charts: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 
