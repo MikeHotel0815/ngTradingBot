@@ -1615,10 +1615,11 @@ class TechnicalIndicators:
                     regime = 'RANGING'
                     strength = min(100, int((current_adx - min_adx_trading) / (min_adx_trending - min_adx_trading) * 100))
 
+            di_diff_str = f"{di_diff:.1f}" if di_diff is not None else "N/A"
             logger.debug(
                 f"{self.symbol} {self.timeframe} Market Regime: {regime} | Direction: {direction} "
                 f"(ADX: {current_adx:.1f}, +DI: {current_plus_di:.1f}, -DI: {current_minus_di:.1f}, "
-                f"DI_diff: {di_diff:.1f if di_diff else 0}, BB Width: {bb_width:.2f}%, Strength: {strength}%)"
+                f"DI_diff: {di_diff_str}, BB Width: {bb_width:.2f}%, Strength: {strength}%)"
             )
 
             return {
