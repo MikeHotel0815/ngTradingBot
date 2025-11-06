@@ -35,8 +35,9 @@ BUY_SIGNAL_ADVANTAGE = 1  # Reduced from 2 - less conservative
 # Reduces BUY signal confidence to make them harder to trigger
 # 0.0 = No penalty (treat BUY and SELL equally)
 # 5.0 = Reduce BUY confidence by 5%
-# 🎯 INCREASED 2025-11-06: BUY trades have -263€ loss vs SELL +52€ profit
-BUY_CONFIDENCE_PENALTY = 15.0  # Increased from 1.0 - BUY trades severely underperform
+# ✅ REVERTED 2025-11-06: Root cause is bad TREND DETECTION, not BUY direction
+# Fix: Improve trend quality detection instead of blanket BUY penalty
+BUY_CONFIDENCE_PENALTY = 0.0  # No blanket penalty - fix trend detection instead
 
 # ============================================================================
 # CONFIDENCE CALCULATION WEIGHTS
@@ -124,20 +125,50 @@ SYMBOL_OVERRIDES: Dict[str, Dict] = {
         'MIN_GENERATION_CONFIDENCE': 55,
         'BUY_SIGNAL_ADVANTAGE': 2,
     },
-    # Example: Less conservative for forex majors
+    # Choppy forex pairs: need stronger trends (higher ADX + DI diff)
+    # 🎯 ADDED 2025-11-06: These pairs show false TRENDING classification
     'EURUSD': {
         'MIN_GENERATION_CONFIDENCE': 48,
         'BUY_SIGNAL_ADVANTAGE': 1,
+        'MIN_ADX_FOR_TRENDING': 32,  # Higher threshold for choppy pair
+        'MIN_DI_DIFF': 15,           # Need clear directional bias
     },
     'GBPUSD': {
         'MIN_GENERATION_CONFIDENCE': 48,
         'BUY_SIGNAL_ADVANTAGE': 1,
+        'MIN_ADX_FOR_TRENDING': 32,
+        'MIN_DI_DIFF': 15,
     },
     'AUDUSD': {
         'MIN_GENERATION_CONFIDENCE': 48,
         'BUY_SIGNAL_ADVANTAGE': 1,
+        'MIN_ADX_FOR_TRENDING': 32,
+        'MIN_DI_DIFF': 15,
     },
 }
+
+# ============================================================================
+# TREND DETECTION THRESHOLDS
+# ============================================================================
+
+# Minimum ADX to allow trading (below = TOO_WEAK)
+# 🎯 INCREASED 2025-11-06: Was 12, now 18 (reduce false signals in weak trends)
+MIN_ADX_FOR_TRADING = 18
+
+# Minimum ADX to classify as TRENDING (below = RANGING)
+# 🎯 INCREASED 2025-11-06: Was 25, now 28 (stricter trend requirement)
+MIN_ADX_FOR_TRENDING = 28
+
+# Minimum difference between +DI and -DI to confirm trend quality
+# 🎯 NEW 2025-11-06: Detect CHOPPY markets (high ADX but no directional clarity)
+# Example: +DI=30, -DI=28 → diff=2 (CHOPPY, oscillating)
+#          +DI=35, -DI=20 → diff=15 (TRENDING, strong directional bias)
+MIN_DI_DIFF = 10
+
+# Trend-alignment confidence adjustments
+TREND_ALIGNMENT_BONUS = 10    # Bonus for trading WITH the trend
+COUNTER_TREND_PENALTY = 25    # Penalty for trading AGAINST the trend
+CHOPPY_MARKET_PENALTY = 30    # Penalty for choppy markets (high ADX, low DI diff)
 
 # ============================================================================
 # HELPER FUNCTIONS

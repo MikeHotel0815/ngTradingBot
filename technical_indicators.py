@@ -1499,20 +1499,25 @@ class TechnicalIndicators:
 
     def detect_market_regime(self) -> Dict:
         """
-        Detect market regime: TRENDING or RANGING
-        🔧 ENHANCED 2025-10-28: Now includes trend DIRECTION (bullish/bearish)
+        Detect market regime: TRENDING, RANGING, CHOPPY, or TOO_WEAK
+        🔧 ENHANCED 2025-11-06: Added DMI checks for trend quality detection
 
-        Uses ADX and Bollinger Band width to determine market state
+        Uses ADX + DMI (Directional Movement Index) for regime classification
         Uses EMA cross to determine trend direction
 
+        Key improvements:
+        - Detects CHOPPY markets (high ADX but no directional clarity)
+        - Uses +DI/-DI difference to measure trend quality
+        - Symbol-specific ADX thresholds from signal_config.py
+
         Returns:
-            Dict with regime, strength, direction, and details
+            Dict with regime, strength, direction, and DMI details
         """
         try:
             # Get required data
             df = self._get_ohlc_data(limit=50)
             if df is None or len(df) < 30:
-                return {'regime': 'UNKNOWN', 'strength': 0, 'direction': 'neutral', 'adx': None, 'bb_width': None}
+                return {'regime': 'UNKNOWN', 'strength': 0, 'direction': 'neutral', 'adx': None, 'bb_width': None, 'di_diff': None}
 
             close = df['close'].values
             high = df['high'].values
@@ -1522,71 +1527,114 @@ class TechnicalIndicators:
             adx = talib.ADX(high, low, close, timeperiod=14)
             current_adx = adx[-1] if len(adx) > 0 and not np.isnan(adx[-1]) else None
 
+            # 🔧 NEW: Calculate DMI (+DI and -DI) - measures trend quality/direction
+            plus_di = talib.PLUS_DI(high, low, close, timeperiod=14)
+            minus_di = talib.MINUS_DI(high, low, close, timeperiod=14)
+            current_plus_di = plus_di[-1] if len(plus_di) > 0 and not np.isnan(plus_di[-1]) else None
+            current_minus_di = minus_di[-1] if len(minus_di) > 0 and not np.isnan(minus_di[-1]) else None
+
+            # Calculate DI difference - measures directional clarity
+            di_diff = None
+            if current_plus_di is not None and current_minus_di is not None:
+                di_diff = abs(current_plus_di - current_minus_di)
+
             # Calculate Bollinger Band Width (normalized) - measures volatility
             bb_upper, bb_middle, bb_lower = talib.BBANDS(close, timeperiod=20, nbdevup=2, nbdevdn=2)
             bb_width = ((bb_upper[-1] - bb_lower[-1]) / bb_middle[-1]) * 100 if len(bb_upper) > 0 else None
 
-            # 🔧 NEW: Determine trend DIRECTION using EMAs
+            # 🔧 Determine trend DIRECTION using EMAs + DMI
             ema_20 = talib.EMA(close, timeperiod=20)
             ema_50 = talib.EMA(close, timeperiod=50)
 
             direction = 'neutral'
-            if len(ema_20) > 0 and len(ema_50) > 0:
+            if len(ema_20) > 0 and len(ema_50) > 0 and current_plus_di is not None and current_minus_di is not None:
                 current_ema20 = ema_20[-1]
                 current_ema50 = ema_50[-1]
 
-                # Bullish: EMA20 > EMA50 and price > EMA20
-                if current_ema20 > current_ema50 and close[-1] > current_ema20:
+                # Bullish: EMA20 > EMA50 AND +DI > -DI
+                if current_ema20 > current_ema50 and current_plus_di > current_minus_di:
                     direction = 'bullish'
-                # Bearish: EMA20 < EMA50 and price < EMA20
-                elif current_ema20 < current_ema50 and close[-1] < current_ema20:
+                # Bearish: EMA20 < EMA50 AND -DI > +DI
+                elif current_ema20 < current_ema50 and current_minus_di > current_plus_di:
                     direction = 'bearish'
                 # Weak trend or consolidation
                 else:
                     direction = 'neutral'
 
-            # Determine regime
+            # Load thresholds from signal_config.py
+            from signal_config import (
+                MIN_ADX_FOR_TRADING,
+                MIN_ADX_FOR_TRENDING,
+                MIN_DI_DIFF,
+                SYMBOL_OVERRIDES
+            )
+
+            # Apply symbol-specific overrides if available
+            min_adx_trading = MIN_ADX_FOR_TRADING
+            min_adx_trending = MIN_ADX_FOR_TRENDING
+            min_di_diff = MIN_DI_DIFF
+
+            if self.symbol in SYMBOL_OVERRIDES:
+                overrides = SYMBOL_OVERRIDES[self.symbol]
+                min_adx_trending = overrides.get('MIN_ADX_FOR_TRENDING', min_adx_trending)
+                min_di_diff = overrides.get('MIN_DI_DIFF', min_di_diff)
+
+            # Determine regime with enhanced logic
             regime = 'UNKNOWN'
             strength = 0
 
             if current_adx is not None and bb_width is not None:
-                # ADX minimum threshold - market too weak for any strategy
-                MIN_ADX_FOR_TRADING = 12
-
-                if current_adx < MIN_ADX_FOR_TRADING:
+                # 1. TOO_WEAK: ADX below minimum trading threshold
+                if current_adx < min_adx_trading:
                     regime = 'TOO_WEAK'
                     strength = 0
-                    logger.info(f"{self.symbol} {self.timeframe} Market too weak for trading (ADX: {current_adx:.1f} < {MIN_ADX_FOR_TRADING})")
-                # ADX > 25 = Strong trend
-                elif current_adx > 25:
-                    regime = 'TRENDING'
-                    strength = min(100, int((current_adx - 25) / 50 * 100))  # Scale 25-75 ADX to 0-100%
-                # ADX 12-20 = Weak/no trend (ranging)
-                elif current_adx < 20:
-                    regime = 'RANGING'
-                    strength = min(100, int((current_adx - MIN_ADX_FOR_TRADING) / (20 - MIN_ADX_FOR_TRADING) * 100))  # Scale 12-20 ADX to 0-100%
-                else:
-                    # Borderline case (ADX 20-25) - use BB width as tie-breaker
-                    if bb_width < 2.0:  # Narrow bands = ranging
-                        regime = 'RANGING'
-                        strength = 50
-                    else:
-                        regime = 'TRENDING'
-                        strength = 50
+                    logger.info(f"{self.symbol} {self.timeframe} Market too weak for trading (ADX: {current_adx:.1f} < {min_adx_trading})")
 
-            logger.debug(f"{self.symbol} {self.timeframe} Market Regime: {regime} | Direction: {direction} (ADX: {current_adx:.1f}, BB Width: {bb_width:.2f}%, Strength: {strength}%)")
+                # 2. CHOPPY: High ADX but low directional clarity (oscillating market)
+                # This is the KEY FIX - detects false trending markets
+                elif current_adx >= min_adx_trending and di_diff is not None and di_diff < min_di_diff:
+                    regime = 'CHOPPY'
+                    strength = 0  # Not tradeable
+                    logger.info(
+                        f"{self.symbol} {self.timeframe} CHOPPY market detected "
+                        f"(ADX: {current_adx:.1f} ≥ {min_adx_trending}, "
+                        f"DI_diff: {di_diff:.1f} < {min_di_diff})"
+                    )
+
+                # 3. TRENDING: High ADX AND high directional clarity
+                elif current_adx >= min_adx_trending and di_diff is not None and di_diff >= min_di_diff:
+                    regime = 'TRENDING'
+                    strength = min(100, int((current_adx - min_adx_trending) / 50 * 100))  # Scale to 0-100%
+                    logger.debug(
+                        f"{self.symbol} {self.timeframe} TRENDING market "
+                        f"(ADX: {current_adx:.1f}, DI_diff: {di_diff:.1f})"
+                    )
+
+                # 4. RANGING: Low-medium ADX (weak trend)
+                elif current_adx < min_adx_trending:
+                    regime = 'RANGING'
+                    strength = min(100, int((current_adx - min_adx_trading) / (min_adx_trending - min_adx_trading) * 100))
+
+            logger.debug(
+                f"{self.symbol} {self.timeframe} Market Regime: {regime} | Direction: {direction} "
+                f"(ADX: {current_adx:.1f}, +DI: {current_plus_di:.1f}, -DI: {current_minus_di:.1f}, "
+                f"DI_diff: {di_diff:.1f if di_diff else 0}, BB Width: {bb_width:.2f}%, Strength: {strength}%)"
+            )
 
             return {
                 'regime': regime,
                 'strength': strength,
-                'direction': direction,  # 🔧 NEW: bullish/bearish/neutral
+                'direction': direction,  # bullish/bearish/neutral
                 'adx': float(current_adx) if current_adx else None,
-                'bb_width': float(bb_width) if bb_width else None
+                'bb_width': float(bb_width) if bb_width else None,
+                'plus_di': float(current_plus_di) if current_plus_di else None,  # NEW
+                'minus_di': float(current_minus_di) if current_minus_di else None,  # NEW
+                'di_diff': float(di_diff) if di_diff else None  # NEW: Key metric for trend quality
             }
 
         except Exception as e:
             logger.error(f"Error detecting market regime: {e}")
-            return {'regime': 'UNKNOWN', 'strength': 0, 'adx': None, 'bb_width': None}
+            return {'regime': 'UNKNOWN', 'strength': 0, 'adx': None, 'bb_width': None, 'di_diff': None}
 
     def get_indicator_signals(self) -> List[Dict]:
         """

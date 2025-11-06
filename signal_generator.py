@@ -434,7 +434,7 @@ class SignalGenerator:
         # Total confidence (before direction adjustment)
         confidence = pattern_score + indicator_score + strength_score
 
-        # Apply BUY confidence penalty from config
+        # Apply BUY confidence penalty from config (deprecated, kept for backward compatibility)
         buy_penalty = self.config['BUY_CONFIDENCE_PENALTY']
         signal_type = signals[0]['type'] if signals else 'UNKNOWN'
 
@@ -446,7 +446,91 @@ class SignalGenerator:
                 f"(-{buy_penalty}%)"
             )
 
+        # 🎯 NEW 2025-11-06: Apply trend-alignment confidence adjustment
+        # This is the CORRECT approach - adjust confidence based on trend quality and alignment
+        confidence = self._apply_trend_alignment_adjustment(confidence, signal_type)
+
         return round(min(100, confidence), 2)
+
+    def _apply_trend_alignment_adjustment(self, confidence: float, signal_type: str) -> float:
+        """
+        Apply trend-alignment confidence adjustment based on market regime
+        🎯 NEW 2025-11-06: Replace blanket BUY/SELL penalties with intelligent trend-based adjustment
+
+        Logic:
+        - CHOPPY market: -30% confidence (avoid whipsaw)
+        - TRENDING + WITH-TREND: +10% confidence (ideal setup)
+        - TRENDING + COUNTER-TREND: -25% confidence (dangerous)
+        - RANGING: no adjustment (neutral)
+        - TOO_WEAK: already filtered earlier
+
+        Args:
+            confidence: Current confidence score
+            signal_type: 'BUY' or 'SELL'
+
+        Returns:
+            Adjusted confidence score
+        """
+        try:
+            # Get market regime from indicators
+            regime = self.indicators.detect_market_regime()
+
+            # Load adjustment parameters from config
+            from signal_config import (
+                TREND_ALIGNMENT_BONUS,
+                COUNTER_TREND_PENALTY,
+                CHOPPY_MARKET_PENALTY
+            )
+
+            original_confidence = confidence
+            adjustment = 0
+            adjustment_reason = ""
+
+            # 1. CHOPPY market: Reduce confidence significantly
+            if regime['regime'] == 'CHOPPY':
+                adjustment = -CHOPPY_MARKET_PENALTY
+                adjustment_reason = f"CHOPPY market (ADX={regime['adx']:.1f}, DI_diff={regime['di_diff']:.1f})"
+
+            # 2. TRENDING market: Check trend alignment
+            elif regime['regime'] == 'TRENDING':
+                direction = regime.get('direction', 'neutral')
+
+                # Check if signal aligns with trend
+                is_with_trend = (
+                    (signal_type == 'BUY' and direction == 'bullish') or
+                    (signal_type == 'SELL' and direction == 'bearish')
+                )
+
+                if is_with_trend:
+                    # WITH-TREND: Bonus confidence
+                    adjustment = TREND_ALIGNMENT_BONUS
+                    adjustment_reason = f"WITH-TREND ({signal_type} in {direction} trend)"
+                elif direction != 'neutral':
+                    # COUNTER-TREND: Penalty
+                    adjustment = -COUNTER_TREND_PENALTY
+                    adjustment_reason = f"COUNTER-TREND ({signal_type} against {direction} trend)"
+                else:
+                    # Neutral direction in trending market
+                    adjustment_reason = "TRENDING but direction unclear"
+
+            # 3. RANGING market: No adjustment
+            elif regime['regime'] == 'RANGING':
+                adjustment_reason = "RANGING market (neutral)"
+
+            # Apply adjustment
+            confidence = max(0, min(100, confidence + adjustment))
+
+            if adjustment != 0:
+                logger.info(
+                    f"🎯 Trend-alignment adjustment: {original_confidence:.1f}% → {confidence:.1f}% "
+                    f"({adjustment:+.1f}%) - {adjustment_reason}"
+                )
+
+            return confidence
+
+        except Exception as e:
+            logger.error(f"Error applying trend-alignment adjustment: {e}")
+            return confidence  # Return original on error
 
     def _calculate_entry_sl_tp(self, signal: Dict) -> Tuple[float, float, float]:
         """
