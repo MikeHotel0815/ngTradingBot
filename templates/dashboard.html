@@ -5190,11 +5190,11 @@ const SymbolModal = (function() {
             const directionClass = pos.direction === 'BUY' ? 'buy' : 'sell';
             const changedClass = hasChanged ? 'pnl-fade' : '';  // Changed to pnl-fade for P/L animation
 
-            const openTime = new Date(pos.open_time);
-            const now = new Date();
-            const durationMs = now - openTime;
-            const hours = Math.floor(durationMs / 3600000);
-            const minutes = Math.floor((durationMs % 3600000) / 60000);
+            // Use duration from backend (already timezone-corrected)
+            // Backend calculates: NOW() - (open_time - INTERVAL '2 hours') to handle EET timezone
+            const durationMinutes = pos.duration_minutes || 0;
+            const hours = Math.floor(durationMinutes / 60);
+            const minutes = Math.floor(durationMinutes % 60);
 
             // Extract timeframe from opening_reason (e.g., "Signal #123 (H1 BUY)")
             const timeframeMatch = pos.opening_reason ? pos.opening_reason.match(/\((M5|M15|M30|H1|H4|D1|W1)\s/i) : null;
