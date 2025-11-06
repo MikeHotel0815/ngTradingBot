@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from monitoring.dashboard_core import DashboardCore
 from monitoring.chart_generator import ChartGenerator
+from monitoring.price_chart_generator import PriceChartGenerator
 from monitoring.dashboard_config import get_config
 
 logger = logging.getLogger(__name__)
@@ -166,6 +167,108 @@ class WebDashboardServer:
 
             except Exception as e:
                 logger.error(f"Error generating chart {chart_type}: {e}", exc_info=True)
+                return jsonify({'error': str(e)}), 500
+
+        @app.route('/api/price-chart/<symbol>')
+        def api_price_chart(symbol):
+            """Get price chart with TP/SL levels for a symbol
+
+            Args:
+                symbol: Trading symbol (e.g., EURUSD, XAUUSD)
+
+            Query params:
+                timeframe: M1, M5, M15, H1, H4, D1 (default: H1)
+                bars: Number of bars to display (default: 100)
+
+            Returns:
+                JSON with base64-encoded PNG
+            """
+            try:
+                timeframe = request.args.get('timeframe', 'H1')
+                bars = request.args.get('bars', 100, type=int)
+
+                with PriceChartGenerator(account_id=self.account_id) as generator:
+                    fig = generator.generate_price_chart_with_tpsl(
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        bars_back=bars
+                    )
+
+                    if not fig:
+                        return jsonify({'error': f'No data available for {symbol}'}), 404
+
+                    img_base64 = generator.fig_to_base64(fig)
+
+                return jsonify({
+                    'symbol': symbol,
+                    'timeframe': timeframe,
+                    'bars': bars,
+                    'image': f'data:image/png;base64,{img_base64}',
+                    'generated_at': datetime.utcnow().isoformat()
+                })
+
+            except Exception as e:
+                logger.error(f"Error generating price chart for {symbol}: {e}", exc_info=True)
+                return jsonify({'error': str(e)}), 500
+
+        @app.route('/api/price-charts')
+        def api_price_charts_all():
+            """Get price charts for all symbols with open trades
+
+            Query params:
+                timeframe: M1, M5, M15, H1, H4, D1 (default: H1)
+                bars: Number of bars to display (default: 100)
+
+            Returns:
+                JSON with list of symbols and their chart images
+            """
+            try:
+                timeframe = request.args.get('timeframe', 'H1')
+                bars = request.args.get('bars', 100, type=int)
+
+                # Get all symbols with open trades
+                from models import Trade
+                from sqlalchemy import distinct
+                from database import ScopedSession
+
+                db = ScopedSession()
+                try:
+                    symbols = db.query(distinct(Trade.symbol)).filter(
+                        Trade.account_id == self.account_id,
+                        Trade.status == 'open'
+                    ).all()
+                    symbols = [s[0] for s in symbols]
+                finally:
+                    db.close()
+
+                charts = []
+                with PriceChartGenerator(account_id=self.account_id) as generator:
+                    for symbol in symbols:
+                        try:
+                            fig = generator.generate_price_chart_with_tpsl(
+                                symbol=symbol,
+                                timeframe=timeframe,
+                                bars_back=bars
+                            )
+
+                            if fig:
+                                img_base64 = generator.fig_to_base64(fig)
+                                charts.append({
+                                    'symbol': symbol,
+                                    'image': f'data:image/png;base64,{img_base64}'
+                                })
+                        except Exception as e:
+                            logger.error(f"Error generating chart for {symbol}: {e}")
+
+                return jsonify({
+                    'timeframe': timeframe,
+                    'bars': bars,
+                    'charts': charts,
+                    'generated_at': datetime.utcnow().isoformat()
+                })
+
+            except Exception as e:
+                logger.error(f"Error generating price charts: {e}", exc_info=True)
                 return jsonify({'error': str(e)}), 500
 
         @app.route('/api/pnl-timeseries/<interval>')
@@ -352,6 +455,103 @@ class WebDashboardServer:
                 emit('dashboard_update', data)
             except Exception as e:
                 logger.error(f"Error sending dashboard update: {e}")
+                emit('error', {'message': str(e)})
+
+        @socketio.on('request_price_chart')
+        def handle_price_chart_request(data):
+            """Client requests price chart for specific symbol
+
+            Args:
+                data: dict with keys 'symbol', 'timeframe' (optional), 'bars' (optional)
+            """
+            try:
+                symbol = data.get('symbol')
+                timeframe = data.get('timeframe', 'H1')
+                bars = data.get('bars', 100)
+
+                if not symbol:
+                    emit('error', {'message': 'Symbol is required'})
+                    return
+
+                with PriceChartGenerator(account_id=self.account_id) as generator:
+                    fig = generator.generate_price_chart_with_tpsl(
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        bars_back=bars
+                    )
+
+                    if not fig:
+                        emit('error', {'message': f'No data available for {symbol}'})
+                        return
+
+                    img_base64 = generator.fig_to_base64(fig)
+
+                emit('price_chart_update', {
+                    'symbol': symbol,
+                    'timeframe': timeframe,
+                    'bars': bars,
+                    'image': f'data:image/png;base64,{img_base64}',
+                    'generated_at': datetime.utcnow().isoformat()
+                })
+
+            except Exception as e:
+                logger.error(f"Error generating price chart for {symbol}: {e}", exc_info=True)
+                emit('error', {'message': str(e)})
+
+        @socketio.on('request_all_price_charts')
+        def handle_all_price_charts_request(data):
+            """Client requests price charts for all symbols with open trades
+
+            Args:
+                data: dict with keys 'timeframe' (optional), 'bars' (optional)
+            """
+            try:
+                timeframe = data.get('timeframe', 'H1')
+                bars = data.get('bars', 100)
+
+                # Get all symbols with open trades
+                from models import Trade
+                from sqlalchemy import distinct
+                from database import ScopedSession
+
+                db = ScopedSession()
+                try:
+                    symbols = db.query(distinct(Trade.symbol)).filter(
+                        Trade.account_id == self.account_id,
+                        Trade.status == 'open'
+                    ).all()
+                    symbols = [s[0] for s in symbols]
+                finally:
+                    db.close()
+
+                charts = []
+                with PriceChartGenerator(account_id=self.account_id) as generator:
+                    for symbol in symbols:
+                        try:
+                            fig = generator.generate_price_chart_with_tpsl(
+                                symbol=symbol,
+                                timeframe=timeframe,
+                                bars_back=bars
+                            )
+
+                            if fig:
+                                img_base64 = generator.fig_to_base64(fig)
+                                charts.append({
+                                    'symbol': symbol,
+                                    'image': f'data:image/png;base64,{img_base64}'
+                                })
+                        except Exception as e:
+                            logger.error(f"Error generating chart for {symbol}: {e}")
+
+                emit('price_charts_update', {
+                    'timeframe': timeframe,
+                    'bars': bars,
+                    'charts': charts,
+                    'generated_at': datetime.utcnow().isoformat()
+                })
+
+            except Exception as e:
+                logger.error(f"Error generating price charts: {e}", exc_info=True)
                 emit('error', {'message': str(e)})
 
     # =========================================================================
