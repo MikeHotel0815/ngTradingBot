@@ -198,7 +198,16 @@ class Trade(Base):
     # ✅ COMPREHENSIVE TRACKING - Trailing Stop Tracking
     trailing_stop_active = Column(Boolean, default=False)  # Was TS activated?
     trailing_stop_moves = Column(Integer, default=0)  # How many times SL was moved by TS
-    
+
+    # ✅ POST-CLOSE TRACKING - TP Opportunity Cost Analysis
+    # These fields track if TP would have been hit AFTER TS closed the trade
+    tp_hit_after_close = Column(Boolean, default=False)  # Did price reach initial_tp after TS closed?
+    tp_hit_after_close_time = Column(DateTime)  # When was TP reached after close? (NULL if never)
+    tp_hit_after_close_minutes = Column(Integer)  # Minutes from close to TP hit
+    max_favorable_after_close = Column(Numeric(10, 2))  # Max favorable pips in 4h window after close
+    max_adverse_after_close = Column(Numeric(10, 2))  # Max adverse pips in 4h window after close
+    post_close_tracked_until = Column(DateTime)  # Until when did we track? (close_time + 4h)
+
     # ✅ COMPREHENSIVE TRACKING - MFE/MAE (Max Favorable/Adverse Excursion)
     max_favorable_excursion = Column(Numeric(10, 2), default=0)  # Max profit during trade (pips)
     max_adverse_excursion = Column(Numeric(10, 2), default=0)  # Max drawdown during trade (pips)

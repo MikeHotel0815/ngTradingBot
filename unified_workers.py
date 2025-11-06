@@ -302,7 +302,7 @@ def import_worker_functions():
         logger.info("📦 Importing auto_trader_worker...")
         from auto_trader import get_auto_trader
         from database import ScopedSession
-        
+
         def run_auto_trader():
             """Execute auto-trading logic"""
             auto_trader = get_auto_trader()
@@ -311,11 +311,21 @@ def import_worker_functions():
                 auto_trader.process_new_signals(db)
             finally:
                 db.close()
-        
+
         workers['auto_trader'] = run_auto_trader
-        
+
     except Exception as e:
         logger.error(f"Failed to import auto_trader_worker: {e}")
+
+    try:
+        # Post-Close Tracker - Track if TP would have been hit after TS closed
+        logger.info("📦 Importing post_close_tracker_worker...")
+        from workers.post_close_tracker import run_post_close_tracker
+
+        workers['post_close_tracker'] = run_post_close_tracker
+
+    except Exception as e:
+        logger.error(f"Failed to import post_close_tracker_worker: {e}")
     
     try:
         # Session Volatility Analyzer - Market Noise Logging
@@ -719,6 +729,10 @@ def main():
         'symbol_auto_resume': {
             'function': worker_functions.get('symbol_auto_resume'),
             'interval': int(os.getenv('SYMBOL_AUTO_RESUME_INTERVAL', 3600)),  # 1 hour - check for expired cooldowns
+        },
+        'post_close_tracker': {
+            'function': worker_functions.get('post_close_tracker'),
+            'interval': int(os.getenv('POST_CLOSE_TRACKER_INTERVAL', 60)),  # 1 minute - track TS post-close TP hits
         },
     }
 

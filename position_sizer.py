@@ -27,26 +27,37 @@ class PositionSizer:
     """
 
     def __init__(self):
-        # Base risk percentage per trade - will be loaded from GlobalSettings dynamically
-        self.base_risk_percent = None  # Loaded from DB per calculation
+        # 🎯 DYNAMIC RISK TIERS - Risk per trade adjusts based on account size
+        # Small accounts need lower risk % to survive, large accounts can take more risk
+        self.balance_risk_tiers = [
+            (0, 500, 1.0),          # <500€: 1.0% max risk per trade
+            (500, 1000, 1.5),       # 500-1000€: 1.5% max risk
+            (1000, 2000, 2.0),      # 1000-2000€: 2.0% max risk
+            (2000, 5000, 2.5),      # 2000-5000€: 2.5% max risk
+            (5000, 10000, 3.0),     # 5000-10k€: 3.0% max risk
+            (10000, float('inf'), 3.5),  # >10k€: 3.5% max risk
+        ]
 
-        # Confidence-based multipliers
+        # Confidence-based multipliers (applied to base risk)
         self.confidence_multipliers = {
-            'very_high': 1.5,  # 85%+ confidence: 1.5% risk
-            'high': 1.2,       # 75-84%: 1.2% risk
-            'medium': 1.0,     # 60-74%: 1.0% risk (base)
-            'low': 0.7,        # 50-59%: 0.7% risk
-            'very_low': 0.5,   # <50%: 0.5% risk
+            'very_high': 1.3,  # 85%+ confidence: +30% more risk
+            'high': 1.15,      # 75-84%: +15% more risk
+            'medium': 1.0,     # 60-74%: base risk
+            'low': 0.75,       # 50-59%: -25% less risk
+            'very_low': 0.5,   # <50%: -50% less risk
         }
 
         # Symbol-specific risk adjustments (volatile assets = lower risk)
         self.symbol_risk_factors = {
-            'BTCUSD': 0.5,   # Very volatile, reduce risk
-            'ETHUSD': 0.6,
-            'XAUUSD': 0.8,   # Gold somewhat volatile
-            'DE40.c': 0.9,   # Index moderately volatile
+            'BTCUSD': 0.4,   # Very volatile, heavily reduce risk
+            'ETHUSD': 0.5,
+            'XAUUSD': 0.6,   # Gold very volatile
+            'XAGUSD': 0.5,   # Silver even more volatile
+            'DE40.c': 0.8,   # Index moderately volatile
+            'US500.c': 0.8,  # S&P500
             'EURUSD': 1.0,   # Stable forex, standard risk
-            'GBPUSD': 0.95,  # Slightly more volatile than EUR
+            'GBPUSD': 0.9,   # Slightly more volatile than EUR
+            'AUDUSD': 0.95,  # Somewhat stable
             'USDJPY': 1.0,
         }
 
@@ -54,7 +65,7 @@ class PositionSizer:
         self.min_lot_size = 0.01
         self.max_lot_size = 10.0  # Safety limit
 
-        # Account balance tiers for scaling
+        # Account balance tiers for base lot scaling (fallback)
         self.balance_tiers = [
             (0, 500, 0.01),        # <500 EUR: 0.01 lot base
             (500, 1000, 0.01),     # 500-1000: 0.01 lot
@@ -84,6 +95,27 @@ class PositionSizer:
             return self.confidence_multipliers['low']
         else:
             return self.confidence_multipliers['very_low']
+
+    def get_dynamic_risk_percent(self, balance: float) -> float:
+        """
+        🎯 Get dynamic risk percentage based on account balance
+
+        Small accounts (<1000€) need conservative risk to survive drawdowns.
+        Large accounts can take more risk as they have more buffer.
+
+        Args:
+            balance: Account balance in EUR
+
+        Returns:
+            Max risk percentage per trade (e.g., 1.5 for 1.5%)
+        """
+        for min_bal, max_bal, risk_pct in self.balance_risk_tiers:
+            if min_bal <= balance < max_bal:
+                logger.debug(f"Balance {balance:.2f}€ → Dynamic risk: {risk_pct}% per trade")
+                return risk_pct
+
+        # Fallback: minimum risk
+        return 1.0
 
     def get_base_lot_from_balance(self, balance: float) -> float:
         """
@@ -130,11 +162,6 @@ class PositionSizer:
             Lot size (rounded to symbol's lot step)
         """
         try:
-            # Load base risk percent from GlobalSettings (dynamic!)
-            from models import GlobalSettings
-            settings = GlobalSettings.get_settings(db)
-            self.base_risk_percent = float(settings.risk_per_trade_percent) * 100  # Convert 0.05 → 5.0
-
             # Get account balance
             account = db.query(Account).filter_by(id=account_id).first()
             if not account or not account.balance:
@@ -142,6 +169,10 @@ class PositionSizer:
                 return self.min_lot_size
 
             balance = float(account.balance)
+
+            # 🎯 DYNAMIC RISK: Get balance-appropriate risk percentage
+            # Small accounts (1000€) → 1.5% max, Large accounts (10k€) → 3.5% max
+            dynamic_risk_percent = self.get_dynamic_risk_percent(balance)
 
             # Get symbol info
             broker_symbol = db.query(BrokerSymbol).filter_by(
@@ -155,7 +186,7 @@ class PositionSizer:
             contract_size = float(broker_symbol.contract_size or 100000)
             lot_step = float(broker_symbol.volume_step or 0.01)
 
-            # 1. Get base lot from balance tier
+            # 1. Get base lot from balance tier (fallback)
             base_lot = self.get_base_lot_from_balance(balance)
 
             # 2. Apply confidence multiplier
@@ -165,8 +196,9 @@ class PositionSizer:
             symbol_risk_factor = self.get_symbol_risk_factor(symbol)
 
             # 4. Calculate risk-based lot size
-            # Risk amount = balance * risk_percent * confidence_multiplier * symbol_factor
-            risk_amount = balance * (self.base_risk_percent / 100) * confidence_multiplier * symbol_risk_factor
+            # 🎯 USE DYNAMIC RISK instead of GlobalSettings
+            # Risk amount = balance * dynamic_risk% * confidence_mult * symbol_factor
+            risk_amount = balance * (dynamic_risk_percent / 100) * confidence_multiplier * symbol_risk_factor
 
             # Convert pip distance to price distance
             point = float(broker_symbol.point_value)
@@ -186,10 +218,9 @@ class PositionSizer:
             # 5. Final lot = average of base_lot and risk_based_lot (prevents extremes)
             final_lot = (base_lot + risk_based_lot) / 2
 
-            # 6. ✅ UPDATED 2025-11-05: Use SAME risk percentage from GlobalSettings (not hardcoded)
-            # Note: self.base_risk_percent was already loaded from GlobalSettings above (line 136)
-            # Use the SAME percentage for max loss limit to keep it consistent
-            max_risk_pct = self.base_risk_percent
+            # 6. 🎯 Use dynamic risk percentage for max loss limit (balance-dependent)
+            # Small accounts (1000€) get 1.5% max risk, large accounts (10k€) get 3.5%
+            max_risk_pct = dynamic_risk_percent
 
             # Calculate max loss based on CURRENT balance (dynamic!)
             max_loss_limit = balance * (max_risk_pct / 100.0)
@@ -223,12 +254,13 @@ class PositionSizer:
             logger.info(
                 f"📊 Position Size: {symbol} | "
                 f"Balance: €{balance:.2f} | "
+                f"🎯 Dynamic Risk: {dynamic_risk_percent}% | "
                 f"Confidence: {confidence:.1f}% (x{confidence_multiplier:.2f}) | "
                 f"Symbol Factor: x{symbol_risk_factor:.2f} | "
                 f"Base Lot: {base_lot:.2f} | "
                 f"Risk Lot: {risk_based_lot:.3f} | "
                 f"Final: {final_lot:.2f} lot | "
-                f"Max Loss: €{final_potential_loss:.2f} (limit: €{max_loss_limit:.2f} = {max_risk_pct}% of balance)"
+                f"Max Loss: €{final_potential_loss:.2f} (limit: €{max_loss_limit:.2f} = {dynamic_risk_percent}% of balance)"
             )
 
             return final_lot
