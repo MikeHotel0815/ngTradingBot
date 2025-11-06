@@ -54,10 +54,10 @@ class TradeAnalyticsEngine:
             if period_start is None:
                 period_start = period_end - timedelta(days=30)  # Last 30 days by default
 
-            # Build query
+            # Build query - GLOBAL (for ML learning across all accounts)
+            # account_id parameter kept for API compatibility but not used in query
             query = self.db.query(Trade).filter(
                 and_(
-                    Trade.account_id == self.account_id,
                     Trade.status == 'closed',
                     Trade.close_time >= period_start,
                     Trade.close_time <= period_end
@@ -221,10 +221,9 @@ class TradeAnalyticsEngine:
 
         period_start = datetime.utcnow() - timedelta(days=period_days)
 
-        # Get all unique symbols
+        # Get all unique symbols - GLOBAL (for ML learning across all accounts)
         symbols = self.db.query(Trade.symbol).filter(
             and_(
-                Trade.account_id == self.account_id,
                 Trade.status == 'closed',
                 Trade.close_time >= period_start
             )
@@ -271,13 +270,12 @@ class TradeAnalyticsEngine:
 
         period_start = datetime.utcnow() - timedelta(days=period_days)
 
-        # Get all unique combinations
+        # Get all unique combinations - GLOBAL (for ML learning across all accounts)
         combinations = self.db.query(
             Trade.symbol,
             Trade.timeframe
         ).filter(
             and_(
-                Trade.account_id == self.account_id,
                 Trade.status == 'closed',
                 Trade.close_time >= period_start
             )

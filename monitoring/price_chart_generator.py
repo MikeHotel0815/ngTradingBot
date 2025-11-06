@@ -136,8 +136,52 @@ class PriceChartGenerator:
         }
         return mapping.get(timeframe, 1)
 
+    def get_trades_for_symbol(
+        self,
+        symbol: str,
+        trade_filter: str = 'open',
+        hours_back: int = 24
+    ) -> List[Trade]:
+        """Get trades for a symbol with flexible filtering
+
+        Args:
+            symbol: Trading symbol
+            trade_filter: 'open', 'closed', or 'all'
+            hours_back: For closed/all trades, how many hours to look back
+
+        Returns:
+            List of Trade objects
+        """
+        query = self.db.query(Trade).filter(
+            Trade.account_id == self.account_id,
+            Trade.symbol == symbol
+        )
+
+        if trade_filter == 'open':
+            query = query.filter(Trade.status == 'open')
+        elif trade_filter == 'closed':
+            # Only recent closed trades
+            from datetime import datetime, timedelta
+            since = datetime.utcnow() - timedelta(hours=hours_back)
+            query = query.filter(
+                Trade.status == 'closed',
+                Trade.close_time >= since
+            )
+        elif trade_filter == 'all':
+            # Open trades + recent closed trades
+            from datetime import datetime, timedelta
+            since = datetime.utcnow() - timedelta(hours=hours_back)
+            query = query.filter(
+                (Trade.status == 'open') |
+                ((Trade.status == 'closed') & (Trade.close_time >= since))
+            )
+
+        trades = query.all()
+        logger.info(f"Found {len(trades)} {trade_filter} trades for {symbol} (last {hours_back}h)")
+        return trades
+
     def get_open_trades_for_symbol(self, symbol: str) -> List[Trade]:
-        """Get all open trades for a symbol
+        """Get all open trades for a symbol (legacy compatibility)
 
         Args:
             symbol: Trading symbol
@@ -145,14 +189,7 @@ class PriceChartGenerator:
         Returns:
             List of open Trade objects
         """
-        trades = self.db.query(Trade).filter(
-            Trade.account_id == self.account_id,
-            Trade.symbol == symbol,
-            Trade.status == 'open'
-        ).all()
-
-        logger.info(f"Found {len(trades)} open trades for {symbol}")
-        return trades
+        return self.get_trades_for_symbol(symbol, trade_filter='open')
 
     def plot_candlestick(
         self,
@@ -212,14 +249,18 @@ class PriceChartGenerator:
         self,
         symbol: str,
         timeframe: str = 'H1',
-        bars_back: int = 100
+        bars_back: int = 100,
+        trade_filter: str = 'open',
+        hours_back: int = 24
     ) -> Optional[Figure]:
-        """Generate price chart with TP/SL levels for open trades
+        """Generate price chart with TP/SL levels for trades
 
         Args:
             symbol: Trading symbol
             timeframe: Timeframe (M1, M5, M15, H1, H4, D1)
             bars_back: Number of bars to display
+            trade_filter: 'open', 'closed', or 'all'
+            hours_back: For closed/all trades, how many hours to look back
 
         Returns:
             Matplotlib figure or None if no data
@@ -230,8 +271,8 @@ class PriceChartGenerator:
             logger.warning(f"No OHLC data for {symbol} {timeframe}")
             return None
 
-        # Get open trades
-        open_trades = self.get_open_trades_for_symbol(symbol)
+        # Get trades based on filter
+        trades = self.get_trades_for_symbol(symbol, trade_filter, hours_back)
 
         # Create figure
         fig, ax = plt.subplots(figsize=(14, 8))
@@ -244,16 +285,23 @@ class PriceChartGenerator:
         # Get current price (last close)
         current_price = ohlc_data[-1]['close']
 
-        # Plot TP/SL levels for each open trade
+        # Plot TP/SL levels for each trade
         legend_handles = []
         trade_colors = ['#ff6b6b', '#4ecdc4', '#ffe66d', '#a8e6cf', '#ff8b94']
 
-        for idx, trade in enumerate(open_trades):
+        for idx, trade in enumerate(trades):
             trade_color = trade_colors[idx % len(trade_colors)]
 
             entry_price = float(trade.open_price)
-            tp_price = float(trade.tp_price) if trade.tp_price else None
-            sl_price = float(trade.sl_price) if trade.sl_price else None
+
+            # For closed trades, use initial_tp/initial_sl (tp/sl are reset to 0 on close)
+            # For open trades, use current tp/sl (or fall back to initial if not set)
+            if trade.status == 'closed':
+                tp_price = float(trade.initial_tp) if trade.initial_tp else None
+                sl_price = float(trade.initial_sl) if trade.initial_sl else None
+            else:
+                tp_price = float(trade.tp) if trade.tp else (float(trade.initial_tp) if trade.initial_tp else None)
+                sl_price = float(trade.sl) if trade.sl else (float(trade.initial_sl) if trade.initial_sl else None)
 
             # Plot Entry Price (dashed line)
             ax.axhline(
@@ -307,12 +355,24 @@ class PriceChartGenerator:
 
             # Add trade info text box
             profit = float(trade.profit or 0)
-            trade_info = (
-                f"#{trade.ticket} {trade.direction}\n"
-                f"Entry: {entry_price:.5f}\n"
-                f"Current: {current_price:.5f}\n"
-                f"P/L: €{profit:.2f}"
-            )
+            status_label = "OPEN" if trade.status == 'open' else "CLOSED"
+
+            if trade.status == 'open':
+                trade_info = (
+                    f"#{trade.ticket} {trade.direction} [{status_label}]\n"
+                    f"Entry: {entry_price:.5f}\n"
+                    f"Current: {current_price:.5f}\n"
+                    f"P/L: €{profit:.2f}"
+                )
+            else:
+                # For closed trades, show close price instead of current
+                close_price = float(trade.close_price) if trade.close_price else entry_price
+                trade_info = (
+                    f"#{trade.ticket} {trade.direction} [{status_label}]\n"
+                    f"Entry: {entry_price:.5f}\n"
+                    f"Close: {close_price:.5f}\n"
+                    f"P/L: €{profit:.2f}"
+                )
 
             # Position text box in top-left area, stacked vertically
             text_y = 0.95 - (idx * 0.15)
@@ -340,7 +400,9 @@ class PriceChartGenerator:
         ax.set_xlabel('Time', fontsize=12, color=self.colors['text'])
         ax.set_ylabel('Price', fontsize=12, color=self.colors['text'])
 
-        title = f'{symbol} - {timeframe} | Open Trades: {len(open_trades)}'
+        # Title with filter info
+        filter_label = trade_filter.upper() if trade_filter != 'all' else f'ALL (last {hours_back}h)'
+        title = f'{symbol} - {timeframe} | {filter_label} Trades: {len(trades)}'
         ax.set_title(title, fontsize=14, fontweight='bold', color=self.colors['text'], pad=15)
 
         ax.grid(True, alpha=0.2, color=self.colors['grid'], linestyle='-', linewidth=0.5)
@@ -358,7 +420,7 @@ class PriceChartGenerator:
         fig.autofmt_xdate()
 
         # Legend (only if there are trades)
-        if open_trades:
+        if trades:
             ax.legend(loc='upper left', fontsize=9, facecolor=self.colors['background'],
                      edgecolor=self.colors['grid'], framealpha=0.8)
 
@@ -369,27 +431,49 @@ class PriceChartGenerator:
         self,
         timeframe: str = 'H1',
         bars_back: int = 100,
-        output_dir: str = '/app/data/charts'
+        output_dir: str = '/app/data/charts',
+        trade_filter: str = 'open',
+        hours_back: int = 24
     ) -> Dict[str, str]:
-        """Generate price charts for all symbols with open trades
+        """Generate price charts for all symbols with trades
 
         Args:
             timeframe: Timeframe to use
             bars_back: Number of bars to display
             output_dir: Output directory
+            trade_filter: 'open', 'closed', or 'all'
+            hours_back: For closed/all trades, how many hours to look back
 
         Returns:
             Dict mapping symbol to file path
         """
-        # Get all symbols with open trades
-        from sqlalchemy import distinct
-        symbols = self.db.query(distinct(Trade.symbol)).filter(
-            Trade.account_id == self.account_id,
-            Trade.status == 'open'
-        ).all()
+        # Get all symbols with trades matching the filter
+        from sqlalchemy import distinct, or_
+        from datetime import timedelta
 
-        symbols = [s[0] for s in symbols]
-        logger.info(f"Generating price charts for {len(symbols)} symbols with open trades")
+        query = self.db.query(distinct(Trade.symbol)).filter(
+            Trade.account_id == self.account_id
+        )
+
+        if trade_filter == 'open':
+            query = query.filter(Trade.status == 'open')
+        elif trade_filter == 'closed':
+            since = datetime.utcnow() - timedelta(hours=hours_back)
+            query = query.filter(
+                Trade.status == 'closed',
+                Trade.close_time >= since
+            )
+        elif trade_filter == 'all':
+            since = datetime.utcnow() - timedelta(hours=hours_back)
+            query = query.filter(
+                or_(
+                    Trade.status == 'open',
+                    (Trade.status == 'closed') & (Trade.close_time >= since)
+                )
+            )
+
+        symbols = [s[0] for s in query.all()]
+        logger.info(f"Generating price charts for {len(symbols)} symbols with {trade_filter} trades")
 
         charts = {}
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -397,7 +481,9 @@ class PriceChartGenerator:
         for symbol in symbols:
             try:
                 logger.info(f"Generating chart for {symbol}...")
-                fig = self.generate_price_chart_with_tpsl(symbol, timeframe, bars_back)
+                fig = self.generate_price_chart_with_tpsl(
+                    symbol, timeframe, bars_back, trade_filter, hours_back
+                )
 
                 if fig:
                     filename = f'price_{symbol}_{timeframe}_{timestamp}.png'

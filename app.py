@@ -2046,8 +2046,8 @@ def receive_ticks(account, db):
             tick_symbols = set(tick_data.get('symbol') for tick_data in ticks)
 
             # Check ALL open trades (not just from tick_symbols) to ensure all positions update in real-time
+            # GLOBAL query - trades are shared across accounts for ML learning
             open_trades = db.query(Trade).filter(
-                Trade.account_id == account_id,
                 Trade.status == 'open'
             ).all()
 
@@ -2472,9 +2472,8 @@ def sync_trades(account, db):
             if not ticket:
                 continue
 
-            # Check if trade exists
+            # Check if trade exists - GLOBAL (not filtered by account_id for ML learning across all accounts)
             existing_trade = db.query(Trade).filter_by(
-                account_id=account.id,
                 ticket=ticket
             ).first()
 
@@ -2846,9 +2845,8 @@ def update_trade(account, db):
         if not ticket:
             return jsonify({'status': 'error', 'message': 'Missing ticket'}), 400
 
-        # Find trade
+        # Find trade - GLOBAL (not filtered by account_id for ML learning across all accounts)
         trade = db.query(Trade).filter_by(
-            account_id=account.id,
             ticket=ticket
         ).first()
 
@@ -3375,11 +3373,10 @@ def dashboard_status():
             month_start_date = now.replace(day=1).date()
             year_start_date = now.replace(month=1, day=1).date()
 
-            # Calculate actual profit from closed trades
+            # Calculate actual profit from closed trades - GLOBAL (across all accounts for ML learning)
             profit_today = db.query(
                 func.coalesce(func.sum(Trade.profit), 0)
             ).filter(
-                Trade.account_id == account.id,
                 Trade.status == 'closed',
                 cast(Trade.close_time, Date) == today_date
             ).scalar() or 0.0
@@ -3387,7 +3384,6 @@ def dashboard_status():
             profit_week = db.query(
                 func.coalesce(func.sum(Trade.profit), 0)
             ).filter(
-                Trade.account_id == account.id,
                 Trade.status == 'closed',
                 cast(Trade.close_time, Date) >= week_start_date
             ).scalar() or 0.0
@@ -3395,7 +3391,6 @@ def dashboard_status():
             profit_month = db.query(
                 func.coalesce(func.sum(Trade.profit), 0)
             ).filter(
-                Trade.account_id == account.id,
                 Trade.status == 'closed',
                 cast(Trade.close_time, Date) >= month_start_date
             ).scalar() or 0.0
@@ -3403,7 +3398,6 @@ def dashboard_status():
             profit_year = db.query(
                 func.coalesce(func.sum(Trade.profit), 0)
             ).filter(
-                Trade.account_id == account.id,
                 Trade.status == 'closed',
                 cast(Trade.close_time, Date) >= year_start_date
             ).scalar() or 0.0
@@ -3898,9 +3892,8 @@ def dashboard_statistics():
             week_start = today_start - timedelta(days=now.weekday())  # Monday
             month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-            # Query closed trades for different periods
+            # Query closed trades for different periods - GLOBAL (for ML learning across all accounts)
             base_query = db.query(Trade).filter(
-                Trade.account_id == account.id,
                 Trade.status == 'closed',
                 Trade.profit != None
             )
@@ -3939,10 +3932,8 @@ def get_traded_symbols():
             if not account:
                 return jsonify({'status': 'error', 'message': 'No account found'}), 404
 
-            # Get distinct symbols from trades
-            symbols = db.query(Trade.symbol).filter(
-                Trade.account_id == account.id
-            ).distinct().order_by(Trade.symbol).all()
+            # Get distinct symbols from trades - GLOBAL (for ML learning across all accounts)
+            symbols = db.query(Trade.symbol).distinct().order_by(Trade.symbol).all()
 
             symbol_list = [s[0] for s in symbols if s[0]]
 
@@ -4572,10 +4563,10 @@ def get_trade_analytics():
             if not account:
                 return jsonify({'status': 'error', 'message': 'No account found'}), 404
 
-            # Get all trades
-            all_trades = db.query(Trade).filter_by(account_id=account.id).all()
+            # Get all trades - GLOBAL (for ML learning analytics across all accounts)
+            all_trades = db.query(Trade).all()
 
-            # Get all commands (to analyze failures)
+            # Get all commands (to analyze failures) - still account-specific as commands are account-bound
             all_commands = db.query(Command).filter_by(account_id=account.id).all()
 
             # Trade statistics
@@ -4714,11 +4705,11 @@ def get_trade_history():
             page = InputValidator.validate_integer(page_raw, min_value=1, default=1)
             per_page = InputValidator.validate_integer(per_page_raw, min_value=1, max_value=100, default=20)
 
-            # Build base query
-            query = db.query(Trade).filter(Trade.account_id == account.id)
+            # Build base query - GLOBAL (for ML learning analytics across all accounts)
+            query = db.query(Trade)
 
             # Debug logging
-            logger.info(f"Trade history query - Account ID: {account.id}, Status: {status}, Period: {period}")
+            logger.info(f"Trade history query (GLOBAL) - Status: {status}, Period: {period}")
 
             # Apply status filter
             if status:
@@ -5696,15 +5687,14 @@ def get_safety_monitor_status():
 
             settings = GlobalSettings.get_settings(db)
 
+            # GLOBAL queries - trades are shared across accounts for ML learning
             open_positions = db.query(Trade).filter(
-                Trade.account_id == account_id,
                 Trade.status == 'open'
             ).count()
 
             # Count positions by symbol
             positions_by_symbol = {}
             open_trades = db.query(Trade).filter(
-                Trade.account_id == account_id,
                 Trade.status == 'open'
             ).all()
 

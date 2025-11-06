@@ -8527,6 +8527,22 @@ const SymbolModal = (function() {
                     <option value="300">300</option>
                 </select>
 
+                <label for="filter-select" style="color: #e0e0e0;">Show:</label>
+                <select id="filter-select">
+                    <option value="open" selected>Open Trades</option>
+                    <option value="closed">Closed Trades</option>
+                    <option value="all">All Trades</option>
+                </select>
+
+                <label for="hours-select" style="color: #e0e0e0;">Hours Back:</label>
+                <select id="hours-select">
+                    <option value="6">6h</option>
+                    <option value="12">12h</option>
+                    <option value="24" selected>24h</option>
+                    <option value="48">48h</option>
+                    <option value="72">72h</option>
+                </select>
+
                 <button id="refresh-charts-btn" onclick="refreshPriceCharts()">
                     🔄 Refresh Charts
                 </button>
@@ -8555,8 +8571,10 @@ const SymbolModal = (function() {
         function refreshPriceCharts() {
             const timeframe = document.getElementById('timeframe-select').value;
             const bars = parseInt(document.getElementById('bars-select').value);
+            const filter = document.getElementById('filter-select').value;
+            const hours = parseInt(document.getElementById('hours-select').value);
 
-            console.log(`Requesting price charts: timeframe=${timeframe}, bars=${bars}`);
+            console.log(`Requesting price charts: timeframe=${timeframe}, bars=${bars}, filter=${filter}, hours=${hours}`);
 
             // Show loading
             const container = document.getElementById('price-charts-container');
@@ -8566,11 +8584,13 @@ const SymbolModal = (function() {
             if (window.socket && window.socket.connected) {
                 window.socket.emit('request_all_price_charts', {
                     timeframe: timeframe,
-                    bars: bars
+                    bars: bars,
+                    filter: filter,
+                    hours: hours
                 });
             } else {
                 // Fallback to REST API
-                fetch(`/api/price-charts?timeframe=${timeframe}&bars=${bars}`)
+                fetch(`/api/price-charts?timeframe=${timeframe}&bars=${bars}&filter=${filter}&hours=${hours}`)
                     .then(response => response.json())
                     .then(data => {
                         displayPriceCharts(data);
@@ -8585,9 +8605,13 @@ const SymbolModal = (function() {
         // Display price charts
         function displayPriceCharts(data) {
             const container = document.getElementById('price-charts-container');
+            const filter = document.getElementById('filter-select').value;
 
             if (!data.charts || data.charts.length === 0) {
-                container.innerHTML = '<div class="price-chart-error">No open trades found. Charts will appear when trades are opened.</div>';
+                let filterMsg = filter === 'open' ? 'No open trades found.' :
+                               filter === 'closed' ? 'No closed trades found in selected timeframe.' :
+                               'No trades found in selected timeframe.';
+                container.innerHTML = `<div class="price-chart-error">${filterMsg}</div>`;
                 return;
             }
 

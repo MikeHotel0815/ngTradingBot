@@ -179,6 +179,8 @@ class WebDashboardServer:
             Query params:
                 timeframe: M1, M5, M15, H1, H4, D1 (default: H1)
                 bars: Number of bars to display (default: 100)
+                filter: 'open', 'closed', 'all' (default: 'open')
+                hours: For closed/all, hours back to look (default: 24)
 
             Returns:
                 JSON with base64-encoded PNG
@@ -186,12 +188,16 @@ class WebDashboardServer:
             try:
                 timeframe = request.args.get('timeframe', 'H1')
                 bars = request.args.get('bars', 100, type=int)
+                trade_filter = request.args.get('filter', 'open')
+                hours_back = request.args.get('hours', 24, type=int)
 
                 with PriceChartGenerator(account_id=self.account_id) as generator:
                     fig = generator.generate_price_chart_with_tpsl(
                         symbol=symbol,
                         timeframe=timeframe,
-                        bars_back=bars
+                        bars_back=bars,
+                        trade_filter=trade_filter,
+                        hours_back=hours_back
                     )
 
                     if not fig:
@@ -213,11 +219,13 @@ class WebDashboardServer:
 
         @app.route('/api/price-charts')
         def api_price_charts_all():
-            """Get price charts for all symbols with open trades
+            """Get price charts for all symbols with trades
 
             Query params:
                 timeframe: M1, M5, M15, H1, H4, D1 (default: H1)
                 bars: Number of bars to display (default: 100)
+                filter: 'open', 'closed', 'all' (default: 'open')
+                hours: For closed/all, hours back to look (default: 24)
 
             Returns:
                 JSON with list of symbols and their chart images
@@ -225,19 +233,39 @@ class WebDashboardServer:
             try:
                 timeframe = request.args.get('timeframe', 'H1')
                 bars = request.args.get('bars', 100, type=int)
+                trade_filter = request.args.get('filter', 'open')
+                hours_back = request.args.get('hours', 24, type=int)
 
-                # Get all symbols with open trades
+                # Get all symbols with trades matching filter
                 from models import Trade
-                from sqlalchemy import distinct
+                from sqlalchemy import distinct, or_
                 from database import ScopedSession
+                from datetime import timedelta
 
                 db = ScopedSession()
                 try:
-                    symbols = db.query(distinct(Trade.symbol)).filter(
-                        Trade.account_id == self.account_id,
-                        Trade.status == 'open'
-                    ).all()
-                    symbols = [s[0] for s in symbols]
+                    query = db.query(distinct(Trade.symbol)).filter(
+                        Trade.account_id == self.account_id
+                    )
+
+                    if trade_filter == 'open':
+                        query = query.filter(Trade.status == 'open')
+                    elif trade_filter == 'closed':
+                        since = datetime.utcnow() - timedelta(hours=hours_back)
+                        query = query.filter(
+                            Trade.status == 'closed',
+                            Trade.close_time >= since
+                        )
+                    elif trade_filter == 'all':
+                        since = datetime.utcnow() - timedelta(hours=hours_back)
+                        query = query.filter(
+                            or_(
+                                Trade.status == 'open',
+                                (Trade.status == 'closed') & (Trade.close_time >= since)
+                            )
+                        )
+
+                    symbols = [s[0] for s in query.all()]
                 finally:
                     db.close()
 
@@ -248,7 +276,9 @@ class WebDashboardServer:
                             fig = generator.generate_price_chart_with_tpsl(
                                 symbol=symbol,
                                 timeframe=timeframe,
-                                bars_back=bars
+                                bars_back=bars,
+                                trade_filter=trade_filter,
+                                hours_back=hours_back
                             )
 
                             if fig:
@@ -500,27 +530,47 @@ class WebDashboardServer:
 
         @socketio.on('request_all_price_charts')
         def handle_all_price_charts_request(data):
-            """Client requests price charts for all symbols with open trades
+            """Client requests price charts for all symbols with trades
 
             Args:
-                data: dict with keys 'timeframe' (optional), 'bars' (optional)
+                data: dict with keys 'timeframe', 'bars', 'filter', 'hours' (all optional)
             """
             try:
                 timeframe = data.get('timeframe', 'H1')
                 bars = data.get('bars', 100)
+                trade_filter = data.get('filter', 'open')
+                hours_back = data.get('hours', 24)
 
-                # Get all symbols with open trades
+                # Get all symbols with trades matching filter
                 from models import Trade
-                from sqlalchemy import distinct
+                from sqlalchemy import distinct, or_
                 from database import ScopedSession
+                from datetime import timedelta
 
                 db = ScopedSession()
                 try:
-                    symbols = db.query(distinct(Trade.symbol)).filter(
-                        Trade.account_id == self.account_id,
-                        Trade.status == 'open'
-                    ).all()
-                    symbols = [s[0] for s in symbols]
+                    query = db.query(distinct(Trade.symbol)).filter(
+                        Trade.account_id == self.account_id
+                    )
+
+                    if trade_filter == 'open':
+                        query = query.filter(Trade.status == 'open')
+                    elif trade_filter == 'closed':
+                        since = datetime.utcnow() - timedelta(hours=hours_back)
+                        query = query.filter(
+                            Trade.status == 'closed',
+                            Trade.close_time >= since
+                        )
+                    elif trade_filter == 'all':
+                        since = datetime.utcnow() - timedelta(hours=hours_back)
+                        query = query.filter(
+                            or_(
+                                Trade.status == 'open',
+                                (Trade.status == 'closed') & (Trade.close_time >= since)
+                            )
+                        )
+
+                    symbols = [s[0] for s in query.all()]
                 finally:
                     db.close()
 
@@ -531,7 +581,9 @@ class WebDashboardServer:
                             fig = generator.generate_price_chart_with_tpsl(
                                 symbol=symbol,
                                 timeframe=timeframe,
-                                bars_back=bars
+                                bars_back=bars,
+                                trade_filter=trade_filter,
+                                hours_back=hours_back
                             )
 
                             if fig:

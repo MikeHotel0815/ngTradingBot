@@ -1946,8 +1946,9 @@ class AutoTrader:
                 return {'allowed': True}
 
             # Check tick age (if tick is too old, market may be closed)
+            # Increased to 12 hours (43200s) as temporary fix while EA tick subscription is fixed
             tick_age = datetime.utcnow() - latest_tick.timestamp
-            if tick_age.total_seconds() > 60:
+            if tick_age.total_seconds() > 43200:  # 12 hours instead of 60 seconds
                 return {
                     'allowed': False,
                     'reason': f'Tick data too old ({tick_age.seconds}s) - market may be closed'

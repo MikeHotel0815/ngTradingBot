@@ -60,6 +60,8 @@ def get_or_create_account(db, mt5_account_number, broker):
     """
     Get existing account or create new one with API key
     Returns: (account, api_key, is_new)
+
+    ✅ UPDATED 2025-11-05: Reset charts when new account detected
     """
     account = db.query(Account).filter_by(mt5_account_number=mt5_account_number).first()
 
@@ -79,4 +81,45 @@ def get_or_create_account(db, mt5_account_number, broker):
         db.refresh(account)
 
         logger.info(f"New account created: {mt5_account_number} ({broker})")
+
+        # ✅ NEW: Reset charts for new account
+        _reset_charts_for_new_account(mt5_account_number)
+
         return account, api_key, True
+
+
+def _reset_charts_for_new_account(account_number):
+    """
+    Delete all chart files when a new account is detected
+    This ensures old data from previous accounts doesn't show up
+    """
+    import os
+    import glob
+
+    chart_directories = [
+        '/app/data/charts',
+        '/app/static/charts',
+        '/app/data'
+    ]
+
+    deleted_count = 0
+
+    for chart_dir in chart_directories:
+        if not os.path.exists(chart_dir):
+            continue
+
+        # Find all PNG chart files
+        chart_files = glob.glob(os.path.join(chart_dir, '*.png'))
+
+        for chart_file in chart_files:
+            try:
+                os.remove(chart_file)
+                deleted_count += 1
+                logger.debug(f"Deleted chart: {chart_file}")
+            except Exception as e:
+                logger.warning(f"Could not delete chart {chart_file}: {e}")
+
+    if deleted_count > 0:
+        logger.info(f"🔄 New account {account_number}: Deleted {deleted_count} old chart files")
+    else:
+        logger.info(f"🔄 New account {account_number}: No old charts to delete")
