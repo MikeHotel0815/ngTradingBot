@@ -364,13 +364,23 @@ class DashboardCore:
             Dict with open positions data
         """
         try:
-            open_trades = self.db.query(Trade).filter(
+            # Query with duration calculated in database
+            # NOTE: open_time is stored in broker local time (UTC+2 / EET - Eastern European Time)
+            # We need to adjust for the timezone offset when calculating duration
+            from sqlalchemy import literal_column
+
+            # Calculate duration assuming open_time is in EET (UTC+2)
+            # Formula: current_utc - (open_time_eet - 2 hours) = current_utc - open_time_utc
+            open_trades = self.db.query(
+                Trade,
+                literal_column("EXTRACT(EPOCH FROM (NOW() - (open_time - INTERVAL '2 hours'))) / 60").label('duration_minutes')
+            ).filter(
                 Trade.account_id == self.account_id,
                 Trade.status == 'open'
             ).order_by(Trade.open_time.desc()).all()
 
             positions = []
-            for trade in open_trades:
+            for trade, duration_minutes in open_trades:
                 # Get current price from latest tick
                 try:
                     latest_tick = self.db.query(Tick).filter(
@@ -411,7 +421,7 @@ class DashboardCore:
                     'tp': float(trade.tp) if trade.tp else None,
                     'unrealized_pnl': unrealized_pnl,
                     'open_time': trade.open_time.strftime('%Y-%m-%d %H:%M:%S') if trade.open_time else None,
-                    'duration_minutes': int((datetime.utcnow() - trade.open_time).total_seconds() / 60) if trade.open_time else None
+                    'duration_minutes': int(duration_minutes) if duration_minutes is not None else None
                 })
 
             total_unrealized = sum(p['unrealized_pnl'] for p in positions if p['unrealized_pnl'])
