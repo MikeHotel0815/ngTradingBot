@@ -1623,8 +1623,11 @@ class AutoTrader:
                     symbol_manager = SymbolDynamicManager(account_id=account_id)
                     config = symbol_manager.get_config(db, signal.symbol, signal.signal_type)
 
+                    # ✅ Apply balance-scaled cap to ensure winning streaks scale with account size
+                    capped_multiplier = symbol_manager.apply_balance_scaled_cap(db, config)
+
                     # Apply risk multiplier
-                    adjusted_volume = base_volume * float(config.risk_multiplier)
+                    adjusted_volume = base_volume * float(capped_multiplier)
 
                     # Get broker symbol info for volume step
                     broker_symbol = db.query(BrokerSymbol).filter_by(symbol=signal.symbol).first()
@@ -1639,10 +1642,10 @@ class AutoTrader:
                     # Clamp to broker limits
                     volume = max(volume_min, min(adjusted_volume, volume_max))
 
-                    if config.risk_multiplier != 1.0:
+                    if capped_multiplier != 1.0:
                         logger.info(
                             f"📊 {signal.symbol} {signal.signal_type}: "
-                            f"Volume adjusted by risk multiplier {config.risk_multiplier}x: "
+                            f"Volume adjusted by risk multiplier {capped_multiplier}x: "
                             f"{base_volume:.2f} → {volume:.2f} (rounded to step {volume_step})"
                         )
                 except Exception as e:

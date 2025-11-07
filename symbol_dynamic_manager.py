@@ -126,6 +126,10 @@ class SymbolDynamicManager:
         # Adjust risk multiplier based on performance
         self._adjust_risk_multiplier(config)
 
+        # ✅ Apply balance-scaled cap to risk multiplier
+        # Ensures winning streaks scale linearly with account balance
+        self.apply_balance_scaled_cap(db, config)
+
         # Check auto-pause conditions
         self._check_auto_pause(config)
 
@@ -312,6 +316,77 @@ class SymbolDynamicManager:
                 f"  💰 Risk multiplier: {old_multiplier}x → {config.risk_multiplier}x"
             )
 
+    def _get_balance_scaled_max_multiplier(self, account_balance: float) -> Decimal:
+        """
+        Get maximum risk multiplier based on account balance
+
+        Small accounts should have lower caps to prevent over-risking on winning streaks.
+        Yesterday's winning streak doesn't justify excessive risk on small capital.
+
+        Balance Tiers:
+        - <€500: Max 1.5x (very conservative)
+        - €500-1000: Max 2.0x (conservative)
+        - €1000-2000: Max 2.5x (moderate)
+        - €2000-5000: Max 3.0x (standard)
+        - €5000-10000: Max 4.0x (aggressive)
+        - >€10000: Max 6.0x (very aggressive)
+
+        Args:
+            account_balance: Current account balance
+
+        Returns:
+            Maximum risk multiplier as Decimal
+        """
+        if account_balance < 500:
+            return Decimal('1.5')
+        elif account_balance < 1000:
+            return Decimal('2.0')
+        elif account_balance < 2000:
+            return Decimal('2.5')
+        elif account_balance < 5000:
+            return Decimal('3.0')
+        elif account_balance < 10000:
+            return Decimal('4.0')
+        else:
+            return Decimal('6.0')
+
+    def apply_balance_scaled_cap(self, db: Session, config: SymbolTradingConfig) -> Decimal:
+        """
+        Apply balance-scaled cap to risk multiplier
+
+        This ensures winning streaks scale appropriately with account size.
+        Called AFTER risk multiplier is adjusted by performance.
+
+        Args:
+            db: Database session
+            config: Symbol trading config
+
+        Returns:
+            Capped risk multiplier
+        """
+        from models import Account
+
+        # Get current account balance
+        account = db.query(Account).filter_by(id=config.account_id).first()
+        if not account:
+            logger.warning(f"Account #{config.account_id} not found, using default cap")
+            return config.risk_multiplier
+
+        balance = float(account.balance)
+        max_multiplier = self._get_balance_scaled_max_multiplier(balance)
+
+        # Apply cap if needed
+        if config.risk_multiplier > max_multiplier:
+            old_multiplier = config.risk_multiplier
+            config.risk_multiplier = max_multiplier
+            logger.warning(
+                f"  ⚖️ BALANCE-SCALED CAP: {config.symbol} {config.direction} "
+                f"risk multiplier capped {old_multiplier}x → {max_multiplier}x "
+                f"(balance: €{balance:.2f})"
+            )
+
+        return config.risk_multiplier
+
     def _check_auto_pause(self, config: SymbolTradingConfig):
         """Check if symbol should be auto-paused"""
         if not config.auto_pause_enabled:
@@ -359,6 +434,16 @@ class SymbolDynamicManager:
             config.session_date = datetime.now()
             config.session_trades_today = 0
             config.session_profit_today = Decimal('0.0')
+
+            # ✅ NIGHTLY RESET: Reset risk multiplier to 1.0x at start of new trading day
+            # Yesterday's winning streak doesn't determine today's risk
+            if config.risk_multiplier != Decimal('1.0'):
+                old_multiplier = config.risk_multiplier
+                config.risk_multiplier = Decimal('1.0')
+                logger.info(
+                    f"🌅 NIGHTLY RESET: {config.symbol} {config.direction} risk multiplier "
+                    f"{old_multiplier}x → 1.0x (new trading day)"
+                )
 
         # Update session stats
         config.session_trades_today += 1
