@@ -467,11 +467,12 @@ class IndicatorValue(Base):
 
 
 class AutoTradeConfig(Base):
-    """Auto-Trading Configuration per Account"""
+    """Global Auto-Trading Configuration (applies to ALL accounts)"""
     __tablename__ = 'auto_trade_config'
 
     id = Column(Integer, primary_key=True)
-    account_id = Column(Integer, ForeignKey('accounts.id'), unique=True, nullable=False)
+    # ✅ GLOBAL: account_id is NULL for global config
+    account_id = Column(Integer, ForeignKey('accounts.id'), nullable=True)
 
     # Enable/Disable - ✅ ENABLED BY DEFAULT as requested
     enabled = Column(Boolean, default=True, nullable=False)

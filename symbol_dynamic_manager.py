@@ -536,12 +536,13 @@ class SymbolDynamicManager:
                     f"Min Confidence: {original_min_conf:.0f}% → {adjusted_min_conf:.0f}% (-15)"
                 )
             elif trend_direction != 'neutral':
-                # AGAINST TREND: Higher confidence requirement (+20 points)
-                adjusted_min_conf = min(Decimal('95.0'), original_min_conf + Decimal('20.0'))
+                # AGAINST TREND: NO PENALTY - allow counter-trend trading
+                # (Changed from +20 to +0 to enable more trade opportunities)
+                adjusted_min_conf = original_min_conf  # No adjustment
                 config.min_confidence_threshold = adjusted_min_conf  # Temporarily modify
                 logger.warning(
                     f"⚠️ AGAINST TREND: {signal.symbol} {signal.signal_type} against {trend_direction} trend | "
-                    f"Min Confidence: {original_min_conf:.0f}% → {adjusted_min_conf:.0f}% (+20)"
+                    f"Min Confidence: {original_min_conf:.0f}% (no penalty applied)"
                 )
             else:
                 # NEUTRAL TREND: Slight reduction (-5 points) - market has no clear direction

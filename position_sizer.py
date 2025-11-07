@@ -242,10 +242,33 @@ class PositionSizer:
 
                 final_lot = max_safe_lot
 
-            # 7. Round to lot step
+            # 7. 🎯 STRICT BALANCE-SCALED VOLUME CAPS (BEFORE ROUNDING!)
+            # Small accounts must have lower max lot size to prevent over-risking
+            if balance < 500:
+                max_volume_cap = 0.01  # <€500: max 0.01 lot
+            elif balance < 1000:
+                max_volume_cap = 0.03  # €500-1000: max 0.03 lot
+            elif balance < 2000:
+                max_volume_cap = 0.05  # €1000-2000: max 0.05 lot
+            elif balance < 5000:
+                max_volume_cap = 0.10  # €2000-5000: max 0.10 lot
+            elif balance < 10000:
+                max_volume_cap = 0.20  # €5000-10k: max 0.20 lot
+            else:
+                max_volume_cap = 0.50  # >€10k: max 0.50 lot
+
+            # Apply balance-scaled cap BEFORE rounding
+            if final_lot > max_volume_cap:
+                logger.warning(
+                    f"⚖️ BALANCE CAP: {symbol} lot {final_lot:.3f} "
+                    f"exceeds max for €{balance:.2f} balance → capped at {max_volume_cap:.2f}"
+                )
+                final_lot = max_volume_cap
+
+            # 8. Round to lot step
             final_lot = round(final_lot / lot_step) * lot_step
 
-            # 8. Apply min/max limits
+            # 9. Apply min/max limits
             final_lot = max(self.min_lot_size, min(self.max_lot_size, final_lot))
 
             # Recalculate final potential loss

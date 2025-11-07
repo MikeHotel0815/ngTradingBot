@@ -1669,6 +1669,17 @@ class AutoTrader:
                     # Clamp to broker limits
                     volume = max(volume_min, min(adjusted_volume, broker_volume_max))
 
+                    # 🎯 CRITICAL: Re-apply balance cap AFTER streak multiplier!
+                    # The streak multiplier can push volume above safe limits for small accounts
+                    if volume > max_volume:
+                        logger.warning(
+                            f"⚖️ POST-STREAK CAP: {signal.symbol} final volume {volume:.3f} lot "
+                            f"exceeds balance cap for €{balance:.2f} → capped at {max_volume:.2f} lot"
+                        )
+                        volume = max_volume
+                        # Re-round after capping
+                        volume = round(volume / volume_step) * volume_step
+
                     if capped_multiplier != 1.0:
                         logger.info(
                             f"📊 {signal.symbol} {signal.signal_type}: "
