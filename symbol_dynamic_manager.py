@@ -445,6 +445,26 @@ class SymbolDynamicManager:
                     f"{old_multiplier}x → 1.0x (new trading day)"
                 )
 
+            # ✅ NIGHTLY RESET: Reset confidence threshold to base (50%) at start of new trading day
+            # Yesterday's losses shouldn't make us miss today's opportunities
+            # Each trading day starts fresh with baseline confidence requirements
+            if config.min_confidence_threshold != Decimal('50.0'):
+                old_threshold = config.min_confidence_threshold
+                config.min_confidence_threshold = Decimal('50.0')
+                logger.info(
+                    f"🌅 NIGHTLY RESET: {config.symbol} {config.direction} confidence threshold "
+                    f"{old_threshold}% → 50.0% (new trading day)"
+                )
+
+            # ✅ NIGHTLY RESET: Also reset confidence_adjustment_factor to 1.0x
+            if config.confidence_adjustment_factor != Decimal('1.0'):
+                old_factor = config.confidence_adjustment_factor
+                config.confidence_adjustment_factor = Decimal('1.0')
+                logger.info(
+                    f"🌅 NIGHTLY RESET: {config.symbol} {config.direction} confidence adjustment factor "
+                    f"{old_factor}x → 1.0x (new trading day)"
+                )
+
         # Update session stats
         config.session_trades_today += 1
         config.session_profit_today += Decimal(str(profit))

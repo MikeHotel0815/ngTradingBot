@@ -98,15 +98,16 @@ CACHE_TTL = 15  # Reduced from 300 for faster updates
 # TIMEFRAME-SPECIFIC ADJUSTMENTS
 # ============================================================================
 
-# 🎯 ADDED 2025-11-06: H1 timeframe loses -324€ vs H4 +131€
-# Increase minimum confidence for H1 to reduce low-quality signals
+# 🎯 UPDATED 2025-11-07: Lowered thresholds + added nightly reset
+# Previous high thresholds (H1: 85%) blocked ALL signals
+# Now using moderate thresholds + dynamic adjustments reset nightly
 TIMEFRAME_MIN_CONFIDENCE = {
-    'M1': 80,   # Very short-term, needs high confidence
-    'M5': 75,   # Short-term
-    'M15': 70,  # Medium-term
-    'H1': 85,   # 🔴 INCREASED: H1 severely underperforms
-    'H4': 60,   # ✅ H4 is profitable, keep lower threshold
-    'D1': 65,   # Long-term
+    'M1': 65,   # Short-term (lowered from 80%)
+    'M5': 60,   # Short-term (lowered from 75%)
+    'M15': 58,  # Medium-term (lowered from 70%)
+    'H1': 65,   # 🔄 LOWERED: Was 85%, now 65% (with nightly reset at 50%)
+    'H4': 55,   # Profitable timeframe (lowered from 60%)
+    'D1': 58,   # Long-term (lowered from 65%)
 }
 
 # ============================================================================
@@ -152,18 +153,18 @@ SYMBOL_OVERRIDES: Dict[str, Dict] = {
 # ============================================================================
 
 # Minimum ADX to allow trading (below = TOO_WEAK)
-# 🎯 INCREASED 2025-11-06: Was 12, now 18 (reduce false signals in weak trends)
-MIN_ADX_FOR_TRADING = 18
+# 🎯 UPDATED 2025-11-07: Was 18, now 15 (balance quality vs signal frequency)
+MIN_ADX_FOR_TRADING = 15
 
 # Minimum ADX to classify as TRENDING (below = RANGING)
-# 🎯 INCREASED 2025-11-06: Was 25, now 28 (stricter trend requirement)
-MIN_ADX_FOR_TRENDING = 28
+# 🎯 UPDATED 2025-11-07: Was 28, now 25 (allow more trending signals)
+MIN_ADX_FOR_TRENDING = 25
 
 # Minimum difference between +DI and -DI to confirm trend quality
-# 🎯 NEW 2025-11-06: Detect CHOPPY markets (high ADX but no directional clarity)
+# 🎯 UPDATED 2025-11-07: Was 10, now 8 (slightly more lenient)
 # Example: +DI=30, -DI=28 → diff=2 (CHOPPY, oscillating)
 #          +DI=35, -DI=20 → diff=15 (TRENDING, strong directional bias)
-MIN_DI_DIFF = 10
+MIN_DI_DIFF = 8
 
 # Trend-alignment confidence adjustments
 TREND_ALIGNMENT_BONUS = 10    # Bonus for trading WITH the trend
