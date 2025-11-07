@@ -514,22 +514,63 @@ class SmartTrailingStopV2:
                 if new_sl >= sl:
                     return None
 
-            # 6.2: NEVER create loss
+            # 6.2: NEVER create loss - Calculate TRUE break-even including commission and spread
             profile = self.volatility_analyzer.noise_profiles.get(
                 trade.symbol,
                 self.volatility_analyzer.default_profile
             )
 
+            # Calculate commission cost per trade (if available)
+            commission_cost = abs(float(trade.commission)) if trade.commission else 0.0
+
+            # Calculate spread cost (get current spread from latest tick)
+            spread_cost = 0.0
+            try:
+                latest_tick = db.query(Tick).filter_by(
+                    symbol=trade.symbol
+                ).order_by(Tick.timestamp.desc()).first()
+
+                if latest_tick:
+                    spread = float(latest_tick.ask - latest_tick.bid)
+                    spread_cost = spread
+            except:
+                # Fallback to typical spread from profile
+                spread_cost = profile.get('typical_spread', profile['point'] * 10)
+
+            # Calculate total cost that needs to be covered to break even
+            # For volume, we need to convert commission to points
+            volume = float(trade.volume) if trade.volume else 1.0
+
+            # Convert commission to price points (approximate)
+            # For most symbols: commission is in account currency, need to convert to points
+            # Simplified: assume $7-10 commission per lot = need X points to cover
+            commission_in_points = 0
+            if commission_cost > 0:
+                # Conservative estimate: $10 commission per round trip (open + close)
+                # For FOREX: 1 pip on 1 lot EUR = $10, so 1 pip covers commission
+                # For indices: varies, use 2-5 points as safety
+                if 'USD' in trade.symbol or 'EUR' in trade.symbol or 'GBP' in trade.symbol:
+                    commission_in_points = 10 * profile['point']  # ~1 pip for forex
+                else:
+                    commission_in_points = 20 * profile['point']  # ~20 points for indices
+
+            # Total buffer = spread + commission + safety margin (50% extra)
+            total_buffer = (spread_cost + commission_in_points) * 1.5
+
+            # Ensure minimum buffer of at least 5 points
+            min_buffer = profile['point'] * 5
+            total_buffer = max(total_buffer, min_buffer)
+
             if is_buy:
-                if new_sl < entry:
-                    min_be_buffer = profile['point'] * 2
-                    new_sl = max(new_sl, entry + min_be_buffer)
-                    logger.info(f"⚠️ {trade.ticket}: Adjusted to break-even + buffer")
+                true_breakeven = entry + total_buffer
+                if new_sl < true_breakeven:
+                    new_sl = true_breakeven
+                    logger.info(f"⚠️ {trade.ticket}: Adjusted to TRUE break-even (entry + spread + commission + buffer = +{total_buffer/profile['point']:.1f} pts)")
             else:
-                if new_sl > entry:
-                    min_be_buffer = profile['point'] * 2
-                    new_sl = min(new_sl, entry - min_be_buffer)
-                    logger.info(f"⚠️ {trade.ticket}: Adjusted to break-even + buffer")
+                true_breakeven = entry - total_buffer
+                if new_sl > true_breakeven:
+                    new_sl = true_breakeven
+                    logger.info(f"⚠️ {trade.ticket}: Adjusted to TRUE break-even (entry - spread - commission - buffer = -{total_buffer/profile['point']:.1f} pts)")
 
             # 6.3: Minimum movement required
             sl_move = abs(new_sl - sl)

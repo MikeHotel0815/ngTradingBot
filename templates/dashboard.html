@@ -5328,9 +5328,6 @@ const SymbolModal = (function() {
                         <button data-action="set-dynamic-ts" data-ticket="${pos.ticket}" data-symbol="${pos.symbol}" class="trade-action-btn trade-ts-btn" title="Set dynamic trailing stop based on real-time noise analysis (instant, adaptive to 60s volatility, session, and regime)">
                             🎯 Set Dynamic TS
                         </button>
-                        <button data-action="set-manual-ts" data-ticket="${pos.ticket}" data-symbol="${pos.symbol}" data-volume="${pos.volume}" class="trade-action-btn trade-ts-btn" style="opacity: 0.7; font-size: 0.9em;" title="Open manual TS dialog">
-                            ⚙️
-                        </button>
                     </div>
                 </div>
             `;
@@ -5486,10 +5483,6 @@ const SymbolModal = (function() {
                     btn.style.opacity = '0.5';
                     btn.innerHTML = '⏳ Setting...';
                     setDynamicTrailingStop(ticket, symbol, btn);
-                } else if (action === 'set-manual-ts') {
-                    const symbol = btn.dataset.symbol;
-                    const volume = parseFloat(btn.dataset.volume);
-                    showSetTrailingStopModal(ticket, symbol, volume);
                 }
             });
 
@@ -6505,105 +6498,7 @@ const SymbolModal = (function() {
             }
         }
 
-        // Calculate € value for trailing stop distance
-        function calculateTSValue(symbol, volume, pips) {
-            // Pip values per standard lot (simplified)
-            let pipValuePerLot = 10; // Default for most Forex pairs (EUR/USD, GBP/USD, etc.)
 
-            // Symbol-specific adjustments
-            if (symbol.includes('JPY')) {
-                pipValuePerLot = 9.09; // JPY pairs (e.g., USD/JPY: 1000 / 110 ≈ 9.09)
-            } else if (symbol.includes('XAU') || symbol.includes('GOLD')) {
-                pipValuePerLot = 10; // Gold: $10 per pip per lot
-            } else if (symbol.includes('BTC')) {
-                pipValuePerLot = 10; // BTC: ~$10 per pip (simplified)
-            } else if (symbol.includes('EUR') || symbol.includes('GBP')) {
-                pipValuePerLot = 10; // Major Forex pairs
-            }
-
-            // Calculate total value: pips × pip_value_per_lot × volume
-            const value = pips * pipValuePerLot * volume;
-            return value;
-        }
-
-        // Show trailing stop modal
-        function showSetTrailingStopModal(ticket, symbol, volume) {
-            // Calculate realistic default pips based on position size
-            let basePips = 20; // Safe fallback
-
-            // Dynamic pip calculation based on volume (lot size)
-            if (volume <= 0.01) {
-                basePips = 10; // Micro lots: tight stop
-            } else if (volume <= 0.05) {
-                basePips = 15; // Small positions
-            } else if (volume <= 0.1) {
-                basePips = 25; // Medium positions
-            } else if (volume <= 0.5) {
-                basePips = 35; // Larger positions
-            } else {
-                basePips = 50; // Very large positions
-            }
-
-            // Calculate preset options: Conservative, Recommended, Aggressive
-            const conservative = Math.round(basePips * 1.5);
-            const recommended = basePips;
-            const aggressive = Math.round(basePips * 0.6);
-
-            // Calculate € values
-            const conservativeValue = calculateTSValue(symbol, volume, conservative);
-            const recommendedValue = calculateTSValue(symbol, volume, recommended);
-            const aggressiveValue = calculateTSValue(symbol, volume, aggressive);
-
-            console.log(`💡 TS Options for ${symbol} (${volume} lots): Conservative=${conservative} pips (€${conservativeValue.toFixed(2)}), Recommended=${recommended} pips (€${recommendedValue.toFixed(2)}), Aggressive=${aggressive} pips (€${aggressiveValue.toFixed(2)})`);
-
-            document.getElementById('ts-ticket').textContent = ticket;
-            document.getElementById('ts-symbol').textContent = symbol;
-            document.getElementById('ts-volume').textContent = volume;
-            document.getElementById('ts-input').value = recommended;
-            document.getElementById('ts-input').placeholder = `e.g. ${recommended}`;
-
-            // Update quick-select buttons with € values
-            document.getElementById('ts-conservative').innerHTML = `${conservative} pips<br><small style="opacity: 0.7;">≈ €${conservativeValue.toFixed(2)}</small>`;
-            document.getElementById('ts-conservative').onclick = () => selectTSPreset(conservative, symbol, volume);
-            document.getElementById('ts-recommended').innerHTML = `${recommended} pips<br><small style="opacity: 0.7;">≈ €${recommendedValue.toFixed(2)}</small>`;
-            document.getElementById('ts-recommended').onclick = () => selectTSPreset(recommended, symbol, volume);
-            document.getElementById('ts-aggressive').innerHTML = `${aggressive} pips<br><small style="opacity: 0.7;">≈ €${aggressiveValue.toFixed(2)}</small>`;
-            document.getElementById('ts-aggressive').onclick = () => selectTSPreset(aggressive, symbol, volume);
-
-            // Store symbol and volume for live calculation
-            document.getElementById('ts-modal').dataset.symbol = symbol;
-            document.getElementById('ts-modal').dataset.volume = volume;
-
-            // Update € value display on input change
-            updateTSValueDisplay();
-            document.getElementById('ts-input').oninput = updateTSValueDisplay;
-
-            document.getElementById('ts-modal').style.display = 'flex';
-        }
-
-        function selectTSPreset(pips, symbol, volume) {
-            document.getElementById('ts-input').value = pips;
-            updateTSValueDisplay();
-            // Visual feedback
-            document.getElementById('ts-input').style.background = '#2a4a2a';
-            setTimeout(() => {
-                document.getElementById('ts-input').style.background = '';
-            }, 200);
-        }
-
-        function updateTSValueDisplay() {
-            const pips = parseFloat(document.getElementById('ts-input').value) || 0;
-            const symbol = document.getElementById('ts-modal').dataset.symbol;
-            const volume = parseFloat(document.getElementById('ts-modal').dataset.volume);
-
-            if (pips > 0 && symbol && volume) {
-                const value = calculateTSValue(symbol, volume, pips);
-                document.getElementById('ts-value-display').innerHTML =
-                    `<strong style="color: #4CAF50;">≈ €${value.toFixed(2)}</strong> maximum risk if stopped out`;
-            } else {
-                document.getElementById('ts-value-display').innerHTML = '';
-            }
-        }
 
         // Set dynamic trailing stop (noise-adaptive)
         async function setDynamicTrailingStop(ticket, symbol, buttonElement) {
@@ -6651,36 +6546,6 @@ const SymbolModal = (function() {
             }
         }
 
-        // Set manual trailing stop (opens modal)
-        async function setTrailingStop() {
-            const ticket = document.getElementById('ts-ticket').textContent;
-            const pips = document.getElementById('ts-input').value;
-
-            if (!pips || pips <= 0) {
-                alert('Please enter a valid trailing stop value in pips');
-                return;
-            }
-
-            document.getElementById('ts-modal').style.display = 'none';
-
-            try {
-                const apiBase = window.location.protocol + '//' + window.location.hostname + ':9905';
-                const response = await fetch(`${apiBase}/api/set_trailing_stop/${ticket}`, {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({trailing_stop_pips: parseFloat(pips)})
-                });
-                const data = await response.json();
-
-                if (data.status === 'success') {
-                    alert(`✓ ${data.message}`);
-                } else {
-                    alert(`✗ Error: ${data.message}`);
-                }
-            } catch (error) {
-                alert(`✗ Error: ${error.message}`);
-            }
-        }
 
         // Close modals
         function closeModal(modalId) {
@@ -6859,45 +6724,6 @@ const SymbolModal = (function() {
         }, 5000);  // Update every 5 seconds
     </script>
 
-    <!-- Trailing Stop Modal -->
-    <div id="ts-modal" class="modal-overlay">
-        <div class="modal-content" style="max-width: 500px;">
-            <h3 class="modal-title">📈 Set Trailing Stop</h3>
-            <p style="color: #aaa; margin-bottom: 15px; font-size: 0.95em;">
-                Ticket: #<span id="ts-ticket"></span> • <span id="ts-symbol"></span> • <span id="ts-volume"></span> lots
-            </p>
-
-            <!-- Quick Select Presets -->
-            <div style="display: flex; gap: 8px; margin-bottom: 15px;">
-                <button id="ts-conservative" class="modal-btn" style="flex: 1; background: #3a4a3a; font-size: 0.85em; padding: 10px 8px; line-height: 1.3; min-height: 60px;">
-                    Conservative
-                </button>
-                <button id="ts-recommended" class="modal-btn" style="flex: 1; background: #2a5a2a; font-size: 0.85em; padding: 10px 8px; line-height: 1.3; min-height: 60px; border: 2px solid #4CAF50;">
-                    Recommended ⭐
-                </button>
-                <button id="ts-aggressive" class="modal-btn" style="flex: 1; background: #4a3a2a; font-size: 0.85em; padding: 10px 8px; line-height: 1.3; min-height: 60px;">
-                    Aggressive
-                </button>
-            </div>
-
-            <label style="color: #aaa; font-size: 0.9em; display: block; margin-bottom: 8px;">Custom Trailing Stop (pips):</label>
-            <input type="number" id="ts-input" class="modal-input" placeholder="e.g. 20" min="1" step="1">
-
-            <!-- Live € Value Display -->
-            <div id="ts-value-display" style="color: #aaa; font-size: 0.9em; margin-top: 10px; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 5px; min-height: 20px; text-align: center;">
-            </div>
-
-            <p style="color: #666; font-size: 0.8em; margin-top: 8px; line-height: 1.4;">
-                💡 <strong>Tip:</strong> Lower pips = tighter protection (locks profit sooner, higher risk of early exit).<br>
-                Higher pips = more breathing room (less protection, allows bigger swings).
-            </p>
-
-            <div class="modal-buttons" style="margin-top: 15px;">
-                <button onclick="closeModal('ts-modal')" class="modal-btn modal-btn-cancel">Cancel</button>
-                <button onclick="setTrailingStop()" class="modal-btn modal-btn-primary">✓ Activate TS</button>
-            </div>
-        </div>
-    </div>
 
     <!-- Close All Confirmation Modal -->
     <div id="close-all-modal" class="modal-overlay">

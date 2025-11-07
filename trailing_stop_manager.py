@@ -314,6 +314,8 @@ class TrailingStopManager:
                 settings['symbol_point'] = symbol_info['point']
                 settings['symbol_digits'] = symbol_info['digits']
                 settings['current_spread'] = spread
+                settings['commission'] = abs(float(trade.commission)) if trade.commission else 0.0
+                settings['symbol'] = trade.symbol
 
                 logger.info(f"Trade {trade.ticket}: Using {dynamic_pips:.2f} pips trailing stop "
                            f"(point={symbol_info['point']}, spread={spread/symbol_info['point']:.1f} pips)")
@@ -322,6 +324,8 @@ class TrailingStopManager:
                 settings['symbol_point'] = 0.00001
                 settings['symbol_digits'] = 5
                 settings['current_spread'] = 0.00020
+                settings['commission'] = abs(float(trade.commission)) if trade.commission else 0.0
+                settings['symbol'] = trade.symbol
 
             # Calculate distances
             if is_buy:
@@ -436,23 +440,47 @@ class TrailingStopManager:
         entry_price: float,
         settings: Dict
     ) -> Tuple[float, str]:
-        """Calculate break-even SL with spread protection"""
+        """Calculate TRUE break-even SL with spread + commission protection"""
         symbol_point = settings.get('symbol_point', 0.00001)
         spread = settings.get('current_spread', 0.00020)
         dynamic_pips = settings.get('dynamic_trailing_pips', 20.0)
 
-        # Offset = spread + 30% of dynamic trailing pips (for safety buffer)
+        # Get commission from trade settings (if available)
+        commission_cost = settings.get('commission', 0.0)
+        symbol = settings.get('symbol', '')
+
+        # Convert commission to points
+        # Conservative estimate: Commission is typically $7-$10 per lot round-trip
+        commission_pips = 0.0
+        if commission_cost > 0:
+            # For FOREX: 1 pip on 1 lot = ~$10, so commission ≈ 1 pip
+            # For indices/metals: varies, use 2-3 pips as safety
+            if 'USD' in symbol or 'EUR' in symbol or 'GBP' in symbol:
+                commission_pips = 10.0  # ~1 pip for forex
+            else:
+                commission_pips = 20.0  # ~2 pips for indices/metals
+        else:
+            # Fallback: assume $10 commission if not provided
+            commission_pips = 10.0 if ('USD' in symbol or 'EUR' in symbol) else 20.0
+
+        # Offset = spread + commission + safety buffer (50% extra)
         spread_pips = spread / symbol_point
         safety_pips = dynamic_pips * 0.3
-        total_offset_pips = spread_pips + safety_pips
+
+        # Total offset includes spread + commission + safety margin
+        total_offset_pips = (spread_pips + commission_pips + safety_pips) * 1.5
+
+        # Ensure minimum of 5 pips
+        total_offset_pips = max(total_offset_pips, 5.0)
+
         offset = total_offset_pips * symbol_point
 
         if is_buy:
-            new_sl = entry_price + offset  # Entry + spread + buffer
+            new_sl = entry_price + offset  # Entry + spread + commission + buffer
         else:
-            new_sl = entry_price - offset  # Entry - spread - buffer
+            new_sl = entry_price - offset  # Entry - spread - commission - buffer
 
-        return new_sl, f"Break-even + {total_offset_pips:.1f} pips (spread {spread_pips:.1f} + buffer {safety_pips:.1f})"
+        return new_sl, f"TRUE Break-even + {total_offset_pips:.1f} pips (spread {spread_pips:.1f} + commission {commission_pips:.1f} + buffer {safety_pips:.1f})"
 
     def _calculate_partial_trailing(
         self,

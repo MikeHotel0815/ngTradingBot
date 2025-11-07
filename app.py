@@ -4630,58 +4630,6 @@ def close_all_trades():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-@app_webui.route('/api/set_trailing_stop/<int:ticket>', methods=['POST'])
-def set_trailing_stop(ticket):
-    """Manually set/update trailing stop for a specific trade"""
-    try:
-        from command_helper import create_command
-
-        data = request.get_json()
-        trailing_stop_pips = data.get('trailing_stop_pips')
-
-        if not trailing_stop_pips:
-            return jsonify({'status': 'error', 'message': 'trailing_stop_pips required'}), 400
-
-        db = ScopedSession()
-        try:
-            account = db.query(Account).order_by(Account.last_heartbeat.desc()).first()  # Use active account
-            if not account:
-                return jsonify({'status': 'error', 'message': 'No account found'}), 404
-
-            # Verify trade exists and is open
-            trade = db.query(Trade).filter_by(ticket=ticket, status='open').first()
-            if not trade:
-                return jsonify({'status': 'error', 'message': f'Open trade with ticket {ticket} not found'}), 404
-
-            # Create MODIFY_TRADE command with trailing stop
-            payload = {
-                'ticket': ticket,
-                'trailing_stop': float(trailing_stop_pips)
-            }
-
-            command = create_command(
-                db=db,
-                account_id=account.id,
-                command_type='MODIFY_TRADE',
-                payload=payload
-            )
-
-            logger.info(f"Set trailing stop command created: {command.id} - Ticket #{ticket}, TS: {trailing_stop_pips} pips")
-
-            return jsonify({
-                'status': 'success',
-                'message': f'Trailing stop set to {trailing_stop_pips} pips for trade #{ticket}',
-                'command_id': command.id
-            }), 200
-
-        finally:
-            db.close()
-
-    except Exception as e:
-        logger.error(f"Set trailing stop error: {e}")
-        return jsonify({'status': 'error', 'message': str(e)}), 500
-
-
 @app_webui.route('/api/set_dynamic_trailing_stop/<int:ticket>', methods=['POST'])
 def set_dynamic_trailing_stop(ticket):
     """
