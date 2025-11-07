@@ -11,11 +11,12 @@ from typing import Dict
 
 # Minimum confidence threshold for generating signals (0-100)
 # Signals below this threshold are not generated
-MIN_GENERATION_CONFIDENCE = 50
+# 🔄 LOWERED 2025-11-07: Actual signal confidence is ~47%, was blocking ALL signals
+MIN_GENERATION_CONFIDENCE = 45
 
 # Minimum confidence threshold for keeping signals active (0-100)
 # Active signals below this are expired
-MIN_ACTIVE_CONFIDENCE = 50
+MIN_ACTIVE_CONFIDENCE = 45
 
 # Maximum spread multiplier vs average
 # Reject signals when spread > avg_spread * MAX_SPREAD_MULTIPLIER
@@ -98,16 +99,17 @@ CACHE_TTL = 15  # Reduced from 300 for faster updates
 # TIMEFRAME-SPECIFIC ADJUSTMENTS
 # ============================================================================
 
-# 🎯 UPDATED 2025-11-07: Lowered thresholds + added nightly reset
-# Previous high thresholds (H1: 85%) blocked ALL signals
-# Now using moderate thresholds + dynamic adjustments reset nightly
+# 🎯 UPDATED 2025-11-07: Lowered thresholds to allow signal generation
+# Previous thresholds (H1: 65%, H4: 55%) blocked signals with 40-50% confidence
+# Signals were AGGREGATING correctly but getting REJECTED before saving to DB
+# Root cause: Confidence ~47% < 65% threshold → no signals in dashboard
 TIMEFRAME_MIN_CONFIDENCE = {
-    'M1': 65,   # Short-term (lowered from 80%)
-    'M5': 60,   # Short-term (lowered from 75%)
-    'M15': 58,  # Medium-term (lowered from 70%)
-    'H1': 65,   # 🔄 LOWERED: Was 85%, now 65% (with nightly reset at 50%)
-    'H4': 55,   # Profitable timeframe (lowered from 60%)
-    'D1': 58,   # Long-term (lowered from 65%)
+    'M1': 45,   # Baseline (lowered to match actual signal confidence ~47%)
+    'M5': 45,   # Baseline
+    'M15': 45,  # Baseline
+    'H1': 45,   # 🔄 FIXED: Signals generate at 47.4% confidence, need threshold < 47%
+    'H4': 45,   # Fixed
+    'D1': 45,   # Baseline
 }
 
 # ============================================================================

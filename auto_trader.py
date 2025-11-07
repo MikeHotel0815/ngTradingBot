@@ -1614,39 +1614,66 @@ class AutoTrader:
                     logger.warning(f"⚠️  Risk limit blocked signal #{signal.id}: {risk_check['reason']}")
                     continue
 
-                # Calculate position size with dynamic risk adjustment
+                # Calculate base position size with dynamic risk adjustment
                 base_volume = self.calculate_position_size(db, account_id, signal)
 
-                # ✅ NEW: Apply symbol-specific risk multiplier
+                # ✅ Apply symbol-specific risk multiplier (from winning streaks)
+                # BUT with strict balance-scaled volume caps to prevent over-risking
                 try:
                     from symbol_dynamic_manager import SymbolDynamicManager
                     symbol_manager = SymbolDynamicManager(account_id=account_id)
                     config = symbol_manager.get_config(db, signal.symbol, signal.signal_type)
 
-                    # ✅ Apply balance-scaled cap to ensure winning streaks scale with account size
+                    # Apply balance-scaled cap to multiplier
                     capped_multiplier = symbol_manager.apply_balance_scaled_cap(db, config)
 
                     # Apply risk multiplier
                     adjusted_volume = base_volume * float(capped_multiplier)
 
+                    # Get account balance for absolute volume limits
+                    account = db.query(Account).filter_by(id=account_id).first()
+                    balance = float(account.balance) if account and account.balance else 1000.0
+
+                    # 🎯 STRICT BALANCE-SCALED VOLUME CAPS
+                    # Small accounts must have lower max lot size to prevent over-risking
+                    if balance < 500:
+                        max_volume = 0.01  # <€500: max 0.01 lot
+                    elif balance < 1000:
+                        max_volume = 0.03  # €500-1000: max 0.03 lot
+                    elif balance < 2000:
+                        max_volume = 0.05  # €1000-2000: max 0.05 lot
+                    elif balance < 5000:
+                        max_volume = 0.10  # €2000-5000: max 0.10 lot
+                    elif balance < 10000:
+                        max_volume = 0.20  # €5000-10k: max 0.20 lot
+                    else:
+                        max_volume = 0.50  # >€10k: max 0.50 lot
+
                     # Get broker symbol info for volume step
                     broker_symbol = db.query(BrokerSymbol).filter_by(symbol=signal.symbol).first()
                     volume_step = float(broker_symbol.volume_step) if broker_symbol and broker_symbol.volume_step else 0.01
                     volume_min = float(broker_symbol.volume_min) if broker_symbol and broker_symbol.volume_min else 0.01
-                    volume_max = float(broker_symbol.volume_max) if broker_symbol and broker_symbol.volume_max else 1.0
+                    broker_volume_max = float(broker_symbol.volume_max) if broker_symbol and broker_symbol.volume_max else 1.0
 
-                    # Round to volume step to prevent MT5 "All filling modes failed" error
-                    # Example: 0.0155 with step 0.01 → round(0.0155/0.01)*0.01 = 0.02
+                    # Apply balance-scaled cap FIRST (most important!)
+                    if adjusted_volume > max_volume:
+                        logger.warning(
+                            f"⚖️ BALANCE CAP: {signal.symbol} volume {adjusted_volume:.3f} lot "
+                            f"exceeds max for €{balance:.2f} balance → capped at {max_volume:.2f} lot"
+                        )
+                        adjusted_volume = max_volume
+
+                    # Round to volume step to prevent MT5 errors
                     adjusted_volume = round(adjusted_volume / volume_step) * volume_step
 
                     # Clamp to broker limits
-                    volume = max(volume_min, min(adjusted_volume, volume_max))
+                    volume = max(volume_min, min(adjusted_volume, broker_volume_max))
 
                     if capped_multiplier != 1.0:
                         logger.info(
                             f"📊 {signal.symbol} {signal.signal_type}: "
-                            f"Volume adjusted by risk multiplier {capped_multiplier}x: "
-                            f"{base_volume:.2f} → {volume:.2f} (rounded to step {volume_step})"
+                            f"Base: {base_volume:.3f} lot × {capped_multiplier:.2f}x (streak) "
+                            f"= {volume:.3f} lot (balance cap: {max_volume:.2f})"
                         )
                 except Exception as e:
                     logger.warning(f"Could not apply risk multiplier: {e}")
